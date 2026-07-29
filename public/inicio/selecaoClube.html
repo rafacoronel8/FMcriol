@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Escolha a sua Equipa — FMcriol</title>
+<link rel="stylesheet" href="selecaoClube.css">
+</head>
+<body>
+
+<div class="wrap">
+  <a href="/index.html" class="back-link">← FMcriol</a>
+
+  <div class="intro">
+    <h1>Escolha a sua equipa</h1>
+    <p>Seleciona o clube que vais treinar na Primeira Divisão.</p>
+  </div>
+
+  <input type="search" id="filterBox" class="filter-box" placeholder="Filtrar por nome…">
+
+  <div id="teamGrid" class="team-grid"></div>
+
+  <div class="bottom-bar">
+    <label class="name-field">
+      <span>O seu nome de treinador</span>
+      <input type="text" id="managerName" placeholder="ex: Rafael Coronel">
+    </label>
+    <button id="startBtn" class="btn-start" disabled>Começar Carreira</button>
+  </div>
+  <p id="hint" class="hint"></p>
+</div>
+
+<script src="selecaoClube.js"></script>
+</body>
+</html>

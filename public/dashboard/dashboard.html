@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painel do Clube — FMcriol</title>
+<link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a href="/index.html" class="brand">FM<span>criol</span></a>
+
+  <div class="club-chip">
+    <div class="chip-shield" id="clubShield">⚽</div>
+    <div>
+      <div class="chip-name" id="clubName">—</div>
+      <div class="chip-manager">Treinador: <span id="managerName">—</span></div>
+    </div>
+  </div>
+
+  <span class="topbar-date" id="topbarDate">—</span>
+
+  <div class="search-wrap">
+    <input type="search" id="searchInput" class="search-input" placeholder="Pesquisar clube ou jogador…" autocomplete="off">
+    <div id="searchResults" class="search-results hidden"></div>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="visaoGeral">Visão Geral</button>
+  <button class="tab" data-tab="inscritos">Inscritos</button>
+  <button class="tab" data-tab="mercado">Mercado</button>
+  <button class="tab" data-tab="meuClube">Meu Clube</button>
+  <button class="tab" data-tab="minhaEquipa">Minha Equipa</button>
+  <button class="tab" data-tab="tatica">Tática</button>
+  <button class="tab" data-tab="calendario">Calendário</button>
+</nav>
+
+<main class="content">
+
+  <!-- ===== VISÃO GERAL ===== -->
+  <section class="tab-panel" id="panel-visaoGeral">
+    <div class="grid-2col">
+
+      <div class="card">
+        <div class="card-title">Finanças</div>
+        <div class="finance-rows">
+          <div class="finance-row"><span>Saldo do clube</span><b id="fBalance">—</b></div>
+          <div class="finance-row"><span>Orçamento de salários</span><b id="fWage">—</b></div>
+          <div class="finance-row"><span>Orçamento de transferências</span><b id="fTransfer">—</b></div>
+          <div class="finance-row"><span>Situação financeira</span><b id="fTier">—</b></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Detalhes do Clube</div>
+        <div class="finance-rows">
+          <div class="finance-row"><span>Divisão</span><b id="dDivision">—</b></div>
+          <div class="finance-row"><span>Reputação</span><b id="dReputation">—</b></div>
+          <div class="finance-row"><span>Localização</span><b id="dLocation">—</b></div>
+          <div class="finance-row"><span>Estádio</span><b id="dStadium">—</b></div>
+        </div>
+      </div>
+
+      <div class="card span-2">
+        <div class="messages-header">
+          <div class="card-title no-margin">Mensagens</div>
+          <button id="clearMessagesBtn" class="btn-clear-messages">Limpar mensagens</button>
+        </div>
+        <div class="messages-list" id="messagesList">
+          <div class="message-item">
+            <span class="msg-icon">📋</span>
+            <div>
+              <div class="msg-title">Bem-vindo ao FMcriol</div>
+              <div class="msg-body">A tua carreira como treinador começa agora. Usa a pesquisa acima para explorares outros clubes da liga.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ===== OUTRAS TABS (placeholder até às próximas tarefas) ===== -->
+  <section class="tab-panel hidden" id="panel-inscritos">
+    <div class="card"><div class="card-title">Inscritos</div><p class="placeholder-text">O plantel de jogadores será apresentado aqui assim que a base de dados de jogadores estiver ligada (Tarefa 4).</p></div>
+  </section>
+
+  <section class="tab-panel hidden" id="panel-mercado">
+    <div class="card">
+      <div class="messages-header">
+        <div class="card-title no-margin">Mercado de Transferências</div>
+        <span class="market-hint">Clica numa notícia para veres os detalhes</span>
+      </div>
+      <div class="market-news-list" id="marketNewsList"></div>
+      <p class="placeholder-text hidden" id="marketNewsEmpty">Ainda não há movimentações no mercado. Avança o calendário para veres a atividade dos outros clubes.</p>
+    </div>
+  </section>
+
+  <section class="tab-panel hidden" id="panel-meuClube">
+    <div class="card"><div class="card-title">Meu Clube</div><p class="placeholder-text">Comissão técnica e instalações — funcionalidade planeada para uma tarefa futura.</p></div>
+  </section>
+
+  <section class="tab-panel hidden" id="panel-minhaEquipa">
+    <div class="card">
+      <div class="card-title">Plantel <span id="squadCount" class="squad-count-badge">0</span></div>
+      <div class="squad-grid" id="squadGrid"></div>
+      <p class="placeholder-text hidden" id="squadEmpty">Ainda não tens jogadores. Cria o teu plantel na Gestão de Jogadores.</p>
+    </div>
+  </section>
+
+  <section class="tab-panel hidden" id="panel-tatica">
+    <div class="tactics-toolbar">
+      <div class="formation-picker" id="formationPicker">
+        <button class="formation-btn" data-formation="4-3-3">4-3-3</button>
+        <button class="formation-btn" data-formation="4-4-2">4-4-2</button>
+        <button class="formation-btn" data-formation="4-2-3-1">4-2-3-1</button>
+        <button class="formation-btn" data-formation="3-4-3">3-4-3</button>
+      </div>
+      <button id="saveTacticBtn" class="btn-advance small">Guardar Tática</button>
+      <span id="tacticSaveStatus" class="tactic-save-status"></span>
+    </div>
+
+    <div class="tactics-layout">
+
+      <div class="pitch-col">
+        <div class="pitch-board" id="pitchBoard">
+          <div class="pitch-lines"></div>
+          <div class="pitch-slots" id="pitchSlots"><!-- gerado via JS --></div>
+        </div>
+
+        <div class="bench-card">
+          <div class="card-title no-margin">Suplentes <span id="benchCount" class="squad-count-badge">0 / 8</span></div>
+          <div class="bench-slots" id="benchSlots"><!-- gerado via JS --></div>
+        </div>
+      </div>
+
+      <div class="squad-pool-card">
+        <div class="card-title no-margin">Plantel <span class="squad-pool-hint">arrasta para o campo ou para os suplentes</span></div>
+        <div class="squad-pool" id="squadPool"><!-- gerado via JS --></div>
+      </div>
+
+    </div>
+  </section>
+
+  <section class="tab-panel hidden" id="panel-calendario">
+
+    <div class="card calendar-hero">
+      <div class="calendar-hero-info">
+        <div class="card-title no-margin">Calendário</div>
+        <div class="calendar-date" id="calendarDate">—</div>
+        <p class="calendar-hint">Avança o dia para veres a reação dos outros clubes — propostas de transferência e amigáveis marcados resolvem-se automaticamente.</p>
+      </div>
+      <div class="calendar-hero-action">
+        <button id="advanceDayBtn" class="btn-advance">Continuar ▸</button>
+        <p id="advanceResult" class="calendar-result"></p>
+      </div>
+    </div>
+
+    <div class="grid-2col calendar-grid">
+
+      <div class="card">
+        <div class="messages-header">
+          <div class="card-title no-margin">Atividades de Hoje</div>
+          <span class="market-hint" id="activityStatusHint">Escolhe uma atividade</span>
+        </div>
+        <div class="activity-grid" id="activityGrid"><!-- gerado via JS --></div>
+        <p id="activityResult" class="activity-result hidden"></p>
+      </div>
+
+      <div class="card">
+        <div class="card-title no-margin">Marcar Amigável</div>
+        <form id="friendlyForm" class="friendly-form">
+          <label class="friendly-field">
+            <span>Adversário</span>
+            <select id="friendlyOpponent" required>
+              <option value="">Escolhe um clube…</option>
+            </select>
+          </label>
+          <label class="friendly-field">
+            <span>Data do jogo</span>
+            <input type="date" id="friendlyDate" required>
+          </label>
+          <button type="submit" class="btn-advance small" id="friendlySubmitBtn">Enviar Convite</button>
+        </form>
+        <p id="friendlyFormResult" class="activity-result hidden"></p>
+      </div>
+
+      <div class="card span-2">
+        <div class="card-title no-margin">Próximos Amigáveis <span id="friendlyUpcomingCount" class="squad-count-badge">0</span></div>
+        <div class="friendly-list" id="friendlyUpcomingList"></div>
+        <p class="placeholder-text hidden" id="friendlyUpcomingEmpty">Ainda não tens amigáveis marcados. Convida um adversário acima.</p>
+      </div>
+
+      <div class="card span-2">
+        <div class="card-title no-margin">Histórico de Amigáveis</div>
+        <div class="friendly-list" id="friendlyHistoryList"></div>
+        <p class="placeholder-text hidden" id="friendlyHistoryEmpty">Ainda não há amigáveis por realizar ou recusados.</p>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<div id="newMsgToast" class="new-msg-toast hidden"></div>
+
+<div id="friendlyModalOverlay" class="news-modal-overlay hidden">
+  <div class="news-modal">
+    <button class="news-modal-close" id="friendlyModalClose" aria-label="Fechar">×</button>
+    <div class="news-modal-kicker">AMIGÁVEL</div>
+    <h2 class="news-modal-headline" id="friendlyModalHeadline"></h2>
+    <div class="news-modal-date" id="friendlyModalDate"></div>
+    <div class="news-modal-teams" id="friendlyModalTeams"></div>
+
+    <div class="friendly-modal-section-title">Golos</div>
+    <div class="friendly-modal-events" id="friendlyModalEvents"></div>
+
+    <div class="friendly-modal-section-title">Notas dos Jogadores</div>
+    <div class="friendly-modal-lineups" id="friendlyModalLineups"></div>
+  </div>
+</div>
+
+<div id="newsModalOverlay" class="news-modal-overlay hidden">
+  <div class="news-modal">
+    <button class="news-modal-close" id="newsModalClose" aria-label="Fechar">×</button>
+    <div class="news-modal-kicker" id="newsModalKicker">MERCADO DE TRANSFERÊNCIAS</div>
+    <h2 class="news-modal-headline" id="newsModalHeadline"></h2>
+    <div class="news-modal-date" id="newsModalDate"></div>
+    <div class="news-modal-teams" id="newsModalTeams"></div>
+    <p class="news-modal-body" id="newsModalBody"></p>
+  </div>
+</div>
+
+<script src="dashboard.js"></script>
+</body>
+</html>

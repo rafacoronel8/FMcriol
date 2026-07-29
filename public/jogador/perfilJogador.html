@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painel de Jogador</title>
+<link rel="stylesheet" href="style_perfilJogador.css">
+</head>
+<body>
+
+<div class="panel">
+
+  <!-- ===== BARRA SUPERIOR (nova: voltar + estado de gravação) ===== -->
+  <div class="top-strip">
+    <a href="#" id="backLink" class="back-link">← Voltar</a>
+    <span id="saveStatus" class="save-status"></span>
+  </div>
+
+  <!-- ===== CABEÇALHO DO JOGADOR ===== -->
+  <div class="player-header">
+
+    <div class="photo-block">
+      <label class="upload-slot photo-upload" for="playerPhotoInput">
+        <img id="playerPhoto" class="photo-img hidden" alt="Foto do jogador">
+        <span class="upload-hint">+ Foto</span>
+      </label>
+      <input type="file" id="playerPhotoInput" accept="image/*" class="hidden-input">
+    </div>
+
+    <div class="header-main">
+      <div class="name-row">
+        <h1 id="playerName" contenteditable="true">Nome do Jogador</h1>
+        <span class="jersey-number" id="jerseyNumber" contenteditable="true">00</span>
+      </div>
+
+      <div class="tag-row">
+        <span class="tag position-tag" id="positionTag" contenteditable="true">Médio/Médio Ofensivo (Direita, Esquerda)</span>
+      </div>
+
+      <div class="tag-row secondary">
+        <label class="flag-upload" for="flagInput">
+          <img id="flagImg" class="flag-img hidden" alt="Bandeira">
+          <span class="flag-placeholder">🏳</span>
+        </label>
+        <input type="file" id="flagInput" accept="image/*" class="hidden-input">
+        <span class="nation-code" id="nationCode" contenteditable="true">CIV</span>
+        <span class="age-text"><span id="playerAge" contenteditable="true">18 anos</span> (<span id="playerBirth" contenteditable="true">14/11/2006</span>)</span>
+      </div>
+    </div>
+
+    <div class="header-club">
+      <label class="upload-slot club-logo-upload" for="clubLogoInput">
+        <img id="clubLogo" class="club-logo-img hidden" alt="Logótipo do clube">
+        <span class="upload-hint small">+ Logo</span>
+      </label>
+      <input type="file" id="clubLogoInput" accept="image/*" class="hidden-input">
+      <div class="club-info">
+        <span class="pill" id="clubName" contenteditable="true">Nome do Clube</span>
+        <span class="pill muted" id="clubStatus" contenteditable="true">Titular Regular</span>
+      </div>
+      <div class="origin-club-row hidden" id="originClubRow">
+        <label for="originClubSelect">Clube de origem (reinícios)</label>
+        <select id="originClubSelect"></select>
+      </div>
+    </div>
+
+    <div class="header-value">
+
+      <div class="value-row">
+        <span class="value-label">VM</span>
+        <span class="pill value-pill" id="marketValue" contenteditable="true">£95M - £113M</span>
+      </div>
+
+      <div class="value-row">
+        <span class="value-label">Salário</span>
+        <span class="pill value-pill" id="salaryValue" contenteditable="true">£41.5K p/s</span>
+      </div>
+
+      <span class="caps-text">
+        <span id="caps" contenteditable="true">0</span> internacionalizações /
+        <span id="intGoals" contenteditable="true">0</span> golos
+      </span>
+
+    </div>
+
+    <div class="header-ability">
+      <div class="ability-block">
+        <span class="ability-label">Nível Atual</span>
+        <span class="stars" id="currentAbility" contenteditable="true" data-raw="2.5">★★★☆☆</span>
+      </div>
+      <div class="ability-block">
+        <span class="ability-label">Potencial</span>
+        <span class="stars gold" id="potentialAbility" contenteditable="true" data-raw="5">★★★★★</span>
+      </div>
+      <div class="wage-text"><span id="wage" contenteditable="true">£41.5K p/s</span> · <span id="contractEnd" contenteditable="true">30/6/2030</span></div>
+    </div>
+
+  </div>
+
+  <!-- ===== TABS ===== -->
+  <div class="tabs">
+    <button class="tab active" data-tab="overview">Visão Geral</button>
+    <button class="tab" data-tab="personal">Pessoal</button>
+    <button class="tab" data-tab="performance">Desempenho</button>
+    <button class="tab" data-tab="career">Carreira</button>
+    <button class="tab hidden" data-tab="negotiate" id="tabNegotiateBtn">Negociar</button>
+  </div>
+
+  <!-- ===== CORPO PRINCIPAL ===== -->
+  <div class="tab-panel" id="panel-overview">
+  <div class="main-grid">
+
+    <!-- Posições -->
+    <div class="card positions-card">
+      <div class="card-title">Posições</div>
+      <div class="position-code" id="positionCode" contenteditable="true">M/MO (E,D)</div>
+
+      <div class="pitch-wrap">
+        <svg viewBox="0 0 300 200" class="pitch">
+          <rect x="2" y="2" width="296" height="196" rx="6" fill="#1f3d2c" stroke="#3a6b4c" stroke-width="2"/>
+          <line x1="2" y1="100" x2="298" y2="100" stroke="#3a6b4c" stroke-width="1.5"/>
+          <circle cx="150" cy="100" r="24" fill="none" stroke="#3a6b4c" stroke-width="1.5"/>
+          <rect x="90" y="2" width="120" height="34" fill="none" stroke="#3a6b4c" stroke-width="1.5"/>
+          <rect x="90" y="164" width="120" height="34" fill="none" stroke="#3a6b4c" stroke-width="1.5"/>
+        </svg>
+        <div id="posDotsLayer"><!-- pontos de posição gerados via JS --></div>
+      </div>
+      <div class="pos-caption" id="posCaption">Médio Ofensivo (Esquerda)</div>
+      <div class="pos-legend">
+        <span><i class="dot rating-0"></i>Sem hábito</span>
+        <span><i class="dot rating-2"></i>Aceitável</span>
+        <span><i class="dot rating-3"></i>Bom</span>
+        <span><i class="dot rating-4"></i>Muito Bom</span>
+        <span><i class="dot rating-5"></i>Natural</span>
+      </div>
+      <div class="pos-hint">Clique num ponto para ajustar a aptidão · duplo-clique para definir como posição principal</div>
+
+      <div class="toggle-row">
+        <button class="toggle-btn active" data-mode="possession">Com Bola</button>
+        <button class="toggle-btn" data-mode="nopossession">Sem Bola</button>
+      </div>
+
+      <div class="role-list-header">
+        <span class="role-list-label">Funções</span>
+        <button id="addRoleBtn" class="btn-mini">+ Função</button>
+      </div>
+      <div class="role-list" id="roleList">
+        <!-- preenchido via JS -->
+      </div>
+    </div>
+
+    <!-- Técnico -->
+    <div class="card attr-card">
+      <div class="card-title" id="technicalCardTitle">Técnica</div>
+      <div class="attr-list" id="technicalList"></div>
+      <div class="card-title sub" id="setPiecesCardTitle">Bolas Paradas</div>
+      <div class="attr-list" id="setPiecesList"></div>
+    </div>
+
+    <!-- Mental -->
+    <div class="card attr-card">
+      <div class="card-title">Mental</div>
+      <div class="attr-list" id="mentalList"></div>
+    </div>
+
+    <!-- Físico + Info -->
+    <div class="card attr-card">
+      <div class="card-title">Físico</div>
+      <div class="attr-list" id="physicalList"></div>
+
+      <div class="info-block">
+        <div class="card-title sub">Informação</div>
+        <div class="info-row"><span>Altura</span><span contenteditable="true" id="height">181 cm</span></div>
+        <div class="info-row"><span>Reputação</span><span contenteditable="true" id="reputation">Continental</span></div>
+        <div class="info-row"><span>Personalidade</span><span contenteditable="true" id="personality">Ambicioso</span></div>
+        <div class="foot-row">
+          <div>
+            <span class="foot-label">Pé Esquerdo</span>
+            <span class="foot-value" contenteditable="true" id="leftFoot">Forte</span>
+          </div>
+          <div>
+            <span class="foot-label">Pé Direito</span>
+            <span class="foot-value" contenteditable="true" id="rightFoot">Muito Forte</span>
+          </div>
+        </div>
+        <div class="traits" id="traitsList" contenteditable="true">
+          Usa o Exterior do Pé · Faz Um-Dois · Gosta de Driblar Repetidamente · Corre Muito com a Bola
+        </div>
+        <div class="gk-row">
+          <span id="gkRatingLabel">Nível de Guarda-Redes</span>
+          <span contenteditable="true" id="gkRating">2 / 10</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ===== RODAPÉ ===== -->
+  <div class="bottom-grid">
+
+    <div class="mini-card">
+      <div class="mini-title">Felicidade</div>
+      <div class="mini-emoji">😄</div>
+      <div class="mini-main" contenteditable="true" id="happiness">Encantado</div>
+      <div class="mini-sub-row"><span>Positivos</span><span contenteditable="true" id="posCount">1</span></div>
+      <div class="mini-sub-row"><span>Negativos</span><span contenteditable="true" id="negCount">1</span></div>
+    </div>
+
+    <div class="mini-card">
+      <div class="mini-title">Condição Física</div>
+      <div class="mini-emoji">💚</div>
+      <div class="mini-main" contenteditable="true" id="fitness">No Auge</div>
+      <div class="mini-note" contenteditable="true" id="fitnessNote">Em ótima condição</div>
+    </div>
+
+    <div class="mini-card">
+      <div class="mini-title">Forma</div>
+      <div class="mini-emoji">–</div>
+      <div class="mini-main" contenteditable="true" id="form">Sem Jogos Realizados</div>
+    </div>
+
+    <div class="mini-card">
+      <div class="mini-title">Disciplina</div>
+      <div class="mini-emoji">🟨</div>
+      <div class="mini-main" contenteditable="true" id="discipline">5 cartões</div>
+      <div class="mini-note" contenteditable="true" id="disciplineNote">para 1 jogo de suspensão</div>
+    </div>
+
+    <div class="mini-card">
+      <div class="mini-title">Treino</div>
+      <div class="mini-emoji">—</div>
+      <div class="mini-main" contenteditable="true" id="training">Não Disponível</div>
+      <div class="mini-note">Nível de Treino</div>
+      <div class="training-rating" contenteditable="true" id="trainingRating">6.50</div>
+    </div>
+
+    <div class="mini-card season-card">
+      <div class="mini-title-row">
+        <div class="mini-title">Estatísticas da Época</div>
+        <button id="addStatRowBtn" class="btn-mini">+ Linha</button>
+      </div>
+      <table class="stats-table">
+        <thead>
+          <tr>
+            <th>Competição</th><th>J</th><th>G</th><th>A</th><th>xG</th><th>Pen</th><th>MdP</th><th>Am</th><th>Verm</th><th>Média</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="seasonStatsBody">
+          <!-- preenchido via JS -->
+        </tbody>
+      </table>
+    </div>
+
+    <div class="mini-card career-card">
+      <div class="mini-title">Carreira</div>
+      <div class="career-stat">
+        <span class="career-num" contenteditable="true" id="careerClubs">3</span>
+        <span class="career-label">Clubes</span>
+      </div>
+      <div class="career-split">
+        <div>
+          <span class="career-num small" contenteditable="true" id="careerApps">12</span>
+          <span class="career-label">Jogos</span>
+        </div>
+        <div>
+          <span class="career-num small" contenteditable="true" id="careerGoals">2</span>
+          <span class="career-label">Golos</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  </div>
+  <!-- /panel-overview -->
+
+  <!-- ===== NEGOCIAR / MERCADO (conteúdo muda consoante o dono do jogador) ===== -->
+  <div class="tab-panel hidden" id="panel-negotiate">
+
+    <div class="card negotiate-card" id="negotiateBuySection">
+      <div class="card-title">Proposta de Transferência</div>
+      <p class="negotiate-hint" id="negotiateBudgetHint">A carregar orçamento…</p>
+
+      <form id="offerForm" class="negotiate-form">
+        <label class="field">
+          <span>Valor da proposta (£)</span>
+          <input type="number" id="offerAmount" min="1" step="1" required>
+        </label>
+        <button type="submit" class="btn-primary">Enviar proposta</button>
+      </form>
+      <p id="offerResult" class="negotiate-result"></p>
+
+      <form id="contractForm" class="negotiate-form hidden">
+        <div class="card-title sub">Proposta de Contrato ao Jogador</div>
+        <p class="negotiate-hint" id="wageExpectationHint"></p>
+        <label class="field">
+          <span>Salário semanal (£)</span>
+          <input type="number" id="wageOffer" min="1" step="1" required>
+        </label>
+        <label class="field">
+          <span>Prémio de assinatura (£)</span>
+          <input type="number" id="signingBonus" min="0" step="1" value="0">
+        </label>
+        <label class="field">
+          <span>Papel prometido no plantel</span>
+          <select id="promisedRole">
+            <option value="Jogador Chave">Jogador Chave</option>
+            <option value="Titular Regular" selected>Titular Regular</option>
+            <option value="Rotação">Rotação</option>
+            <option value="Suplente">Suplente</option>
+          </select>
+        </label>
+        <button type="submit" class="btn-primary">Propor contrato</button>
+      </form>
+      <p id="contractResult" class="negotiate-result"></p>
+    </div>
+
+    <div class="card negotiate-card hidden" id="negotiateFreeAgentSection">
+      <div class="card-title">Jogador Livre</div>
+      <p class="negotiate-hint">Este jogador não pertence a nenhum clube — não há custo de transferência, só é preciso chegar a acordo com ele sobre o contrato.</p>
+      <p class="negotiate-hint" id="freeAgentBudgetHint">A carregar orçamento…</p>
+
+      <form id="freeAgentForm" class="negotiate-form">
+        <p class="negotiate-hint" id="freeAgentWageHint"></p>
+        <label class="field">
+          <span>Salário semanal (£)</span>
+          <input type="number" id="faWageOffer" min="1" step="1" required>
+        </label>
+        <label class="field">
+          <span>Prémio de assinatura (£)</span>
+          <input type="number" id="faSigningBonus" min="0" step="1" value="0">
+        </label>
+        <label class="field">
+          <span>Papel prometido no plantel</span>
+          <select id="faPromisedRole">
+            <option value="Jogador Chave">Jogador Chave</option>
+            <option value="Titular Regular" selected>Titular Regular</option>
+            <option value="Rotação">Rotação</option>
+            <option value="Suplente">Suplente</option>
+          </select>
+        </label>
+        <button type="submit" class="btn-primary">Propor contrato</button>
+      </form>
+      <p id="freeAgentResult" class="negotiate-result"></p>
+    </div>
+
+    <div class="card negotiate-card hidden" id="negotiateListSection">
+      <div class="card-title">Lista de Transferências</div>
+      <p class="negotiate-hint" id="listingStatusHint">Este jogador não está listado para transferência.</p>
+
+      <form id="listingForm" class="negotiate-form">
+        <label class="field checkbox-field">
+          <input type="checkbox" id="listingToggle">
+          <span>Colocar na lista de transferências</span>
+        </label>
+        <label class="field" id="askingPriceField">
+          <span>Valor a que aceitas propostas (£)</span>
+          <input type="number" id="askingPrice" min="1" step="1">
+        </label>
+        <button type="submit" class="btn-primary">Guardar</button>
+      </form>
+      <p id="listingResult" class="negotiate-result"></p>
+      <p class="negotiate-hint">Clubes com reputação compatível com o nível deste jogador podem enviar propostas automaticamente quando avanças o calendário no dashboard.</p>
+    </div>
+
+  </div>
+
+</div>
+
+<script src="script_perfilJogador.js"></script>
+</body>
+</html>

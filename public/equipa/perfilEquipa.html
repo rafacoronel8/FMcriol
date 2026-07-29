@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Perfil do Clube — FMcriol</title>
+<link rel="stylesheet" href="perfilEquipa.css">
+</head>
+<body>
+
+<div class="wrap">
+  <a href="#" id="backLink" class="back-link">← Voltar</a>
+
+  <div class="header" id="clubHeader">
+    <div class="shield-lg" id="shieldLg">⚽</div>
+    <div>
+      <h1 id="clubName">—</h1>
+      <p class="meta" id="clubMeta">—</p>
+    </div>
+  </div>
+
+  <div class="grid-2col">
+    <div class="card">
+      <div class="card-title">Reputação &amp; Financeiro</div>
+      <div class="rows">
+        <div class="row"><span>Reputação</span><b id="reputation">—</b></div>
+        <div class="row"><span>Situação financeira</span><b id="tier">—</b></div>
+        <div class="row"><span>Saldo</span><b id="balance">—</b></div>
+        <div class="row"><span>Orçamento de salários</span><b id="wage">—</b></div>
+        <div class="row"><span>Orçamento de transferências</span><b id="transfer">—</b></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Informação</div>
+      <div class="rows">
+        <div class="row"><span>Divisão</span><b id="division">—</b></div>
+        <div class="row"><span>Localização</span><b id="location">—</b></div>
+        <div class="row"><span>Estádio</span><b id="stadium">—</b></div>
+        <div class="row"><span>Fundado em</span><b id="founded">—</b></div>
+      </div>
+    </div>
+
+    <div class="card span-2">
+      <div class="card-title">Plantel <span id="playerCount" class="count-badge">0</span></div>
+      <div id="playersList" class="players-list"></div>
+      <p id="emptyPlayers" class="placeholder-text hidden">Este clube ainda não tem jogadores registados na base de dados.</p>
+    </div>
+  </div>
+</div>
+
+<script src="perfilEquipa.js"></script>
+</body>
+</html>

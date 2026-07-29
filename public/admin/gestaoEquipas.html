@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gestão de Equipas — FMcriol</title>
+<link rel="stylesheet" href="gestaoEquipas.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <span class="crest-mark">⚽</span>
+    <div>
+      <h1>Gestão de Equipas</h1>
+      <p class="subtitle">FMcriol · Primeira &amp; Segunda Divisão</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="apiStatus" class="status-pill status-checking">a verificar servidor…</span>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ===== FORMULÁRIO: NOVA EQUIPA ===== -->
+  <section class="panel form-panel">
+    <h2>Adicionar equipa</h2>
+    <form id="teamForm">
+      <label class="field">
+        <span>Nome da equipa</span>
+        <input type="text" id="f_name" placeholder="ex: Palmeira" required>
+      </label>
+
+      <label class="field">
+        <span>Reputação (estrelas, 0–5)</span>
+        <input type="number" id="f_reputation" min="0" max="5" step="0.1" value="2.5" required>
+      </label>
+
+      <label class="field">
+        <span>Situação financeira</span>
+        <select id="f_financial">
+          <option>Muito Rico</option>
+          <option>Rico</option>
+          <option selected>Medio</option>
+          <option>Pobre</option>
+          <option>Muito Pobre</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Divisão</span>
+        <select id="f_division">
+          <option value="1" selected>1ª Divisão</option>
+          <option value="2">2ª Divisão</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Localização <em>(opcional)</em></span>
+        <input type="text" id="f_location" placeholder="ex: Mindelo">
+      </label>
+
+      <button type="submit" class="btn-primary">+ Criar equipa</button>
+      <p id="formMsg" class="form-msg"></p>
+    </form>
+  </section>
+
+  <!-- ===== LISTA DE EQUIPAS ===== -->
+  <section class="panel list-panel">
+    <div class="list-header">
+      <h2>Equipas <span id="teamCount" class="count-badge">0</span></h2>
+      <input type="search" id="searchBox" placeholder="Pesquisar equipa…" class="search-box">
+    </div>
+
+    <div id="teamGrid" class="team-grid">
+      <!-- cartões de equipa gerados via JS -->
+    </div>
+
+    <p id="emptyState" class="empty-state hidden">Nenhuma equipa encontrada.</p>
+  </section>
+
+</main>
+
+<!-- Input de ficheiro escondido, reutilizado para todos os uploads de escudo -->
+<input type="file" id="shieldFileInput" accept="image/*" class="hidden-input">
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="gestaoEquipas.js"></script>
+</body>
+</html>

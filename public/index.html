@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FMcriol</title>
+<style>
+:root{
+  --bg-0:#0e1420;
+  --bg-1:#141c2b;
+  --bg-2:#1a2436;
+  --bg-3:#20304a;
+  --line:#2a3850;
+  --text-0:#eef2f8;
+  --text-1:#aab6c9;
+  --text-2:#79879e;
+  --accent:#7c5cff;
+  --accent-2:#9b3dff;
+  --gold:#f2c14e;
+  --radius-m:10px;
+  --radius-l:16px;
+}
+*{box-sizing:border-box;}
+.hidden{display:none !important;}
+body{
+  margin:0;
+  min-height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:
+    radial-gradient(circle at 50% 0%, #1c2a4550 0%, transparent 55%),
+    radial-gradient(circle at 85% 90%, #3a1f5a30 0%, transparent 45%),
+    var(--bg-0);
+  color:var(--text-0);
+  font-family:"Segoe UI","Inter",-apple-system,BlinkMacSystemFont,sans-serif;
+}
+.stage{
+  text-align:center;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:28px;
+  animation:rise .6s ease;
+}
+@keyframes rise{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
+
+.crest{
+  width:88px;height:88px;
+  border-radius:22px;
+  background:linear-gradient(160deg, var(--bg-3), var(--bg-2));
+  border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;
+  font-size:40px;
+  box-shadow:0 0 0 6px rgba(124,92,255,.08);
+}
+
+.wordmark{margin:0;font-size:38px;font-weight:800;letter-spacing:.5px;}
+.wordmark span{color:var(--accent);}
+.tagline{margin:0;color:var(--text-2);font-size:14px;letter-spacing:1.5px;text-transform:uppercase;}
+
+.actions{display:flex;flex-direction:column;gap:10px;margin-top:12px;width:260px;}
+
+.btn{
+  display:block;
+  padding:14px 20px;
+  border-radius:var(--radius-m);
+  font-size:14.5px;
+  font-weight:700;
+  font-family:inherit;
+  cursor:pointer;
+  text-decoration:none;
+  transition:transform .12s ease, background .15s ease;
+}
+.btn:hover{transform:translateY(-1px);}
+.btn-primary{background:var(--accent);color:#fff;border:none;}
+.btn-primary:hover{background:var(--accent-2);}
+.btn-secondary{
+  background:var(--bg-2);
+  color:var(--text-0);
+  border:1px solid var(--line);
+}
+.btn-secondary:hover{border-color:var(--accent);}
+
+.footnote{margin-top:20px;font-size:11.5px;color:var(--text-2);}
+.footnote a{color:var(--text-1);}
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <div class="crest">⚽</div>
+  <div>
+    <h1 class="wordmark">FM<span>criol</span></h1>
+    <p class="tagline">Football Manager · Cabo Verde</p>
+  </div>
+
+  <div class="actions">
+    <a class="btn btn-primary" href="/inicio/selecaoClube.html" id="newGameBtn">Novo Jogo</a>
+    <a class="btn btn-secondary hidden" id="continueBtn" href="/dashboard/dashboard.html">Continuar Jogo</a>
+    <a class="btn btn-secondary" href="/admin/gestaoEquipas.html">Gestão de Equipas</a>
+  </div>
+
+  <p class="footnote">15 clubes · Primeira Divisão · <a href="#" id="resetLink">apagar jogo guardado</a></p>
+</div>
+
+<script>
+const savedTeam = localStorage.getItem('fmcriol_teamId');
+const continueBtn = document.getElementById('continueBtn');
+if (savedTeam) continueBtn.classList.remove('hidden');
+else continueBtn.remove();
+
+async function resetGameWorld(){
+  try{
+    await fetch('/api/game/reset', { method: 'POST' });
+  }catch(err){
+    // se o servidor estiver offline, avança na mesma — o resto da app já trata disso
+  }
+  localStorage.removeItem('fmcriol_teamId');
+  localStorage.removeItem('fmcriol_managerName');
+}
+
+document.getElementById('newGameBtn').addEventListener('click', async (e) => {
+  e.preventDefault();
+  const btn = e.currentTarget;
+  const originalText = btn.textContent;
+  btn.textContent = 'A preparar novo jogo…';
+  btn.style.pointerEvents = 'none';
+  await resetGameWorld();
+  window.location.href = '/inicio/selecaoClube.html';
+});
+
+document.getElementById('resetLink').addEventListener('click', async (e) => {
+  e.preventDefault();
+  await resetGameWorld();
+  location.reload();
+});
+</script>
+</body>
+</html>
