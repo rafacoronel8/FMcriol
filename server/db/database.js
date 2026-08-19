@@ -127,6 +127,48 @@ const PLAYER_COLUMNS = [
   // só existe UM mercado por jogo, por isso cada jogador só pode ser
   // transferido uma vez até o mercado fechar (ver isMarketWindowOpen abaixo).
   ['transferred_in_window', 'INTEGER DEFAULT 0'],
+
+  /* ---------- Moral / personalidade do balneário ----------
+     stood_down_until  -> data (do calendário do jogo) até à qual o jogador fica de fora
+                           de qualquer escolha para o onze/suplentes, depois de o
+                           treinador o afastar temporariamente na sequência de um
+                           incidente (ver routes/morale.js). NULL = não está afastado.
+     stood_down_reason -> pequena nota do motivo, mostrada no perfil/plantel. */
+  ['stood_down_until', 'TEXT'],
+  ['stood_down_reason', 'TEXT'],
+
+  /* ---------- Valores iniciais ("de fábrica") de cada jogador ----------
+     Tudo o que o TREINO e os AMIGÁVEIS podem alterar durante a carreira
+     (atributos, condição física, forma, disciplina, estatísticas da época)
+     fica aqui guardado uma segunda vez, como veio configurado antes de
+     começares a jogar. "Novo Jogo" (POST /api/game/reset) repõe estes
+     campos a partir daqui, para que TODOS os saves comecem sempre com os
+     mesmos valores iniciais, e só subam com o treino a partir daí — em vez
+     de herdarem os números já inflacionados de uma carreira anterior. */
+  ['baseline_technical_json', 'TEXT'],
+  ['baseline_set_pieces_json', 'TEXT'],
+  ['baseline_mental_json', 'TEXT'],
+  ['baseline_physical_json', 'TEXT'],
+  ['baseline_goalkeeping_json', 'TEXT'],
+  ['baseline_training_status', 'TEXT'],
+  ['baseline_training_rating', 'REAL'],
+  ['baseline_fitness_status', 'TEXT'],
+  ['baseline_fitness_note', 'TEXT'],
+  ['baseline_happiness', 'TEXT'],
+  ['baseline_positive_count', 'INTEGER'],
+  ['baseline_negative_count', 'INTEGER'],
+  ['baseline_discipline_text', 'TEXT'],
+  ['baseline_discipline_note', 'TEXT'],
+  ['baseline_form_text', 'TEXT'],
+  ['baseline_season_stats_json', 'TEXT'],
+  ['baseline_caps', 'INTEGER'],
+  ['baseline_international_goals', 'INTEGER'],
+  // Só passa a 1 depois de o "instantâneo" acima ser tirado para este
+  // jogador — ver a reparação abaixo, que faz isto uma única vez para
+  // jogadores já existentes, e POST /api/players, que faz isto logo na
+  // criação de qualquer jogador novo.
+  ['baseline_captured', 'INTEGER DEFAULT 0'],
+
   ['updated_at', "TEXT DEFAULT (datetime('now'))"],
 ];
 
@@ -135,6 +177,47 @@ for (const [colName, colDef] of PLAYER_COLUMNS) {
   if (!existingCols.includes(colName)) {
     db.exec(`ALTER TABLE players ADD COLUMN ${colName} ${colDef}`);
   }
+}
+
+/* ---------- Reparação única: tira o "instantâneo" inicial de quem já existe ----------
+   Jogadores criados ANTES desta atualização nunca tiveram baseline_* gravado.
+   Na primeira vez que o servidor arranca com esta coluna, usa os valores
+   ATUAIS de cada jogador como o seu ponto de partida — é a melhor aproximação
+   possível sem um registo separado de "como o jogador estava antes de
+   qualquer treino". A partir daqui, "Novo Jogo" já repõe sempre para este
+   mesmo instantâneo, de forma consistente em todos os saves seguintes. */
+function captureBaseline(playerId) {
+  const p = db.prepare('SELECT * FROM players WHERE id = ?').get(playerId);
+  if (!p) return;
+  db.prepare(`
+    UPDATE players SET
+      baseline_technical_json = @technical_json, baseline_set_pieces_json = @set_pieces_json,
+      baseline_mental_json = @mental_json, baseline_physical_json = @physical_json,
+      baseline_goalkeeping_json = @goalkeeping_json, baseline_training_status = @training_status,
+      baseline_training_rating = @training_rating, baseline_fitness_status = @fitness_status,
+      baseline_fitness_note = @fitness_note, baseline_happiness = @happiness,
+      baseline_positive_count = @positive_count, baseline_negative_count = @negative_count,
+      baseline_discipline_text = @discipline_text, baseline_discipline_note = @discipline_note,
+      baseline_form_text = @form_text, baseline_season_stats_json = @season_stats_json,
+      baseline_caps = @caps, baseline_international_goals = @international_goals,
+      baseline_captured = 1
+    WHERE id = @id
+  `).run({
+    id: p.id, technical_json: p.technical_json, set_pieces_json: p.set_pieces_json,
+    mental_json: p.mental_json, physical_json: p.physical_json, goalkeeping_json: p.goalkeeping_json,
+    training_status: p.training_status, training_rating: p.training_rating,
+    fitness_status: p.fitness_status, fitness_note: p.fitness_note, happiness: p.happiness,
+    positive_count: p.positive_count, negative_count: p.negative_count,
+    discipline_text: p.discipline_text, discipline_note: p.discipline_note,
+    form_text: p.form_text, season_stats_json: p.season_stats_json,
+    caps: p.caps, international_goals: p.international_goals,
+  });
+}
+db.captureBaseline = captureBaseline;
+
+{
+  const notCaptured = db.prepare('SELECT id FROM players WHERE baseline_captured IS NULL OR baseline_captured = 0').all();
+  notCaptured.forEach((row) => captureBaseline(row.id));
 }
 
 /* ---------- Mercado de transferências: caixa de entrada, propostas e contratos ---------- */
@@ -187,6 +270,16 @@ CREATE TABLE IF NOT EXISTS game_state (
 INSERT OR IGNORE INTO game_state (id, current_date) VALUES (1, '2026-07-01');
 `);
 
+/* ---------- Migração segura: nome do treinador + boas-vindas ----------
+   manager_name  -> definido em POST /api/game/claim-team (o dashboard envia-o a
+                    partir do localStorage), para o servidor poder personalizar
+                    mensagens como a de boas-vindas.
+   welcome_sent  -> garante que a mensagem de boas-vindas só é enviada uma vez
+                    por save (voltar a "Novo Jogo" repõe isto a 0). */
+const gameStateCols = db.prepare("PRAGMA table_info(game_state)").all().map((c) => c.name);
+if (!gameStateCols.includes('manager_name')) db.exec('ALTER TABLE game_state ADD COLUMN manager_name TEXT');
+if (!gameStateCols.includes('welcome_sent')) db.exec('ALTER TABLE game_state ADD COLUMN welcome_sent INTEGER DEFAULT 0');
+
 /* ---------- Lista de transferências: jogador + valor a que o clube aceita vender ---------- */
 const listingCols = db.prepare("PRAGMA table_info(players)").all().map((c) => c.name);
 if (!listingCols.includes('is_listed')) db.exec("ALTER TABLE players ADD COLUMN is_listed INTEGER DEFAULT 0");
@@ -201,6 +294,56 @@ if (!listingCols.includes('asking_price')) db.exec("ALTER TABLE players ADD COLU
 const messageCols = db.prepare("PRAGMA table_info(messages)").all().map((c) => c.name);
 if (!messageCols.includes('related_team_id')) db.exec('ALTER TABLE messages ADD COLUMN related_team_id INTEGER');
 if (!messageCols.includes('transfer_offer_id')) db.exec('ALTER TABLE messages ADD COLUMN transfer_offer_id INTEGER');
+
+/* ---------- Personalidade: normaliza para um conjunto fixo de 5 níveis ----------
+   O campo já existia como texto livre (o que já estava escrito no perfil de cada
+   jogador); agora passa a ser escolhido num menu fixo, para os eventos de
+   balneário (ver routes/morale.js) poderem confiar no valor. Qualquer coisa que
+   não seja um dos 5 níveis reconhecidos (incluindo o texto de exemplo antigo,
+   como "Ambicioso", ou o campo vazio) passa a "Normal". */
+const PERSONALITY_TIERS = ['Muito Fiel', 'Fiel', 'Normal', 'Problemático', 'Muito Problemático'];
+db.prepare(`
+  UPDATE players SET personality = 'Normal'
+  WHERE personality IS NULL OR TRIM(personality) = ''
+     OR personality NOT IN (${PERSONALITY_TIERS.map(() => '?').join(',')})
+`).run(...PERSONALITY_TIERS);
+
+/* ---------- Incidentes de personalidade + perguntas ao treinador ----------
+   player_incidents  -> gerado quando um jogador "Problemático"/"Muito Problemático"
+                         arranja uma briga ou faz uma birra (ver runMoraleTick em
+                         routes/morale.js); fica "pending" até o treinador decidir
+                         o que fazer (colocar na lista de transferências, afastar
+                         temporariamente, ou ignorar).
+   manager_questions -> perguntas ocasionais na caixa de entrada; a resposta
+                         escolhida influencia a moral (happiness) do plantel. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS player_incidents (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id     INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  kind        TEXT NOT NULL CHECK (kind IN ('fight','tantrum')),
+  status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','resolved')),
+  resolution  TEXT,
+  event_date  TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS manager_questions (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id      INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  prompt       TEXT NOT NULL,
+  options_json TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','resolved')),
+  chosen_key   TEXT,
+  event_date   TEXT NOT NULL,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at  TEXT
+);
+`);
+
+if (!messageCols.includes('incident_id')) db.exec('ALTER TABLE messages ADD COLUMN incident_id INTEGER REFERENCES player_incidents(id)');
+if (!messageCols.includes('question_id')) db.exec('ALTER TABLE messages ADD COLUMN question_id INTEGER REFERENCES manager_questions(id)');
 
 /* ---------- Backfill: jogadores já existentes que ainda não têm original_team_id
    ficam com o clube atual como "clube de origem" (melhor opção possível sem re-semear). */
@@ -331,6 +474,82 @@ CREATE TABLE IF NOT EXISTS club_friendlies (
 db.exec('CREATE INDEX IF NOT EXISTS idx_club_friendlies_home ON club_friendlies(home_team_id, match_date)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_club_friendlies_away ON club_friendlies(away_team_id, match_date)');
 
+/* Marca um "amigável" interno criado automaticamente para um jogo do
+   Campeonato (ver routes/league.js) — permite reaproveitar toda a máquina
+   já existente de jogo do dia / jogo ao vivo sem duplicar código, e permite
+   à interface (e à lista "Amigáveis") esconder estas entradas, já que não
+   são amigáveis reais marcados pelo utilizador. */
+{
+  const cfCols = db.prepare("PRAGMA table_info(club_friendlies)").all().map((c) => c.name);
+  if (!cfCols.includes('is_league')) db.exec('ALTER TABLE club_friendlies ADD COLUMN is_league INTEGER DEFAULT 0');
+}
+
+/* ---------- Campeonato: calendário oficial (round-robin a duas voltas) ----------
+   Gerado de uma só vez por save (ver regenerateSeasonFixtures em
+   routes/league.js), a começar sempre a 1 de agosto — depois de fechar o
+   mês de mercado/pré-época. Jogos que envolvam o clube do utilizador ficam
+   "linked" a uma linha em club_friendlies (friendly_id) assim que o
+   calendário lhes chega, para poderem ser assistidos ao vivo tal como um
+   amigável; os restantes ficam "played" diretamente, com o resultado já
+   simulado. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS league_fixtures (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  round         INTEGER NOT NULL,
+  home_team_id  INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  away_team_id  INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  match_date    TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled','linked','played')),
+  home_score    INTEGER,
+  away_score    INTEGER,
+  friendly_id   INTEGER REFERENCES club_friendlies(id) ON DELETE SET NULL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_league_fixtures_date ON league_fixtures(match_date);
+CREATE INDEX IF NOT EXISTS idx_league_fixtures_home ON league_fixtures(home_team_id, match_date);
+CREATE INDEX IF NOT EXISTS idx_league_fixtures_away ON league_fixtures(away_team_id, match_date);
+`);
+
+/* Mesma ideia do is_league, mas para a Taça São Vicente (ver routes/cup.js). */
+{
+  const cfCols2 = db.prepare("PRAGMA table_info(club_friendlies)").all().map((c) => c.name);
+  if (!cfCols2.includes('is_cup')) db.exec('ALTER TABLE club_friendlies ADD COLUMN is_cup INTEGER DEFAULT 0');
+}
+
+/* ---------- Taça São Vicente: mata-mata a uma mão, com sorteio por ronda ----------
+   Ao contrário do Campeonato (calendário gerado de uma vez, todo à partida),
+   a Taça só sorteia uma ronda de cada vez — a ronda seguinte só existe depois
+   de o treinador pedir o sorteio (ver POST /api/cup/draw), tal como pedido:
+   "a cada rodada existirá um sorteio". Por isso não há aqui nenhum
+   "regenerateSeasonFixtures" equivalente: as linhas desta tabela vão sendo
+   inseridas ronda a ronda, à medida que o torneio avança.
+     round            -> 1 = primeira eliminatória, 2 = quartos, 3 = meias, 4 = final
+                          (com 15 clubes, a ronda 1 tem um "bye")
+     is_bye           -> esta linha não é um jogo — a equipa em home_team_id passa
+                          à ronda seguinte sem jogar (away_team_id fica NULL)
+     winner_team_id    -> só é preenchido quando status = 'played' (ou de imediato,
+                          no caso de um bye) */
+db.exec(`
+CREATE TABLE IF NOT EXISTS cup_fixtures (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  round          INTEGER NOT NULL,
+  round_name     TEXT NOT NULL,
+  home_team_id   INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  away_team_id   INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+  is_bye         INTEGER NOT NULL DEFAULT 0,
+  match_date     TEXT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled','linked','played')),
+  home_score     INTEGER,
+  away_score     INTEGER,
+  decided_by_penalties INTEGER NOT NULL DEFAULT 0,
+  winner_team_id INTEGER REFERENCES teams(id),
+  friendly_id    INTEGER REFERENCES club_friendlies(id) ON DELETE SET NULL,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cup_fixtures_date ON cup_fixtures(match_date);
+CREATE INDEX IF NOT EXISTS idx_cup_fixtures_round ON cup_fixtures(round);
+`);
+
 /* ---------- Estatísticas individuais de cada amigável ----------
    Uma linha por jogador que participou num amigável já realizado: quantos
    golos e assistências fez nesse jogo em concreto, e a nota que recebeu.
@@ -356,11 +575,174 @@ CREATE TABLE IF NOT EXISTS friendly_player_stats (
 CREATE INDEX IF NOT EXISTS idx_friendly_player_stats_friendly ON friendly_player_stats(friendly_id);
 `);
 
+/* Cartões amarelos/vermelhos de cada amigável — migração segura, para não
+   perder os jogos já simulados de saves anteriores a esta funcionalidade. */
+const FRIENDLY_STAT_COLUMNS = [
+  ['yellow_cards', 'INTEGER DEFAULT 0'],
+  ['red_card', 'INTEGER DEFAULT 0'],
+];
+const existingFriendlyStatCols = db.prepare("PRAGMA table_info(friendly_player_stats)").all().map((c) => c.name);
+for (const [colName, colDef] of FRIENDLY_STAT_COLUMNS) {
+  if (!existingFriendlyStatCols.includes(colName)) {
+    db.exec(`ALTER TABLE friendly_player_stats ADD COLUMN ${colName} ${colDef}`);
+  }
+}
+
+/* ---------- Estatísticas por competição (Campeonato / Taça) ----------
+   friendly_player_stats passou a guardar TAMBÉM as estatísticas dos jogos
+   do Campeonato e da Taça entre duas equipas geridas pelo jogo (sem
+   nenhum amigável associado) — por isso friendly_id, que antes era sempre
+   obrigatório, tem agora de poder ficar a NULL nesses casos. O SQLite não
+   permite tirar um NOT NULL com ALTER TABLE, por isso esta migração
+   reconstrói a tabela de raiz, preservando todas as linhas já guardadas
+   (com competition = 'friendly', já que só existiam amigáveis quando
+   friendly_id era obrigatório). Só corre uma vez — fica marcada pela
+   presença da coluna "competition". */
+{
+  const cols = db.prepare("PRAGMA table_info(friendly_player_stats)").all();
+  const hasCompetitionCol = cols.some((c) => c.name === 'competition');
+  if (!hasCompetitionCol) {
+    db.exec('ALTER TABLE friendly_player_stats RENAME TO friendly_player_stats_old');
+    db.exec(`
+      CREATE TABLE friendly_player_stats (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        friendly_id   INTEGER REFERENCES club_friendlies(id) ON DELETE CASCADE,
+        competition   TEXT NOT NULL DEFAULT 'friendly' CHECK (competition IN ('friendly','league','cup')),
+        team_id       INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        player_id     INTEGER REFERENCES players(id) ON DELETE SET NULL,
+        player_name   TEXT NOT NULL,
+        position_tag  TEXT,
+        goals         INTEGER NOT NULL DEFAULT 0,
+        assists       INTEGER NOT NULL DEFAULT 0,
+        rating        REAL NOT NULL DEFAULT 6.0,
+        yellow_cards  INTEGER DEFAULT 0,
+        red_card      INTEGER DEFAULT 0,
+        tackles       INTEGER DEFAULT 0,
+        pass_pct      REAL,
+        created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    db.exec(`
+      INSERT INTO friendly_player_stats
+        (id, friendly_id, competition, team_id, player_id, player_name, position_tag, goals, assists, rating, yellow_cards, red_card, tackles, pass_pct, created_at)
+      SELECT id, friendly_id, 'friendly', team_id, player_id, player_name, position_tag, goals, assists, rating, yellow_cards, red_card, 0, NULL, created_at
+      FROM friendly_player_stats_old
+    `);
+    db.exec('DROP TABLE friendly_player_stats_old');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_friendly_player_stats_friendly ON friendly_player_stats(friendly_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_friendly_player_stats_competition ON friendly_player_stats(competition, player_id)');
+}
+
+const COMPETITION_ROW_NAMES = {
+  friendly: 'Amigáveis (Não Oficial)',
+  league: 'Campeonato',
+  cup: 'Taça São Vicente',
+};
+db.COMPETITION_ROW_NAMES = COMPETITION_ROW_NAMES;
+
+/* Acumula o resultado de UM jogo (goals/assists/cartões/cortes/% passe/
+   nota) na linha certa de season_stats_json do jogador — a mesma ideia que
+   já existia só para amigáveis (routes/game.js e routes/liveMatch.js),
+   agora centralizada aqui para poder ser usada também pelo Campeonato e
+   pela Taça (routes/league.js, routes/cup.js), incluindo jogos inteiramente
+   entre equipas geridas pelo jogo, sem nenhum amigável por trás. */
+function applySeasonStat(playerId, competitionRowName, stats) {
+  const { goals = 0, assists = 0, yellow = 0, red = 0, tackles = 0, passPct = null, rating = null } = stats || {};
+  const player = db.prepare('SELECT season_stats_json FROM players WHERE id = ?').get(playerId);
+  if (!player) return;
+
+  let rows;
+  try { rows = JSON.parse(player.season_stats_json || '[]'); } catch { rows = []; }
+  if (!Array.isArray(rows)) rows = [];
+
+  let row = rows.find((r) => r.competition === competitionRowName);
+  if (!row) {
+    row = { competition: competitionRowName, j: 0, g: 0, a: 0, xg: 0, pen: 0, mdp: 0, am: 0, verm: 0, tk: 0, pp: '-', media: '-' };
+    rows.push(row);
+  }
+
+  const prevJ = Number(row.j) || 0;
+  const prevMedia = parseFloat(row.media);
+  const prevMediaTotal = Number.isFinite(prevMedia) ? prevMedia * prevJ : 0;
+  const prevPP = parseFloat(row.pp);
+  const prevPPTotal = Number.isFinite(prevPP) ? prevPP * prevJ : 0;
+
+  row.j = prevJ + 1;
+  row.g = (Number(row.g) || 0) + goals;
+  row.a = (Number(row.a) || 0) + assists;
+  row.am = (Number(row.am) || 0) + yellow;
+  row.verm = (Number(row.verm) || 0) + red;
+  row.tk = (Number(row.tk) || 0) + tackles;
+  if (rating != null) row.media = ((prevMediaTotal + rating) / row.j).toFixed(2);
+  if (passPct != null) row.pp = ((prevPPTotal + passPct) / row.j).toFixed(1);
+
+  db.prepare("UPDATE players SET season_stats_json = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(JSON.stringify(rows), playerId);
+}
+db.applySeasonStat = applySeasonStat;
+
+/* ---------- Jogos ao vivo: sessão de simulação minuto a minuto ----------
+   Guarda o estado de um amigável enquanto está a ser assistido ao vivo (só
+   acontece com jogos de hoje que envolvam o clube do utilizador — ver
+   routes/liveMatch.js): o onze/suplentes de cada equipa NESSE jogo em
+   concreto, o calendário interno de golos/cartões já sorteados mas ainda
+   por revelar, e os acontecimentos já revelados ao utilizador (comentário
+   minuto a minuto). Uma equipa só pode ter uma sessão por amigável — por
+   isso friendly_id é UNIQUE. Apaga-se sozinha (cascade) quando o amigável
+   é apagado, tal como friendly_player_stats. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS live_matches (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  friendly_id       INTEGER NOT NULL UNIQUE REFERENCES club_friendlies(id) ON DELETE CASCADE,
+  status            TEXT NOT NULL DEFAULT 'in_progress' CHECK (status IN ('in_progress','finished')),
+  current_minute    INTEGER NOT NULL DEFAULT 0,
+  home_score        INTEGER NOT NULL DEFAULT 0,
+  away_score        INTEGER NOT NULL DEFAULT 0,
+  home_state_json   TEXT NOT NULL,
+  away_state_json   TEXT NOT NULL,
+  schedule_json     TEXT NOT NULL,
+  events_json       TEXT NOT NULL DEFAULT '[]',
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`);
+
+/* Migração segura: se a tabela live_matches já existia de uma versão
+   anterior do jogo (ex: antes de "current_minute" ou outra coluna terem
+   sido acrescentadas), "CREATE TABLE IF NOT EXISTS" acima não faz nada —
+   e a rota /api/live-matches falhava com "no column named current_minute"
+   (ou outra coluna em falta). Isto garante que a tabela tem sempre todas
+   as colunas que o código espera, tal como já acontece com
+   friendly_player_stats mais acima. */
+const LIVE_MATCH_COLUMNS = [
+  ['status', "TEXT DEFAULT 'in_progress'"],
+  ['current_minute', 'INTEGER DEFAULT 0'],
+  ['home_score', 'INTEGER DEFAULT 0'],
+  ['away_score', 'INTEGER DEFAULT 0'],
+  ['home_state_json', "TEXT DEFAULT '{}'"],
+  ['away_state_json', "TEXT DEFAULT '{}'"],
+  ['schedule_json', "TEXT DEFAULT '[]'"],
+  ['events_json', "TEXT DEFAULT '[]'"],
+  ['created_at', "TEXT DEFAULT (datetime('now'))"],
+  ['updated_at', "TEXT DEFAULT (datetime('now'))"],
+];
+const existingLiveMatchCols = db.prepare("PRAGMA table_info(live_matches)").all().map((c) => c.name);
+for (const [colName, colDef] of LIVE_MATCH_COLUMNS) {
+  if (!existingLiveMatchCols.includes(colName)) {
+    db.exec(`ALTER TABLE live_matches ADD COLUMN ${colName} ${colDef}`);
+  }
+}
+
 /* Regista um acontecimento no jornal do mercado. Chamado a partir das rotas de
    transferências (propostas, contratos, respostas) e do avanço do calendário
    (vendas automáticas entre equipas geridas pelo jogo). */
 function logMarketNews(fields) {
-  const state = db.prepare('SELECT current_date FROM game_state WHERE id = 1').get();
+  /* IMPORTANTE: "current_date" tem de vir qualificado com o nome da tabela.
+     Sem isto, o SQLite interpreta "current_date" como a sua própria palavra-chave
+     incorporada (a data REAL do computador) em vez da coluna — as notícias do
+     mercado ficavam com a data real do sistema em vez da data do jogo. */
+  const state = db.prepare('SELECT game_state.current_date FROM game_state WHERE id = 1').get();
   db.prepare(`
     INSERT INTO market_news (
       event_date, type, headline, body, player_name, player_photo,
@@ -385,16 +767,22 @@ function logMarketNews(fields) {
 }
 db.logMarketNews = logMarketNews;
 
-/* ---------- Mercado de transferências: existe apenas UM mês de mercado por jogo ----------
-   A janela fica aberta só durante o mês em que a carreira começa (2026-07, ver
-   INSERT OR IGNORE INTO game_state acima e /api/game/reset). Fora desse mês —
-   ou seja, depois de avançar o calendário para agosto — não é possível abrir
-   nem receber novas propostas. Isto é o que garante "existe apenas um mês de
-   mercado" pedido no bug report. */
-const MARKET_WINDOW_MONTH = '2026-07';
+/* ---------- Mercado de transferências: reabre todos os anos, 1 jul – 31 jul ----------
+   A pré-época/mercado está sempre aberta entre 1 de julho e 31 de julho,
+   TODOS os anos — fecha mesmo a tempo do Campeonato começar a 1 de agosto
+   (ver LEAGUE_SEASON_START / current_season_start em routes/league.js).
+   Compara só o "MM-DD" da data do jogo, para não depender do ano — assim
+   o mercado volta a abrir sozinho a cada nova época, sem precisar de
+   nenhum reset manual. */
 function isMarketWindowOpen() {
-  const state = db.prepare('SELECT current_date FROM game_state WHERE id = 1').get();
-  return String(state?.current_date || '').slice(0, 7) === MARKET_WINDOW_MONTH;
+  /* IMPORTANTE: "current_date" tem de vir qualificado com o nome da tabela.
+     Sem isto, o SQLite interpreta "current_date" como a sua própria palavra-chave
+     incorporada (a data REAL do computador) em vez da coluna — a janela de
+     mercado ficava a decidir com base no mês real do sistema em vez do mês
+     do calendário do jogo. */
+  const state = db.prepare('SELECT game_state.current_date FROM game_state WHERE id = 1').get();
+  const monthDay = String(state?.current_date || '').slice(5, 10); // 'MM-DD'
+  return monthDay >= '07-01' && monthDay <= '07-31';
 }
 db.isMarketWindowOpen = isMarketWindowOpen;
 
@@ -405,5 +793,151 @@ function markTransferredInWindow(playerId) {
   db.prepare('UPDATE players SET transferred_in_window = 1 WHERE id = ?').run(playerId);
 }
 db.markTransferredInWindow = markTransferredInWindow;
+
+/* Sempre que um "amigável" (real ou gerado para uma jornada do Campeonato —
+   ver is_league acima) é dado como jogado, isto propaga o resultado para a
+   linha correspondente em league_fixtures, se existir alguma ligada a este
+   friendly_id. Chamado a partir de routes/game.js (runFriendliesTick) e de
+   routes/liveMatch.js (finalizeMatch) — os dois sítios onde um
+   club_friendlies passa a status = 'played'. Não faz nada se não houver
+   nenhuma linha ligada (amigável normal, sem relação com o Campeonato). */
+function syncLeagueFixtureFromFriendly(friendlyId, homeScore, awayScore) {
+  db.prepare(`
+    UPDATE league_fixtures SET status = 'played', home_score = ?, away_score = ?
+    WHERE friendly_id = ?
+  `).run(homeScore, awayScore, friendlyId);
+}
+db.syncLeagueFixtureFromFriendly = syncLeagueFixtureFromFriendly;
+
+/* Equivalente a syncLeagueFixtureFromFriendly, mas para a Taça São Vicente
+   (ver is_cup acima e routes/cup.js). A Taça é a eliminar — não pode
+   terminar empatada, por isso, se o resultado ficar empatado ao fim dos 90
+   minutos (o motor de jogo/amigáveis não simula prolongamento nem
+   grandes penalidades), o vencedor é decidido aqui mesmo por um
+   desempate aleatório, ligeiramente influenciado pela reputação de cada
+   equipa, e a marcação fica com decided_by_penalties = 1 para a interface
+   poder mostrar "(gp)" junto ao resultado. */
+function syncCupFixtureFromFriendly(friendlyId, homeScore, awayScore) {
+  const fixture = db.prepare('SELECT * FROM cup_fixtures WHERE friendly_id = ?').get(friendlyId);
+  if (!fixture) return;
+
+  let winnerId;
+  let decidedByPenalties = 0;
+  if (homeScore > awayScore) {
+    winnerId = fixture.home_team_id;
+  } else if (awayScore > homeScore) {
+    winnerId = fixture.away_team_id;
+  } else {
+    decidedByPenalties = 1;
+    const home = db.prepare('SELECT reputation_stars FROM teams WHERE id = ?').get(fixture.home_team_id);
+    const away = db.prepare('SELECT reputation_stars FROM teams WHERE id = ?').get(fixture.away_team_id);
+    const homeChance = 0.5 + ((home?.reputation_stars ?? 2.5) - (away?.reputation_stars ?? 2.5)) * 0.04;
+    winnerId = Math.random() < Math.max(0.25, Math.min(0.75, homeChance)) ? fixture.home_team_id : fixture.away_team_id;
+  }
+
+  db.prepare(`
+    UPDATE cup_fixtures SET status = 'played', home_score = ?, away_score = ?,
+      winner_team_id = ?, decided_by_penalties = ?
+    WHERE id = ?
+  `).run(homeScore, awayScore, winnerId, decidedByPenalties, fixture.id);
+}
+db.syncCupFixtureFromFriendly = syncCupFixtureFromFriendly;
+
+db.PERSONALITY_TIERS = PERSONALITY_TIERS;
+
+/* ---------- Comissão técnica: adjuntos, fisioterapeutas, preparadores físicos ----------
+   Criados no admin (gestaoStaff.html), com ou sem clube atribuído — quem não
+   tem clube fica disponível para qualquer equipa "contratar" a partir do
+   jogo (Meu Clube), pagando hire_fee de uma vez (o jogo não tem folha de
+   pagamento semanal — os salários de jogadores também não são debitados
+   automaticamente, ver routes/game.js). Os efeitos de cada cargo estão em
+   routes/morale.js (Adjunto) e routes/activities.js (Fisioterapeuta,
+   Preparador Físico). */
+const STAFF_ROLES = ['Adjunto', 'Fisioterapeuta', 'Preparador Físico'];
+db.STAFF_ROLES = STAFF_ROLES;
+
+/* ---------- Época: reinício automático + palmarés ----------
+   current_season_start -> sempre um 1 de agosto; é a partir desta data que
+   routes/league.js gera o calendário da época em curso. Quando o
+   calendário do jogo chega ao 1 de agosto seguinte, a época "fecha":
+   atribuem-se os troféus (Campeonato + Taça) e os 5 prémios individuais,
+   e gera-se logo a seguir um Campeonato novo (ver runSeasonRolloverIfDue
+   em routes/league.js). */
+{
+  const gsCols = db.prepare("PRAGMA table_info(game_state)").all().map((c) => c.name);
+  if (!gsCols.includes('current_season_start')) {
+    db.exec("ALTER TABLE game_state ADD COLUMN current_season_start TEXT DEFAULT '2026-08-01'");
+  }
+}
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS trophies (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id       INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  competition   TEXT NOT NULL CHECK (competition IN ('league','cup')),
+  season_label  TEXT NOT NULL,
+  won_date      TEXT NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_trophies_team ON trophies(team_id);
+
+CREATE TABLE IF NOT EXISTS player_awards (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  player_id     INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  award_key     TEXT NOT NULL CHECK (award_key IN ('best_player','top_scorer','best_defender','best_assist','best_goalkeeper')),
+  season_label  TEXT NOT NULL,
+  won_date      TEXT NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_player_awards_player ON player_awards(player_id);
+`);
+
+db.AWARD_LABELS = {
+  best_player: 'Melhor Jogador',
+  top_scorer: 'Melhor Marcador',
+  best_defender: 'Melhor Defesa',
+  best_assist: 'Melhor Assistente',
+  best_goalkeeper: 'Melhor Guarda-Redes',
+};
+db.AWARD_ICONS = {
+  best_player: '👑',
+  top_scorer: '⚽',
+  best_defender: '🛡️',
+  best_assist: '🎯',
+  best_goalkeeper: '🧤',
+};
+
+/* ---------- Especialização do jogador (escolhida no perfil) ----------
+   Goleador -> pesa mais a favor deste jogador quando se escolhe quem marca
+              (ver SCORE_WEIGHT em routes/game.js, routes/competitionStats.js,
+              routes/liveMatch.js).
+   Garçom   -> mesma ideia, mas para assistências (ASSIST_WEIGHT).
+   Patrão   -> a equipa dele sofre ligeiramente menos golos (ver
+              simulateLeagueGoals em routes/league.js e simulateCupGoals em
+              routes/cup.js — só se aplica a jogos simulados automaticamente,
+              não aos que o utilizador assiste ao vivo). */
+const FOCUS_ROLES = ['Goleador', 'Garçom', 'Patrão'];
+db.FOCUS_ROLES = FOCUS_ROLES;
+{
+  const pCols = db.prepare("PRAGMA table_info(players)").all().map((c) => c.name);
+  if (!pCols.includes('focus_role')) db.exec('ALTER TABLE players ADD COLUMN focus_role TEXT');
+}
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS staff (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id           INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  name              TEXT NOT NULL,
+  role              TEXT NOT NULL CHECK (role IN ('Adjunto','Fisioterapeuta','Preparador Físico')),
+  quality_stars     REAL NOT NULL DEFAULT 2.5,
+  nationality_code  TEXT,
+  wage_text         TEXT,
+  hire_fee          REAL NOT NULL DEFAULT 0,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_staff_team ON staff(team_id);
+`);
 
 module.exports = db;

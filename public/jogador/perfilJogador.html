@@ -172,7 +172,23 @@
         <div class="card-title sub">Informação</div>
         <div class="info-row"><span>Altura</span><span contenteditable="true" id="height">181 cm</span></div>
         <div class="info-row"><span>Reputação</span><span contenteditable="true" id="reputation">Continental</span></div>
-        <div class="info-row"><span>Personalidade</span><span contenteditable="true" id="personality">Ambicioso</span></div>
+        <div class="info-row"><span>Personalidade</span>
+          <select id="personality" class="info-row-select">
+            <option value="Muito Fiel">Muito Fiel</option>
+            <option value="Fiel">Fiel</option>
+            <option value="Normal">Normal</option>
+            <option value="Problemático">Problemático</option>
+            <option value="Muito Problemático">Muito Problemático</option>
+          </select>
+        </div>
+        <div class="info-row"><span>Especialização</span>
+          <select id="focusRole" class="info-row-select">
+            <option value="">Nenhuma</option>
+            <option value="Goleador">Goleador</option>
+            <option value="Garçom">Garçom</option>
+            <option value="Patrão">Patrão</option>
+          </select>
+        </div>
         <div class="foot-row">
           <div>
             <span class="foot-label">Pé Esquerdo</span>
@@ -242,7 +258,7 @@
       <table class="stats-table">
         <thead>
           <tr>
-            <th>Competição</th><th>J</th><th>G</th><th>A</th><th>xG</th><th>Pen</th><th>MdP</th><th>Am</th><th>Verm</th><th>Média</th><th></th>
+            <th>Competição</th><th>J</th><th>G</th><th>A</th><th>xG</th><th>Pen</th><th>MdP</th><th>Am</th><th>Verm</th><th>Cortes</th><th>% Passe</th><th>Média</th><th></th>
           </tr>
         </thead>
         <tbody id="seasonStatsBody">
@@ -270,6 +286,14 @@
     </div>
 
   </div>
+
+  <div class="card badges-card" id="badgesCard">
+    <div class="card-title">🏅 Prémios</div>
+    <div id="badgesList" class="badges-list">
+      <p class="placeholder-text">Sem prémios ganhos ainda.</p>
+    </div>
+  </div>
+
   </div>
   <!-- /panel-overview -->
 

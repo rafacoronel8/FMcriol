@@ -14,7 +14,12 @@ const router = express.Router();
 const TEAM_FIELDS = 'id, name, shield_path, reputation_stars, division';
 
 function currentGameDate() {
-  return db.prepare('SELECT current_date FROM game_state WHERE id = 1').get().current_date;
+  /* IMPORTANTE: "current_date" tem de vir qualificado com o nome da tabela.
+     Sem isto, o SQLite interpreta "current_date" como a sua própria palavra-chave
+     incorporada (a data REAL do computador), em vez da coluna da tabela — o que
+     desincronizava a data mínima/aceite para amigáveis, e a lista de "próximos
+     amigáveis", da data real do calendário do jogo. */
+  return db.prepare('SELECT game_state.current_date FROM game_state WHERE id = 1').get().current_date;
 }
 
 function serialize(row) {
@@ -74,6 +79,24 @@ router.post('/', (req, res) => {
       AND (home_team_id = ? OR away_team_id = ? OR home_team_id = ? OR away_team_id = ?)
   `).get(match_date, home.id, home.id, away.id, away.id);
   if (clash) return res.status(409).json({ error: 'Uma das equipas já tem um amigável marcado para esse dia' });
+
+  /* Também não pode marcar-se um amigável num dia em que uma das equipas já
+     tem jornada do Campeonato marcada (ver routes/league.js) — mesmo que
+     essa jornada ainda esteja só "agendada" e não tenha chegado a virar um
+     amigável interno (is_league). */
+  const leagueClash = db.prepare(`
+    SELECT id FROM league_fixtures
+    WHERE match_date = ? AND (home_team_id = ? OR away_team_id = ? OR home_team_id = ? OR away_team_id = ?)
+  `).get(match_date, home.id, home.id, away.id, away.id);
+  if (leagueClash) return res.status(409).json({ error: 'Uma das equipas já tem uma jornada do Campeonato marcada para esse dia' });
+
+  /* Mesma verificação para a Taça São Vicente (ver routes/cup.js). */
+  const cupClash = db.prepare(`
+    SELECT id FROM cup_fixtures
+    WHERE match_date = ? AND is_bye = 0
+      AND (home_team_id = ? OR away_team_id = ? OR home_team_id = ? OR away_team_id = ?)
+  `).get(match_date, home.id, home.id, away.id, away.id);
+  if (cupClash) return res.status(409).json({ error: 'Uma das equipas já tem um jogo da Taça São Vicente marcado para esse dia' });
 
   /* ---------- Decisão do adversário ----------
      Clubes com reputação muito diferente da tua têm menos interesse em

@@ -20,6 +20,7 @@
   </div>
 
   <span class="topbar-date" id="topbarDate">—</span>
+  <button id="topbarAdvanceBtn" class="btn-advance small topbar-advance-btn">Continuar ▸</button>
 
   <div class="search-wrap">
     <input type="search" id="searchInput" class="search-input" placeholder="Pesquisar clube ou jogador…" autocomplete="off">
@@ -35,56 +36,41 @@
   <button class="tab" data-tab="minhaEquipa">Minha Equipa</button>
   <button class="tab" data-tab="tatica">Tática</button>
   <button class="tab" data-tab="calendario">Calendário</button>
+  <button class="tab" data-tab="campeonato">Campeonato</button>
+  <button class="tab" data-tab="taca">Taça São Vicente</button>
 </nav>
 
 <main class="content">
 
   <!-- ===== VISÃO GERAL ===== -->
   <section class="tab-panel" id="panel-visaoGeral">
-    <div class="grid-2col">
-
-      <div class="card">
-        <div class="card-title">Finanças</div>
-        <div class="finance-rows">
-          <div class="finance-row"><span>Saldo do clube</span><b id="fBalance">—</b></div>
-          <div class="finance-row"><span>Orçamento de salários</span><b id="fWage">—</b></div>
-          <div class="finance-row"><span>Orçamento de transferências</span><b id="fTransfer">—</b></div>
-          <div class="finance-row"><span>Situação financeira</span><b id="fTier">—</b></div>
+    <div class="inbox-layout">
+      <div class="inbox-list-col">
+        <div class="inbox-list-header">
+          <span>Caixa de Entrada <span id="inboxCount" class="squad-count-badge">0</span></span>
+          <button id="clearMessagesBtn" class="btn-clear-messages">Limpar</button>
+        </div>
+        <div class="inbox-list" id="messagesList">
+          <p class="placeholder-text">A carregar…</p>
         </div>
       </div>
-
-      <div class="card">
-        <div class="card-title">Detalhes do Clube</div>
-        <div class="finance-rows">
-          <div class="finance-row"><span>Divisão</span><b id="dDivision">—</b></div>
-          <div class="finance-row"><span>Reputação</span><b id="dReputation">—</b></div>
-          <div class="finance-row"><span>Localização</span><b id="dLocation">—</b></div>
-          <div class="finance-row"><span>Estádio</span><b id="dStadium">—</b></div>
+      <div class="inbox-detail-col" id="inboxDetail">
+        <div class="inbox-detail-empty">
+          <span class="inbox-detail-empty-icon">📭</span>
+          <p class="placeholder-text">Seleciona uma mensagem para veres os detalhes.</p>
         </div>
       </div>
-
-      <div class="card span-2">
-        <div class="messages-header">
-          <div class="card-title no-margin">Mensagens</div>
-          <button id="clearMessagesBtn" class="btn-clear-messages">Limpar mensagens</button>
-        </div>
-        <div class="messages-list" id="messagesList">
-          <div class="message-item">
-            <span class="msg-icon">📋</span>
-            <div>
-              <div class="msg-title">Bem-vindo ao FMcriol</div>
-              <div class="msg-body">A tua carreira como treinador começa agora. Usa a pesquisa acima para explorares outros clubes da liga.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
     </div>
   </section>
 
   <!-- ===== OUTRAS TABS (placeholder até às próximas tarefas) ===== -->
   <section class="tab-panel hidden" id="panel-inscritos">
-    <div class="card"><div class="card-title">Inscritos</div><p class="placeholder-text">O plantel de jogadores será apresentado aqui assim que a base de dados de jogadores estiver ligada (Tarefa 4).</p></div>
+    <div class="card">
+      <div class="card-title no-margin">Números da Camisola <span id="inscritosCount" class="squad-count-badge">0</span></div>
+      <p class="market-hint">Muda o número de qualquer jogador — não pode haver dois jogadores com o mesmo número.</p>
+      <div id="inscritosList" class="inscritos-list"></div>
+      <p class="placeholder-text hidden" id="inscritosEmpty">Ainda não tens jogadores no plantel.</p>
+    </div>
   </section>
 
   <section class="tab-panel hidden" id="panel-mercado">
@@ -99,7 +85,68 @@
   </section>
 
   <section class="tab-panel hidden" id="panel-meuClube">
-    <div class="card"><div class="card-title">Meu Clube</div><p class="placeholder-text">Comissão técnica e instalações — funcionalidade planeada para uma tarefa futura.</p></div>
+
+    <div class="club-hero" id="clubHero">
+      <div class="club-hero-shield" id="clubHeroShield">⚽</div>
+      <div class="club-hero-main">
+        <div class="club-hero-name" id="clubHeroName">—</div>
+        <div class="club-hero-meta">
+          <span id="clubHeroDivision">—</span>
+          <span class="club-hero-dot">•</span>
+          <span id="clubHeroStars">—</span>
+        </div>
+      </div>
+      <div class="club-hero-tier" id="clubHeroTier">—</div>
+    </div>
+
+    <div class="grid-2col">
+      <div class="card club-stat-card">
+        <div class="card-title no-margin">💰 Finanças</div>
+        <div class="finance-rows">
+          <div class="finance-row"><span>Saldo do clube</span><b id="fBalance">—</b></div>
+          <div class="finance-row"><span>Orçamento de salários</span><b id="fWage">—</b></div>
+          <div class="finance-row"><span>Orçamento de transferências</span><b id="fTransfer">—</b></div>
+          <div class="finance-row"><span>Situação financeira</span><b id="fTier">—</b></div>
+        </div>
+      </div>
+
+      <div class="card club-stat-card">
+        <div class="card-title no-margin">🏟️ Detalhes do Clube</div>
+        <div class="finance-rows">
+          <div class="finance-row"><span>Divisão</span><b id="dDivision">—</b></div>
+          <div class="finance-row"><span>Reputação</span><b id="dReputation">—</b></div>
+          <div class="finance-row"><span>Localização</span><b id="dLocation">—</b></div>
+          <div class="finance-row"><span>Estádio</span><b id="dStadium">—</b></div>
+        </div>
+      </div>
+
+      <div class="card club-stat-card" id="overviewNextMatchCard">
+        <div class="card-title no-margin">📅 Próximo Compromisso</div>
+        <div id="overviewNextMatch" class="overview-next-match">
+          <p class="placeholder-text">Sem jogos marcados.</p>
+        </div>
+      </div>
+
+      <div class="card club-stat-card" id="overviewLeagueCard">
+        <div class="card-title no-margin">🏆 Posição no Campeonato</div>
+        <div id="overviewLeague" class="finance-rows">
+          <p class="placeholder-text">O Campeonato ainda não começou.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title no-margin">Comissão Técnica</div>
+      <div id="staffHired" class="staff-hired-grid"></div>
+      <p class="placeholder-text hidden" id="staffHiredEmpty">Ainda não contrataste ninguém para a comissão técnica.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-title no-margin">Disponíveis para Contratar <span id="staffAvailableCount" class="squad-count-badge">0</span></div>
+      <div id="staffAvailable" class="staff-available-list"></div>
+      <p class="placeholder-text hidden" id="staffAvailableEmpty">Sem ninguém disponível de momento — cria mais na Gestão de Comissão Técnica.</p>
+    </div>
+
   </section>
 
   <section class="tab-panel hidden" id="panel-minhaEquipa">
@@ -158,6 +205,14 @@
       </div>
     </div>
 
+    <div id="todayMatchBanner" class="card today-match-banner hidden">
+      <div class="today-match-info">
+        <span class="today-match-kicker">JOGO DE HOJE</span>
+        <div class="today-match-teams" id="todayMatchTeams"></div>
+      </div>
+      <button id="watchTodayMatchBtn" class="btn-advance small">▶ Assistir ao Jogo</button>
+    </div>
+
     <div class="grid-2col calendar-grid">
 
       <div class="card">
@@ -180,7 +235,7 @@
           </label>
           <label class="friendly-field">
             <span>Data do jogo</span>
-            <input type="date" id="friendlyDate" required>
+            <input type="date" id="friendlyDate" autocomplete="off" required>
           </label>
           <button type="submit" class="btn-advance small" id="friendlySubmitBtn">Enviar Convite</button>
         </form>
@@ -200,6 +255,102 @@
       </div>
 
     </div>
+  </section>
+
+  <!-- ===== CAMPEONATO ===== -->
+  <section class="tab-panel hidden" id="panel-campeonato">
+
+    <div id="leaguePreseasonNote" class="card league-preseason-note hidden">
+      <div class="card-title no-margin">⏳ O Campeonato ainda não começou</div>
+      <p class="placeholder-text" id="leaguePreseasonText">
+        A pré-época e o mercado de transferências decorrem até 31 de julho de 2026. O Campeonato
+        arranca a 1 de agosto — até lá, usa os Amigáveis para preparar a equipa.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-title no-margin">Tabela Classificativa</div>
+      <div class="league-table-wrap">
+        <table class="league-table">
+          <thead>
+            <tr>
+              <th class="num">#</th>
+              <th>Equipa</th>
+              <th class="num">J</th>
+              <th class="num">V</th>
+              <th class="num">E</th>
+              <th class="num">D</th>
+              <th class="num">GM</th>
+              <th class="num">GS</th>
+              <th class="num">DG</th>
+              <th class="num">Pts</th>
+            </tr>
+          </thead>
+          <tbody id="leagueTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title no-margin">Estatísticas da Época</div>
+      <div id="leagueStatLeaders" class="stat-leaders-grid"></div>
+    </div>
+
+    <div class="grid-2col calendar-grid">
+      <div class="card span-2">
+        <div class="card-title no-margin">Próximas Jornadas <span id="leagueUpcomingCount" class="squad-count-badge">0</span></div>
+        <div class="friendly-list" id="leagueUpcomingList"></div>
+        <p class="placeholder-text hidden" id="leagueUpcomingEmpty">Ainda não há jornadas marcadas para o teu clube.</p>
+      </div>
+
+      <div class="card span-2">
+        <div class="card-title no-margin">Resultados</div>
+        <div class="friendly-list" id="leagueHistoryList"></div>
+        <p class="placeholder-text hidden" id="leagueHistoryEmpty">Ainda não foste a jogo no Campeonato.</p>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ===== TAÇA SÃO VICENTE ===== -->
+  <section class="tab-panel hidden" id="panel-taca">
+
+    <div id="tacaLockedNote" class="card league-preseason-note hidden">
+      <div class="card-title no-margin">🔒 A Taça ainda não começou</div>
+      <p class="placeholder-text">A Taça São Vicente só arranca depois de o Campeonato terminar. Os 15 clubes da 1ª Divisão entram diretamente em mata-mata a uma mão.</p>
+    </div>
+
+    <div id="tacaChampionBanner" class="card taca-champion-banner hidden">
+      <div class="taca-champion-trophy">🏆</div>
+      <div>
+        <div class="taca-champion-kicker">CAMPEÃO DA TAÇA SÃO VICENTE</div>
+        <div class="taca-champion-name" id="tacaChampionName">—</div>
+      </div>
+    </div>
+
+    <div id="tacaDrawCard" class="card hidden">
+      <div class="card-title no-margin" id="tacaDrawTitle">Sorteio</div>
+      <p class="placeholder-text" id="tacaDrawHint">Pronto para sortear a próxima ronda.</p>
+      <button id="tacaDrawBtn" class="btn-advance small">🎱 Realizar Sorteio</button>
+
+      <div id="tacaDrum" class="taca-drum hidden">
+        <div class="taca-drum-balls" id="tacaDrumBalls"><!-- gerado via JS --></div>
+      </div>
+      <div id="tacaReveal" class="taca-reveal"><!-- gerado via JS --></div>
+    </div>
+
+    <div id="tacaProgressCard" class="card hidden">
+      <div class="card-title no-margin" id="tacaProgressTitle">Ronda a decorrer</div>
+      <p class="placeholder-text">Avança o calendário para os jogos desta ronda se realizarem.</p>
+    </div>
+
+    <div class="card" id="tacaStatsCard">
+      <div class="card-title no-margin">Estatísticas da Taça</div>
+      <div id="tacaStatLeaders" class="stat-leaders-grid"></div>
+    </div>
+
+    <div id="tacaBracketWrap"><!-- gerado via JS: um .card por ronda --></div>
+
   </section>
 
 </main>
@@ -222,6 +373,89 @@
   </div>
 </div>
 
+<div id="liveMatchOverlay" class="news-modal-overlay hidden">
+  <div class="news-modal live-match-modal">
+    <button class="news-modal-close" id="liveMatchClose" aria-label="Fechar">×</button>
+
+    <div class="live-match-topline">
+      <span class="live-badge" id="liveBadge"><span class="live-badge-dot"></span>AO VIVO</span>
+      <span class="live-match-halfline" id="liveHalfLine"></span>
+    </div>
+
+    <div class="live-match-header">
+      <div class="live-match-team" id="liveHomeTeamWrap">
+        <div class="live-match-shield" id="liveHomeShield"></div>
+        <div class="live-match-team-name" id="liveHomeTeam"></div>
+      </div>
+      <div class="live-match-score">
+        <div class="live-match-score-numbers" id="liveScoreNumbers">0 - 0</div>
+        <div class="live-match-minute" id="liveMinute">0'</div>
+      </div>
+      <div class="live-match-team" id="liveAwayTeamWrap">
+        <div class="live-match-shield" id="liveAwayShield"></div>
+        <div class="live-match-team-name" id="liveAwayTeam"></div>
+      </div>
+    </div>
+
+    <div class="live-progress-track">
+      <div class="live-progress-fill" id="liveProgressFill"></div>
+      <div class="live-progress-half"></div>
+    </div>
+
+    <div class="live-match-controls" id="liveControlsRow">
+      <button id="livePlayBtn" class="btn-advance small">▶ Avançar 5'</button>
+      <button id="liveAutoBtn" class="btn-advance small live-secondary">⏵ Reprodução Automática</button>
+      <span id="liveStatusHint" class="market-hint"></span>
+    </div>
+
+    <div class="live-match-arena">
+
+      <div class="live-pitch-col">
+        <div class="live-pitch-board" id="livePitchBoard">
+          <div class="live-pitch-box live-pitch-box-top"></div>
+          <div class="live-pitch-box live-pitch-box-bottom"></div>
+          <div class="live-pitch-halfway"></div>
+          <div class="live-pitch-center-circle"></div>
+          <div class="live-pitch-team-label live-pitch-team-label-top" id="livePitchAwayLabel"></div>
+          <div class="live-pitch-team-label live-pitch-team-label-bottom" id="livePitchHomeLabel"></div>
+          <div class="live-pitch-tokens" id="livePitchTokens"><!-- gerado via JS --></div>
+        </div>
+        <p class="live-pitch-hint" id="livePitchHint">O jogo simula-se sozinho, minuto a minuto. A equipa a roxo és tu — clica num jogador em campo para o substituir.</p>
+      </div>
+
+      <div class="live-side-col">
+        <div class="live-panel live-feed-panel">
+          <div class="card-title no-margin">Comentário</div>
+          <div id="liveFeed" class="live-feed"></div>
+        </div>
+
+        <div class="live-panel" id="liveSubPanel">
+          <div class="card-title no-margin">Substituições <span id="liveSubsRemaining" class="squad-count-badge">5</span></div>
+          <p class="live-sub-hint" id="liveSubHint">Clica num jogador em campo, depois num do banco.</p>
+          <div class="live-bench-strip" id="liveBenchStrip"><!-- gerado via JS --></div>
+          <p id="liveSubResult" class="activity-result hidden"></p>
+        </div>
+
+        <div class="live-panel" id="liveTacticPanel">
+          <div class="card-title no-margin">Mudança Tática</div>
+          <div class="formation-picker" id="liveFormationPicker">
+            <button type="button" class="formation-btn" data-formation="4-3-3">4-3-3</button>
+            <button type="button" class="formation-btn" data-formation="4-4-2">4-4-2</button>
+            <button type="button" class="formation-btn" data-formation="4-2-3-1">4-2-3-1</button>
+            <button type="button" class="formation-btn" data-formation="3-4-3">3-4-3</button>
+          </div>
+          <p id="liveTacticResult" class="activity-result hidden"></p>
+        </div>
+
+        <div class="live-panel live-summary-panel hidden" id="liveSummaryPanel">
+          <div class="card-title no-margin">Resultado Final</div>
+          <div id="liveSummaryBody" class="live-summary-body"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="newsModalOverlay" class="news-modal-overlay hidden">
   <div class="news-modal">
     <button class="news-modal-close" id="newsModalClose" aria-label="Fechar">×</button>
@@ -230,6 +464,7 @@
     <div class="news-modal-date" id="newsModalDate"></div>
     <div class="news-modal-teams" id="newsModalTeams"></div>
     <p class="news-modal-body" id="newsModalBody"></p>
+    <div class="news-modal-amount hidden" id="newsModalAmount"></div>
   </div>
 </div>
 

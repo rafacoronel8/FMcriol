@@ -43,6 +43,23 @@ router.put('/:teamId', (req, res) => {
     return res.status(400).json({ error: 'No máximo 8 suplentes' });
   }
 
+  /* Jogadores afastados temporariamente (ver routes/morale.js) não podem
+     ser escalados para o onze nem para os suplentes enquanto durar o
+     afastamento. */
+  const pickedIds = [...lineup, ...bench].map((entry) => (entry && entry.player_id) || entry).filter(Boolean);
+  if (pickedIds.length) {
+    const state = db.prepare('SELECT current_date FROM game_state WHERE id = 1').get();
+    const placeholders = pickedIds.map(() => '?').join(',');
+    const standDown = db.prepare(`
+      SELECT name FROM players WHERE id IN (${placeholders}) AND stood_down_until IS NOT NULL AND stood_down_until > ?
+    `).all(...pickedIds, state.current_date);
+    if (standDown.length) {
+      return res.status(400).json({
+        error: `${standDown.map((p) => p.name).join(', ')} está${standDown.length === 1 ? '' : 'ão'} afastado${standDown.length === 1 ? '' : 's'} do plantel e não pode${standDown.length === 1 ? '' : 'm'} ser escalado${standDown.length === 1 ? '' : 's'}.`,
+      });
+    }
+  }
+
   db.prepare(`
     INSERT INTO tactics (team_id, formation, lineup_json, bench_json, updated_at)
     VALUES (@team_id, @formation, @lineup_json, @bench_json, datetime('now'))

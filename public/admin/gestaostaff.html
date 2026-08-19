@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gestão de Comissão Técnica — FMcriol</title>
+<link rel="stylesheet" href="gestaoStaff.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a href="/index.html" class="brand">FM<span>criol</span></a>
+  <div>
+    <h1>Gestão de Comissão Técnica</h1>
+    <p class="subtitle">Cria adjuntos, fisioterapeutas e preparadores físicos · com ou sem clube atribuído</p>
+  </div>
+  <span id="apiStatus" class="status-pill status-checking">a verificar servidor…</span>
+</header>
+
+<main class="layout">
+
+  <!-- ===== FORMULÁRIO: NOVO MEMBRO ===== -->
+  <section class="panel form-panel">
+    <h2>Criar membro</h2>
+    <form id="staffForm">
+      <label class="field">
+        <span>Nome completo</span>
+        <input type="text" id="f_name" placeholder="ex: Manuel Furtado" required>
+      </label>
+
+      <label class="field">
+        <span>Cargo</span>
+        <select id="f_role" required>
+          <option value="Adjunto">Adjunto</option>
+          <option value="Fisioterapeuta">Fisioterapeuta</option>
+          <option value="Preparador Físico">Preparador Físico</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Equipa <em>(opcional — deixa em branco para ficar disponível para contratação)</em></span>
+        <select id="f_team">
+          <option value="">Sem clube (disponível)</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Nível (estrelas, 0.5–5)</span>
+        <input type="number" id="f_quality" min="0.5" max="5" step="0.5" value="2.5" required>
+      </label>
+
+      <label class="field">
+        <span>Nacionalidade (código)</span>
+        <input type="text" id="f_nationality" placeholder="ex: CPV" maxlength="3" value="CPV">
+      </label>
+
+      <label class="field">
+        <span>Salário (texto livre) <em>(opcional)</em></span>
+        <input type="text" id="f_wage" placeholder="ex: £800/semana">
+      </label>
+
+      <label class="field">
+        <span>Custo de contratação (£) <em>(cobrado uma vez, ao ser contratado)</em></span>
+        <input type="number" id="f_fee" min="0" step="1000" value="0">
+      </label>
+
+      <button type="submit" class="btn-primary">+ Criar membro</button>
+      <p id="formMsg" class="form-msg"></p>
+    </form>
+  </section>
+
+  <!-- ===== LISTA ===== -->
+  <section class="panel list-panel">
+    <div class="list-header">
+      <h2>Comissão Técnica <span id="staffCount" class="count-badge">0</span></h2>
+      <select id="filterTeam" class="team-select">
+        <option value="">Todas as equipas</option>
+        <option value="FREE">Sem clube (disponível)</option>
+      </select>
+    </div>
+
+    <div id="staffList" class="staff-list"></div>
+    <p id="emptyState" class="empty-state hidden">Nenhum membro encontrado.</p>
+  </section>
+
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="gestaoStaff.js"></script>
+</body>
+</html>

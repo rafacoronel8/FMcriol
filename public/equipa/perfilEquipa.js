@@ -51,6 +51,23 @@ function fill(team){
   el('stadium').textContent = team.stadium_name || 'Não definido';
   el('founded').textContent = team.founded_year || 'Não definido';
 
+  const trophies = team.trophies || [];
+  if(trophies.length){
+    el('trophyCard').classList.remove('hidden');
+    el('trophyCount').textContent = trophies.length;
+    el('trophyCabinet').innerHTML = trophies.map((t) => {
+      const isLeague = t.competition === 'league';
+      return `
+        <div class="trophy-item">
+          <span class="trophy-icon">${isLeague ? '🏆' : '🎖️'}</span>
+          <div class="trophy-info">
+            <span class="trophy-label">${isLeague ? 'Campeão do Campeonato' : 'Campeão da Taça São Vicente'}</span>
+            <span class="trophy-season">Época ${t.season_label}</span>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
   const players = team.players || [];
   el('playerCount').textContent = players.length;
 
@@ -62,7 +79,12 @@ function fill(team){
       const row = document.createElement('div');
       row.className = 'player-row';
       const avatar = p.photo_path ? `<img src="${p.photo_path}" alt="">` : '🧑';
-      row.innerHTML = `<div class="player-avatar">${avatar}</div><div class="player-name">${p.name}</div>`;
+      row.innerHTML = `
+        <div class="player-avatar">${avatar}</div>
+        <div class="player-name-wrap">
+          <div class="player-name">${p.name}</div>
+          <div class="player-position">${p.position_tag || 'Posição não definida'}</div>
+        </div>`;
       row.addEventListener('click', () => window.location.href = `/jogador/perfilJogador.html?id=${p.id}`);
       list.appendChild(row);
     });

@@ -123,26 +123,80 @@ function bumpAttributes(jsonText, names, bump) {
   return JSON.stringify(updated);
 }
 
+/* Só é possível fazer uma atividade a cada 7 dias de jogo (em vez de uma
+   por dia) — ver GET/POST abaixo. */
+const TRAINING_INTERVAL_DAYS = 7;
+
 function currentGameDate() {
-  return db.prepare('SELECT current_date FROM game_state WHERE id = 1').get().current_date;
+  /* IMPORTANTE: "current_date" tem de vir qualificado com o nome da tabela.
+     Sem isto, o SQLite interpreta "current_date" como a sua própria palavra-chave
+     incorporada (a data REAL do computador), em vez da coluna da tabela — o que
+     fazia o treino comparar sempre com a data real do sistema em vez da data do
+     calendário do jogo, ficando bloqueado até o dia real do computador mudar. */
+  return db.prepare('SELECT game_state.current_date FROM game_state WHERE id = 1').get().current_date;
+}
+
+/* Diferença em dias entre duas datas 'YYYY-MM-DD', sempre em UTC — nunca
+   passa por fuso horário local, para não sofrer do mesmo bug de datas que
+   já afetou o calendário e os amigáveis noutros ficheiros. */
+function daysBetweenIsoDates(fromStr, toStr) {
+  const [fy, fm, fd] = fromStr.split('-').map(Number);
+  const [ty, tm, td] = toStr.split('-').map(Number);
+  const fromUtc = Date.UTC(fy, fm - 1, fd);
+  const toUtc = Date.UTC(ty, tm - 1, td);
+  return Math.round((toUtc - fromUtc) / 86400000);
+}
+function addDaysToIsoDate(isoDateStr, days) {
+  const [y, m, d] = isoDateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d) + days * 86400000);
+  const yyyy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function publicCatalog() {
   return ACTIVITIES.map(({ key, name, icon, description }) => ({ key, name, icon, description }));
 }
 
-/* ---------- GET /api/activities/:teamId — catálogo + atividade feita hoje ---------- */
+/* Devolve o registo da última atividade feita por esta equipa (ou null se
+   nunca treinou), e se já pode voltar a treinar hoje. */
+function getTrainingLock(teamId, today) {
+  const last = db.prepare('SELECT * FROM team_activity_log WHERE team_id = ? ORDER BY event_date DESC LIMIT 1').get(teamId);
+  if (!last) return { active: false, last: null };
+
+  const daysSince = daysBetweenIsoDates(last.event_date, today);
+  if (daysSince >= TRAINING_INTERVAL_DAYS) return { active: false, last };
+
+  return {
+    active: true,
+    last,
+    available_on: addDaysToIsoDate(last.event_date, TRAINING_INTERVAL_DAYS),
+    days_remaining: TRAINING_INTERVAL_DAYS - daysSince,
+  };
+}
+
+/* ---------- GET /api/activities/:teamId — catálogo + estado do treino ---------- */
 router.get('/:teamId', (req, res) => {
   const team = db.prepare('SELECT id FROM teams WHERE id = ?').get(req.params.teamId);
   if (!team) return res.status(404).json({ error: 'Equipa não encontrada' });
 
   const today = currentGameDate();
-  const done = db.prepare('SELECT * FROM team_activity_log WHERE team_id = ? AND event_date = ?').get(req.params.teamId, today);
+  const lock = getTrainingLock(req.params.teamId, today);
 
   res.json({
     current_date: today,
     activities: publicCatalog(),
-    done_today: done ? { activity_key: done.activity_key, summary: done.summary } : null,
+    training_lock: lock.active ? {
+      activity_key: lock.last.activity_key,
+      summary: lock.last.summary,
+      done_on: lock.last.event_date,
+      available_on: lock.available_on,
+      days_remaining: lock.days_remaining,
+    } : null,
+    // Mantido por compatibilidade com versões antigas do frontend — hoje em
+    // dia só é "true" se a última atividade tiver sido mesmo hoje.
+    done_today: (lock.active && lock.last.event_date === today) ? { activity_key: lock.last.activity_key, summary: lock.last.summary } : null,
   });
 });
 
@@ -156,10 +210,25 @@ router.post('/:teamId', (req, res) => {
   if (!activity) return res.status(400).json({ error: 'Atividade inválida' });
 
   const today = currentGameDate();
-  const already = db.prepare('SELECT id FROM team_activity_log WHERE team_id = ? AND event_date = ?').get(teamId, today);
-  if (already) return res.status(409).json({ error: 'Já realizaste uma atividade com a equipa hoje. Avança o dia para escolheres outra.' });
+  const lock = getTrainingLock(teamId, today);
+  if (lock.active) {
+    return res.status(409).json({
+      error: `Só podes voltar a treinar a partir de ${lock.available_on.split('-').reverse().join('/')} (faltam ${lock.days_remaining} dia${lock.days_remaining === 1 ? '' : 's'}). Uma atividade é permitida a cada ${TRAINING_INTERVAL_DAYS} dias.`,
+    });
+  }
 
   const players = db.prepare('SELECT * FROM players WHERE team_id = ?').all(teamId);
+
+  /* ---------- Bónus da comissão técnica ----------
+     Preparador Físico torna o treino mais produtivo (sobe mais o rating de
+     treino e os atributos visados); Fisioterapeuta ajuda o plantel a
+     recuperar mais depressa e a cansar-se menos. Sem ninguém contratado
+     nestes cargos, o treino funciona exatamente como antes. */
+  const fitnessCoach = db.prepare("SELECT * FROM staff WHERE team_id = ? AND role = 'Preparador Físico'").get(teamId);
+  const physio = db.prepare("SELECT * FROM staff WHERE team_id = ? AND role = 'Fisioterapeuta'").get(teamId);
+  const trainingMultiplier = fitnessCoach ? 1 + (fitnessCoach.quality_stars * 0.08) : 1;
+  const physioRecoverBonus = physio ? physio.quality_stars * 0.03 : 0;
+  const physioFatigueReduction = physio ? physio.quality_stars * 0.02 : 0;
 
   let recovered = 0;
   let tired = 0;
@@ -178,7 +247,7 @@ router.post('/:teamId', (req, res) => {
 
   const apply = db.transaction(() => {
     players.forEach((p) => {
-      const nextRating = Math.max(0, Math.min(10, Number((Number(p.training_rating || 0) + activity.trainingBump).toFixed(1))));
+      const nextRating = Math.max(0, Math.min(10, Number((Number(p.training_rating || 0) + activity.trainingBump * trainingMultiplier).toFixed(1))));
 
       /* ---------- Sobe os atributos reais visados por este treino ---------- */
       const nextJson = {};
@@ -186,7 +255,7 @@ router.post('/:teamId', (req, res) => {
       ATTR_JSON_FIELDS.forEach((field) => {
         const names = activity.attrTargets[field];
         const before = p[field];
-        const after = bumpAttributes(before, names, activity.attrBump);
+        const after = bumpAttributes(before, names, activity.attrBump * trainingMultiplier);
         nextJson[field] = after;
         if (after !== before) playerImproved = true;
       });
@@ -198,11 +267,13 @@ router.post('/:teamId', (req, res) => {
          contrapeso. Só recuperação/folga trazem o plantel de volta ao auge. */
       let fitnessStatus = p.fitness_status;
       let fitnessNote = p.fitness_note;
-      if ((fitnessStatus === 'Cansado' || fitnessStatus === 'Em Recuperação') && Math.random() < activity.recoverChance) {
+      const effectiveRecoverChance = Math.min(0.95, activity.recoverChance + physioRecoverBonus);
+      const effectiveFatigueChance = Math.max(0.02, activity.fatigueChance - physioFatigueReduction);
+      if ((fitnessStatus === 'Cansado' || fitnessStatus === 'Em Recuperação') && Math.random() < effectiveRecoverChance) {
         fitnessStatus = 'No Auge';
         fitnessNote = 'Em ótima condição';
         recovered += 1;
-      } else if (fitnessStatus === 'No Auge' && Math.random() < activity.fatigueChance) {
+      } else if (fitnessStatus === 'No Auge' && Math.random() < effectiveFatigueChance) {
         fitnessStatus = 'Cansado';
         fitnessNote = 'Precisa de descansar em breve';
         tired += 1;

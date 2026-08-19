@@ -48,7 +48,11 @@ function parseMoneyRange(text) {
    data real do computador — senão o calendário do jogo deixa de bater certo
    com os contratos assinados (ver bug do calendário). */
 function computeContractEndText(years = 3) {
-  const state = db.prepare('SELECT current_date FROM game_state WHERE id = 1').get();
+  /* IMPORTANTE: "current_date" tem de vir qualificado com o nome da tabela.
+     Sem isto, o SQLite interpreta "current_date" como a sua própria palavra-chave
+     incorporada (a data REAL do computador) em vez da coluna — anulando a
+     proteção acima. */
+  const state = db.prepare('SELECT game_state.current_date FROM game_state WHERE id = 1').get();
   const end = new Date(`${state.current_date}T00:00:00`);
   end.setFullYear(end.getFullYear() + years);
   return `${end.getDate()}/${end.getMonth() + 1}/${end.getFullYear()}`;
@@ -476,12 +480,20 @@ router.get('/messages', (req, res) => {
       relTeam.shield_path AS related_team_shield,
       t.status        AS offer_status,
       t.offer_amount  AS offer_amount,
-      t.buyer_team_id AS offer_buyer_team_id
+      t.buyer_team_id AS offer_buyer_team_id,
+      pi.kind         AS incident_kind,
+      pi.status       AS incident_status,
+      pi.resolution   AS incident_resolution,
+      mq.options_json AS question_options_json,
+      mq.status       AS question_status,
+      mq.chosen_key   AS question_chosen_key
     FROM messages m
     LEFT JOIN players p ON p.id = m.player_id
     LEFT JOIN teams myTeam ON myTeam.id = m.team_id
     LEFT JOIN teams relTeam ON relTeam.id = m.related_team_id
     LEFT JOIN transfer_offers t ON t.id = m.transfer_offer_id
+    LEFT JOIN player_incidents pi ON pi.id = m.incident_id
+    LEFT JOIN manager_questions mq ON mq.id = m.question_id
     WHERE m.team_id = ?
     ORDER BY m.created_at DESC, m.id DESC
   `).all(team_id);
@@ -504,6 +516,16 @@ router.delete('/messages', (req, res) => {
         SELECT m.id FROM messages m
         JOIN transfer_offers t ON t.id = m.transfer_offer_id
         WHERE m.team_id = @team_id AND m.transfer_offer_id IS NOT NULL AND t.status = 'pending'
+      )
+      AND id NOT IN (
+        SELECT m.id FROM messages m
+        JOIN player_incidents pi ON pi.id = m.incident_id
+        WHERE m.team_id = @team_id AND m.incident_id IS NOT NULL AND pi.status = 'pending'
+      )
+      AND id NOT IN (
+        SELECT m.id FROM messages m
+        JOIN manager_questions mq ON mq.id = m.question_id
+        WHERE m.team_id = @team_id AND m.question_id IS NOT NULL AND mq.status = 'pending'
       )
   `).run({ team_id });
 

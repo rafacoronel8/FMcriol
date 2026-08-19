@@ -423,6 +423,8 @@ function renderSeasonStats(){
       <td contenteditable="${isAdmin}" data-key="mdp">${r.mdp ?? 0}</td>
       <td contenteditable="${isAdmin}" data-key="am">${r.am ?? 0}</td>
       <td contenteditable="${isAdmin}" data-key="verm">${r.verm ?? 0}</td>
+      <td contenteditable="${isAdmin}" data-key="tk">${r.tk ?? 0}</td>
+      <td contenteditable="${isAdmin}" data-key="pp">${r.pp ?? '-'}</td>
       <td contenteditable="${isAdmin}" data-key="media" class="rating">${r.media ?? '-'}</td>
       <td>${isAdmin ? '<button class="row-remove" title="Remover linha">×</button>' : ''}</td>
     `;
@@ -446,7 +448,7 @@ function saveSeasonStats(){
     tr.querySelectorAll('[data-key]').forEach((cell) => {
       const key = cell.dataset.key;
       const raw = cell.textContent.trim();
-      out[key] = key === 'competition' || key === 'media' ? raw : (parseFloat(raw) || 0);
+      out[key] = key === 'competition' || key === 'media' || key === 'pp' ? raw : (parseFloat(raw) || 0);
     });
     return out;
   });
@@ -459,7 +461,7 @@ el('addStatRowBtn').addEventListener('click', () => {
   if(!isAdmin) return;
   if(!player) player = { season_stats_json: [] };
   if(!player.season_stats_json) player.season_stats_json = [];
-  player.season_stats_json.push({ competition: 'Nova Competição', j:0, g:0, a:0, xg:0, pen:0, mdp:0, am:0, verm:0, media:'-' });
+  player.season_stats_json.push({ competition: 'Nova Competição', j:0, g:0, a:0, xg:0, pen:0, mdp:0, am:0, verm:0, tk:0, pp:'-', media:'-' });
   renderSeasonStats();
   saveSeasonStats();
 });
@@ -519,7 +521,6 @@ const SIMPLE_FIELD_MAP = {
   posCaption: 'position_caption',
   height: 'height_cm',
   reputation: 'reputation_text',
-  personality: 'personality',
   leftFoot: 'left_foot',
   rightFoot: 'right_foot',
   traitsList: 'traits',
@@ -540,15 +541,73 @@ const SIMPLE_FIELD_MAP = {
 };
 const NUMERIC_FIELDS = new Set(['caps', 'international_goals', 'height_cm', 'positive_count', 'negative_count', 'training_rating', 'career_clubs', 'career_apps', 'career_goals']);
 
+/* Alguns campos aparecem duas vezes na página — ex: Valor de Mercado e
+   Salário têm uma versão resumida no topo ("pill") e outra na secção de
+   contrato ("wage") — e os dois elementos partilham a MESMA coluna na BD.
+   Isto causava o bug do "às vezes o VM e o Salário não ficam guardados":
+   ao editar só um dos dois, o outro continuava a mostrar o texto antigo; e
+   se esse outro alguma vez perdesse o foco mais tarde (mesmo sem o
+   utilizador o editar — basta ter clicado lá dentro por engano), o seu
+   "blur" disparava na mesma e reenviava o valor ANTIGO, apagando a edição
+   recente. A correção: manter todos os elementos com a mesma coluna sempre
+   sincronizados entre si, e só gravar quando o texto realmente mudar. */
+const lastSavedValue = {}; // coluna -> último valor gravado (evita reenvios de texto por gravar)
+const fieldsByColumn = {}; // coluna -> [ids de todos os elementos que a mostram]
+Object.entries(SIMPLE_FIELD_MAP).forEach(([elementId, column]) => {
+  (fieldsByColumn[column] = fieldsByColumn[column] || []).push(elementId);
+});
+
 Object.entries(SIMPLE_FIELD_MAP).forEach(([elementId, column]) => {
   const node = el(elementId);
   if(!node) return;
   node.addEventListener('blur', () => {
-    let value = node.textContent.trim();
-    if(NUMERIC_FIELDS.has(column)) value = parseFloat(value) || 0;
+    const raw = node.textContent.trim();
+    const value = NUMERIC_FIELDS.has(column) ? (parseFloat(raw) || 0) : raw;
+
+    // Nada mudou desde a última gravação — não reenvia. Isto é o que impede
+    // um campo espelhado e não editado de apagar, por acidente, uma edição
+    // feita entretanto no outro campo com a mesma coluna.
+    if(lastSavedValue[column] !== undefined && String(lastSavedValue[column]) === String(value)) return;
+    lastSavedValue[column] = value;
+
+    // Espelha o novo valor em todos os outros elementos da mesma coluna,
+    // para nunca ficarem desatualizados um em relação ao outro.
+    (fieldsByColumn[column] || []).forEach((otherId) => {
+      if(otherId === elementId) return;
+      const other = el(otherId);
+      if(other && other.textContent.trim() !== raw) other.textContent = raw;
+    });
+
     queueSave({ [column]: value });
   });
 });
+
+/* Personalidade — passou a um menu fixo de 5 níveis (Muito Fiel … Muito
+   Problemático), em vez de texto livre, para os eventos de balneário
+   (brigas, birras, boost de moral — ver routes/morale.js) poderem confiar
+   no valor. Por isso tem o seu próprio listener em vez de entrar no
+   SIMPLE_FIELD_MAP genérico acima (feito para campos de texto). */
+{
+  const personalitySelect = el('personality');
+  if(personalitySelect){
+    personalitySelect.addEventListener('change', () => {
+      queueSave({ personality: personalitySelect.value });
+    });
+  }
+}
+
+/* Especialização (Goleador/Garçom/Patrão) — pesa a favor do jogador na
+   hora de escolher quem marca/assiste/segura a baliza nos jogos simulados
+   automaticamente (ver routes/game.js, routes/competitionStats.js,
+   routes/league.js, routes/cup.js). */
+{
+  const focusSelect = el('focusRole');
+  if(focusSelect){
+    focusSelect.addEventListener('change', () => {
+      queueSave({ focus_role: focusSelect.value || null });
+    });
+  }
+}
 
 /* Nível atual / potencial (estrelas editáveis por clique) */
 function wireAbilityStars(elementId, column){
@@ -675,7 +734,8 @@ function fillFromPlayer(p){
 
   el('height').textContent = p.height_cm ? `${p.height_cm} cm` : '';
   el('reputation').textContent = p.reputation_text || '';
-  el('personality').textContent = p.personality || '';
+  el('personality').value = p.personality || 'Normal';
+  if(el('focusRole')) el('focusRole').value = p.focus_role || '';
   el('leftFoot').textContent = p.left_foot || '';
   el('rightFoot').textContent = p.right_foot || '';
   el('traitsList').textContent = p.traits || '';
@@ -698,8 +758,49 @@ function fillFromPlayer(p){
   el('careerApps').textContent = p.career_apps ?? 0;
   el('careerGoals').textContent = p.career_goals ?? 0;
 
+  renderBadges(p.awards || []);
+
   setupNegotiateTab(p);
   setupOriginClubField(p);
+}
+
+/* ---------- Prémios / badges ---------- */
+const AWARD_LABELS = {
+  best_player: 'Melhor Jogador',
+  top_scorer: 'Melhor Marcador',
+  best_defender: 'Melhor Defesa',
+  best_assist: 'Melhor Assistente',
+  best_goalkeeper: 'Melhor Guarda-Redes',
+};
+const AWARD_ICONS = {
+  best_player: '👑',
+  top_scorer: '⚽',
+  best_defender: '🛡️',
+  best_assist: '🎯',
+  best_goalkeeper: '🧤',
+};
+
+function fmtAwardDate(isoDate){
+  if(!isoDate) return '';
+  const [y, m, d] = isoDate.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+function renderBadges(awards){
+  const box = el('badgesList');
+  if(!box) return;
+  if(!awards.length){
+    box.innerHTML = '<p class="placeholder-text">Sem prémios ganhos ainda.</p>';
+    return;
+  }
+  box.innerHTML = awards.map((a) => `
+    <div class="badge-item">
+      <div class="badge-icon">${AWARD_ICONS[a.award_key] || '🏅'}</div>
+      <div class="badge-info">
+        <span class="badge-label">${AWARD_LABELS[a.award_key] || a.award_key}</span>
+        <span class="badge-meta">${a.season_label} · ${fmtAwardDate(a.won_date)}</span>
+      </div>
+    </div>`).join('');
 }
 
 /* ---------- 10a-bis. Clube de Origem (admin) ----------

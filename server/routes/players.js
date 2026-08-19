@@ -29,7 +29,7 @@ const DEFAULT_PHYSICAL = [
   ['Condição Natural', 10], ['Velocidade', 10], ['Resistência', 10], ['Força', 10],
 ];
 const DEFAULT_SEASON_STATS = [
-  { competition: 'Geral (Clube)', j: 0, g: 0, a: 0, xg: 0, pen: 0, mdp: 0, am: 0, verm: 0, media: '-' },
+  { competition: 'Geral (Clube)', j: 0, g: 0, a: 0, xg: 0, pen: 0, mdp: 0, am: 0, verm: 0, tk: 0, pp: '-', media: '-' },
 ];
 
 /* ---------- Guarda-Redes: conjunto de atributos diferente do jogador de campo ---------- */
@@ -95,7 +95,8 @@ router.get('/', (req, res) => {
   let sql = `
     SELECT p.id, p.name, p.photo_path, p.jersey_number, p.position_tag, p.position_code, p.team_id,
            p.club_status, p.fitness_status, p.fitness_note, p.current_ability_stars, p.form_text,
-           p.market_value_text, p.wage_text,
+           p.market_value_text, p.wage_text, p.personality, p.stood_down_until, p.stood_down_reason,
+           p.focus_role,
            t.name AS team_name
     FROM players p
     LEFT JOIN teams t ON t.id = p.team_id
@@ -127,8 +128,9 @@ router.get('/:id', (req, res) => {
   const originalTeam = player.original_team_id
     ? db.prepare('SELECT id, name, shield_path FROM teams WHERE id = ?').get(player.original_team_id)
     : null;
+  const awards = db.prepare('SELECT * FROM player_awards WHERE player_id = ? ORDER BY won_date DESC').all(req.params.id);
 
-  res.json({ ...deserialize(player), team, original_team: originalTeam });
+  res.json({ ...deserialize(player), team, original_team: originalTeam, awards });
 });
 
 /* ---------- POST /api/players — criar jogador novo (com defaults) ---------- */
@@ -151,10 +153,10 @@ router.post('/', (req, res) => {
   const stmt = db.prepare(`
     INSERT INTO players (
       team_id, original_team_id, name, jersey_number, position_tag, position_code, nationality_code, birth_date,
-      club_status, wage_text, technical_json, set_pieces_json, mental_json, physical_json, goalkeeping_json, season_stats_json
+      club_status, wage_text, personality, technical_json, set_pieces_json, mental_json, physical_json, goalkeeping_json, season_stats_json
     ) VALUES (
       @team_id, @original_team_id, @name, @jersey_number, @position_tag, @position_code, @nationality_code, @birth_date,
-      @club_status, @wage_text, @technical_json, @set_pieces_json, @mental_json, @physical_json, @goalkeeping_json, @season_stats_json
+      @club_status, @wage_text, @personality, @technical_json, @set_pieces_json, @mental_json, @physical_json, @goalkeeping_json, @season_stats_json
     )
   `);
 
@@ -164,6 +166,7 @@ router.post('/', (req, res) => {
     name: name.trim(), jersey_number, position_tag, position_code, nationality_code, birth_date,
     club_status: team ? 'Titular Regular' : 'Jogador Livre',
     wage_text: team ? '' : '',
+    personality: 'Normal',
     technical_json: JSON.stringify(isGK ? DEFAULT_TECHNICAL_GK : DEFAULT_TECHNICAL),
     set_pieces_json: JSON.stringify(isGK ? [] : DEFAULT_SET_PIECES),
     mental_json: JSON.stringify(DEFAULT_MENTAL),
@@ -173,7 +176,8 @@ router.post('/', (req, res) => {
   });
 
   const created = db.prepare('SELECT * FROM players WHERE id = ?').get(info.lastInsertRowid);
-  res.status(201).json(deserialize(created));
+  db.captureBaseline(created.id);
+  res.status(201).json(deserialize(db.prepare('SELECT * FROM players WHERE id = ?').get(created.id)));
 });
 
 /* ---------- PUT /api/players/:id — guardar qualquer campo do perfil (autosave) ---------- */
@@ -186,7 +190,7 @@ const UPDATABLE_FIELDS = [
   'height_cm', 'reputation_text', 'personality', 'left_foot', 'right_foot', 'traits', 'gk_rating',
   'happiness', 'positive_count', 'negative_count', 'fitness_status', 'fitness_note', 'form_text',
   'discipline_text', 'discipline_note', 'training_status', 'training_rating', 'season_stats_json',
-  'career_clubs', 'career_apps', 'career_goals',
+  'career_clubs', 'career_apps', 'career_goals', 'focus_role',
 ];
 
 router.put('/:id', (req, res) => {
@@ -198,6 +202,11 @@ router.put('/:id', (req, res) => {
     if (Object.prototype.hasOwnProperty.call(req.body, field)) {
       let val = req.body[field];
       if (JSON_FIELDS.includes(field) && typeof val !== 'string') val = JSON.stringify(val);
+      // A personalidade só pode ser um dos 5 níveis reconhecidos (ver
+      // routes/morale.js) — qualquer outra coisa cai para "Normal", em vez
+      // de deixar entrar texto livre que os eventos de balneário não saibam interpretar.
+      if (field === 'personality' && !db.PERSONALITY_TIERS.includes(val)) val = 'Normal';
+      if (field === 'focus_role' && val && !db.FOCUS_ROLES.includes(val)) val = null;
       updates[field] = val;
     }
   }
