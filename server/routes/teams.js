@@ -120,6 +120,39 @@ router.post('/:id/shield', upload.single('shield'), (req, res) => {
   res.json({ ...team, shield_path: relPath });
 });
 
+/* ---------- PUT /api/teams/:id/budget-split — regulador salários ⇄ transferências ----------
+   O treinador pode redistribuir a capacidade financeira do clube entre o
+   orçamento semanal de salários e o orçamento de transferências — subir um
+   desce sempre o outro. Os dois pesam em unidades diferentes (salário é
+   semanal, transferência é uma bolsa única), por isso convertem-se para a
+   mesma "unidade de transferência" usando BUDGET_EXCHANGE_RATE, que reflete
+   exatamente o rácio com que as equipas começam o jogo (ver
+   BASE_TRANSFER_BUDGET / BASE_WAGE_BUDGET em routes/game.js:
+   250.000 / 5.000 = 50). O saldo do clube (balance) não é tocado — isto só
+   reparte dinheiro que já estava reservado entre as duas bolsas. */
+const BUDGET_EXCHANGE_RATE = 50;
+
+router.put('/:id/budget-split', (req, res) => {
+  const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(req.params.id);
+  if (!team) return res.status(404).json({ error: 'Equipa não encontrada' });
+
+  const transferPct = Number(req.body.transfer_pct);
+  if (!Number.isFinite(transferPct) || transferPct < 0 || transferPct > 100) {
+    return res.status(400).json({ error: 'A percentagem tem de estar entre 0 e 100' });
+  }
+
+  const totalUnits = team.transfer_budget + team.wage_budget * BUDGET_EXCHANGE_RATE;
+  const newTransferBudget = Math.round(totalUnits * (transferPct / 100));
+  const newWageBudget = Math.round((totalUnits - newTransferBudget) / BUDGET_EXCHANGE_RATE);
+
+  db.prepare(`
+    UPDATE teams SET transfer_budget = @transfer_budget, wage_budget = @wage_budget, updated_at = datetime('now')
+    WHERE id = @id
+  `).run({ id: team.id, transfer_budget: newTransferBudget, wage_budget: newWageBudget });
+
+  res.json(db.prepare('SELECT * FROM teams WHERE id = ?').get(team.id));
+});
+
 /* ---------- DELETE /api/teams/:id — remover equipa ---------- */
 router.delete('/:id', (req, res) => {
   const info = db.prepare('DELETE FROM teams WHERE id = ?').run(req.params.id);

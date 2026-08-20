@@ -866,10 +866,56 @@ function applyViewOnlyMode(){
   ['playerPhotoInput', 'flagInput', 'clubLogoInput'].forEach((id) => { el(id).disabled = true; });
   document.querySelectorAll('.upload-slot, .flag-upload').forEach((slot) => { slot.style.pointerEvents = 'none'; });
 
+  // Gerador automático de atributos: só faz sentido no modo admin
+  el('attrGeneratorBar')?.classList.add('hidden');
+
   // Esconde o indicador de gravação (nada é gravado fora do admin)
   el('saveStatus')?.classList.add('hidden');
 }
 if(isAdmin === false) applyViewOnlyMode();
+
+/* ---------- Gerador automático de atributos (Nível Geral 0-100 + posição) ---------- */
+el('generateAttrsBtn')?.addEventListener('click', async () => {
+  if(!isAdmin || !playerId) return;
+
+  const input = el('overallInput');
+  const overall = Number(input.value);
+  if(!Number.isFinite(overall) || overall < 0 || overall > 100){
+    input.focus();
+    return;
+  }
+
+  const btn = el('generateAttrsBtn');
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'A gerar...';
+
+  try{
+    const res = await fetch(`/api/players/${playerId}/generate-attributes`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ overall }),
+    });
+    if(!res.ok) throw new Error();
+    const updated = await res.json();
+
+    // Volta a desenhar as quatro listas de atributos com os valores novos
+    if(updated.goalkeeping_json?.length){
+      renderAttrList('technicalList', updated.goalkeeping_json, 'goalkeeping_json');
+      renderAttrList('setPiecesList', updated.technical_json, 'technical_json');
+    }else{
+      renderAttrList('technicalList', updated.technical_json, 'technical_json');
+      renderAttrList('setPiecesList', updated.set_pieces_json, 'set_pieces_json');
+    }
+    renderAttrList('mentalList', updated.mental_json, 'mental_json');
+    renderAttrList('physicalList', updated.physical_json, 'physical_json');
+  }catch(err){
+    input.focus();
+  }finally{
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
+});
 
 /* ---------- 10c. Negociar: proposta de transferência + contrato ---------- */
 function fmtMoneyNegotiate(v){

@@ -48,6 +48,140 @@ function isGoalkeeperPosition(positionCode){
   return String(positionCode || '').split('/')[0].trim().toUpperCase() === 'GR';
 }
 
+/* ---------- Geração automática de atributos a partir de um "Nível Geral" (0-100) ----------
+   Cópia deliberada da mesma ideia de classifyPositionCode usada em
+   routes/competitionstats.js (ver comentário no topo desse ficheiro) —
+   mantém-se separada em vez de partilhada para não arriscar mexer no
+   código de simulação de jogos ao alterar isto. */
+function classifyPositionForGeneration(code) {
+  const c = String(code || '').split('/')[0].trim().toUpperCase();
+  if (c === 'GR') return 'GR';
+  if (['PL', 'AD', 'AE', 'ED', 'EE'].includes(c)) return 'PL';
+  if (['MCO', 'MOD', 'MOE'].includes(c)) return 'MO';
+  if (c.startsWith('M')) return 'MED';
+  return 'DEF';
+}
+
+/* Peso de cada atributo por categoria de posição — quanto maior, mais esse
+   atributo sobe acima da média para um jogador daquele nível; negativo
+   empurra para baixo da média. 0 = fica perto da média do "Nível Geral".
+   Tendências de guarda-redes (Excentricidade, Soco/Saída da Baliza) ficam
+   a 0 de propósito: são um estilo de jogo, não uma questão de qualidade. */
+const ATTR_WEIGHTS = {
+  technical: {
+    DEF: { Cruzamento: -0.3, Drible: -0.3, Finalização: -0.7, 'Primeiro Toque': 0.1, Cabeceamento: 0.9, 'Remates de Longe': -0.5, Marcação: 1.1, Passe: 0.3, Desarme: 1.1, Técnica: 0.1 },
+    MED: { Cruzamento: 0.2, Drible: 0.3, Finalização: -0.2, 'Primeiro Toque': 0.5, Cabeceamento: 0.1, 'Remates de Longe': 0.2, Marcação: 0.6, Passe: 1.0, Desarme: 0.7, Técnica: 0.6 },
+    MO: { Cruzamento: 0.5, Drible: 0.9, Finalização: 0.4, 'Primeiro Toque': 0.9, Cabeceamento: -0.2, 'Remates de Longe': 0.5, Marcação: -0.5, Passe: 0.9, Desarme: -0.3, Técnica: 1.0 },
+    PL: { Cruzamento: 0.1, Drible: 0.6, Finalização: 1.2, 'Primeiro Toque': 0.8, Cabeceamento: 0.5, 'Remates de Longe': 0.6, Marcação: -0.8, Passe: 0.1, Desarme: -0.8, Técnica: 0.6 },
+  },
+  technical_gk: {
+    GR: { 'Cobrança de Livres': 0.2, 'Cobrança de Grandes Penalidades': 0.1, Técnica: 0.4 },
+  },
+  set_pieces: {
+    DEF: { Cantos: -0.2, Livres: -0.3, 'Lançamentos Longos': 0.3, 'Grandes Penalidades': -0.3 },
+    MED: { Cantos: 0.3, Livres: 0.4, 'Lançamentos Longos': 0.2, 'Grandes Penalidades': 0.0 },
+    MO: { Cantos: 0.5, Livres: 0.7, 'Lançamentos Longos': -0.2, 'Grandes Penalidades': 0.3 },
+    PL: { Cantos: 0.0, Livres: 0.2, 'Lançamentos Longos': -0.3, 'Grandes Penalidades': 0.7 },
+  },
+  mental: {
+    DEF: { Agressividade: 0.6, Antecipação: 0.8, Coragem: 0.6, Compostura: 0.3, Concentração: 0.9, Decisões: 0.5, Determinação: 0.6, Classe: 0.2, Liderança: 0.4, 'Fora de Bola': -0.3, Posicionamento: 1.0, 'Trabalho de Equipa': 0.5, Visão: -0.1, 'Ritmo de Jogo': 0.0 },
+    MED: { Agressividade: 0.2, Antecipação: 0.5, Coragem: 0.3, Compostura: 0.5, Concentração: 0.5, Decisões: 0.8, Determinação: 0.5, Classe: 0.4, Liderança: 0.3, 'Fora de Bola': 0.0, Posicionamento: 0.6, 'Trabalho de Equipa': 0.8, Visão: 0.8, 'Ritmo de Jogo': 0.2 },
+    MO: { Agressividade: -0.1, Antecipação: 0.4, Coragem: 0.2, Compostura: 0.6, Concentração: 0.3, Decisões: 0.7, Determinação: 0.4, Classe: 0.9, Liderança: 0.2, 'Fora de Bola': 0.5, Posicionamento: 0.2, 'Trabalho de Equipa': 0.4, Visão: 1.0, 'Ritmo de Jogo': 0.5 },
+    PL: { Agressividade: 0.0, Antecipação: 0.5, Coragem: 0.3, Compostura: 0.8, Concentração: 0.3, Decisões: 0.5, Determinação: 0.4, Classe: 0.6, Liderança: 0.0, 'Fora de Bola': 1.1, Posicionamento: 0.5, 'Trabalho de Equipa': 0.2, Visão: 0.2, 'Ritmo de Jogo': 0.4 },
+    GR: { Agressividade: -0.2, Antecipação: 0.7, Coragem: 0.8, Compostura: 0.9, Concentração: 1.0, Decisões: 0.7, Determinação: 0.5, Classe: 0.3, Liderança: 0.5, 'Fora de Bola': -0.5, Posicionamento: 0.9, 'Trabalho de Equipa': 0.3, Visão: 0.2, 'Ritmo de Jogo': -0.3 },
+  },
+  physical: {
+    DEF: { Aceleração: 0.3, Agilidade: 0.2, Equilíbrio: 0.3, 'Alcance de Cabeceamento': 0.7, 'Condição Natural': 0.3, Velocidade: 0.4, Resistência: 0.5, Força: 0.9 },
+    MED: { Aceleração: 0.4, Agilidade: 0.4, Equilíbrio: 0.4, 'Alcance de Cabeceamento': 0.0, 'Condição Natural': 0.3, Velocidade: 0.4, Resistência: 0.9, Força: 0.3 },
+    MO: { Aceleração: 0.6, Agilidade: 0.7, Equilíbrio: 0.5, 'Alcance de Cabeceamento': -0.3, 'Condição Natural': 0.2, Velocidade: 0.6, Resistência: 0.4, Força: -0.1 },
+    PL: { Aceleração: 0.7, Agilidade: 0.5, Equilíbrio: 0.4, 'Alcance de Cabeceamento': 0.4, 'Condição Natural': 0.2, Velocidade: 0.8, Resistência: 0.2, Força: 0.4 },
+    GR: { Aceleração: 0.1, Agilidade: 0.8, Equilíbrio: 0.5, 'Alcance de Cabeceamento': 0.6, 'Condição Natural': 0.2, Velocidade: 0.0, Resistência: 0.2, Força: 0.5 },
+  },
+  goalkeeping: {
+    GR: { 'Alcance Aéreo': 0.7, 'Comando de Área': 0.8, Comunicação: 0.5, Excentricidade: 0, 'Primeiro Toque': 0.3, Manejo: 1.0, Pontapé: 0.2, 'Um Contra Um': 0.9, Passe: 0.3, 'Soco (Tendência)': 0, Reflexos: 1.1, 'Saída da Baliza (Tendência)': 0, Lançamento: 0.2 },
+  },
+};
+
+/* ---------- Fórmula de geração: cada atributo tem um "teto" próprio ----------
+   Em vez de todos os atributos subirem quase ao mesmo ritmo com o Nível
+   Geral (o que dava, por exemplo, um Defesa Central com Finalização quase
+   tão boa como a Marcação), cada atributo tem um teto máximo (`cap`)
+   definido pelo seu peso de importância na posição:
+     peso  1.2  -> teto 20 (atributo-chave, quase sempre no máximo)
+     peso  0.0  -> teto 10 (neutro, nunca sai de "razoável")
+     peso -1.0  -> teto  4 (irrelevant­e para a posição, fica sempre fraco)
+   O valor sobe dos ~3 (jogador muito fraco) até ao teto do próprio
+   atributo, na proporção do Nível Geral — nunca ultrapassando esse teto,
+   por muito alto que seja o Nível Geral. Assim um Defesa Central com 90
+   tem Desarme/Marcação lá em cima mas Finalização/Drible continuam baixos,
+   tal como um Avançado com 90 tem Finalização no topo mas Marcação fraca. */
+function attrCap(weight) {
+  return Math.max(4, Math.min(20, Math.round(10 + weight * 10)));
+}
+
+function scaledAttrValue(overall, weight) {
+  const cap = attrCap(weight);
+  const floor = 3; // valor mínimo de qualquer atributo, mesmo com Nível Geral 0
+  const noise = (Math.random() * 1.4) - 0.7;
+  const value = floor + (cap - floor) * (overall / 100) + noise;
+  return Math.max(1, Math.min(20, Math.round(value)));
+}
+
+function generateAttrList(names, weights, overall) {
+  return names.map((name) => [name, scaledAttrValue(overall, weights[name] ?? 0)]);
+}
+
+/* ---------- PUT /api/players/:id/generate-attributes ----------
+   Recebe um "Nível Geral" de 0 a 100 e gera automaticamente TODOS os
+   atributos individuais do jogador (Técnica/Guarda-Redes, Bolas Paradas,
+   Mental, Físico), com base nesse número e na posição principal já
+   guardada (position_code) — cada atributo tem um teto próprio consoante
+   a sua importância para a posição (ver scaledAttrValue acima), mais uma
+   pequena variação aleatória para não sair sempre um perfil demasiado
+   "redondo". */
+router.put('/:id/generate-attributes', (req, res) => {
+  const player = db.prepare('SELECT * FROM players WHERE id = ?').get(req.params.id);
+  if (!player) return res.status(404).json({ error: 'Jogador não encontrado' });
+
+  const overall = Number(req.body.overall);
+  if (!Number.isFinite(overall) || overall < 0 || overall > 100) {
+    return res.status(400).json({ error: 'O Nível Geral tem de ser um número entre 0 e 100' });
+  }
+
+  const category = classifyPositionForGeneration(player.position_code);
+  const isGK = category === 'GR';
+
+  const technical_json = isGK
+    ? generateAttrList(DEFAULT_TECHNICAL_GK.map(([n]) => n), ATTR_WEIGHTS.technical_gk.GR, overall)
+    : generateAttrList(DEFAULT_TECHNICAL.map(([n]) => n), ATTR_WEIGHTS.technical[category], overall);
+  const set_pieces_json = isGK
+    ? []
+    : generateAttrList(DEFAULT_SET_PIECES.map(([n]) => n), ATTR_WEIGHTS.set_pieces[category], overall);
+  const mental_json = generateAttrList(DEFAULT_MENTAL.map(([n]) => n), ATTR_WEIGHTS.mental[category], overall);
+  const physical_json = generateAttrList(DEFAULT_PHYSICAL.map(([n]) => n), ATTR_WEIGHTS.physical[category], overall);
+  const goalkeeping_json = isGK
+    ? generateAttrList(DEFAULT_GOALKEEPING.map(([n]) => n), ATTR_WEIGHTS.goalkeeping.GR, overall)
+    : [];
+
+  db.prepare(`
+    UPDATE players SET
+      technical_json = @technical_json, set_pieces_json = @set_pieces_json,
+      mental_json = @mental_json, physical_json = @physical_json, goalkeeping_json = @goalkeeping_json,
+      updated_at = datetime('now')
+    WHERE id = @id
+  `).run({
+    id: player.id,
+    technical_json: JSON.stringify(technical_json),
+    set_pieces_json: JSON.stringify(set_pieces_json),
+    mental_json: JSON.stringify(mental_json),
+    physical_json: JSON.stringify(physical_json),
+    goalkeeping_json: JSON.stringify(goalkeeping_json),
+  });
+
+  const updated = db.prepare('SELECT * FROM players WHERE id = ?').get(player.id);
+  res.json(deserialize(updated));
+});
+
 /* ---------- Upload de imagens (foto, bandeira, logo do clube) ---------- */
 const UPLOAD_DIRS = {
   photo: path.join(__dirname, '..', 'uploads', 'players'),

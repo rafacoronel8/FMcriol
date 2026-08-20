@@ -1578,3 +1578,75 @@ body{
   .ceremony-modal{padding:28px 18px 26px;}
   .ceremony-dot{width:48px;height:48px;font-size:18px;}
 }
+
+/* ==========================================================
+   Regulador de Orçamento — salários ⇄ transferências
+   ========================================================== */
+.budget-regulator{
+  margin-top:14px;
+  padding-top:14px;
+  border-top:1px solid var(--line);
+}
+.budget-regulator-title{
+  font-size:12px;
+  font-weight:700;
+  color:var(--text-0);
+  margin-bottom:2px;
+}
+.budget-regulator-hint{
+  font-size:11px;
+  color:var(--text-2);
+  margin:0 0 12px;
+}
+.budget-slider-row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.budget-slider-icon{font-size:15px;flex:0 0 auto;}
+#budgetSplitSlider{
+  flex:1;
+  appearance:none;
+  -webkit-appearance:none;
+  height:6px;
+  border-radius:4px;
+  background:linear-gradient(90deg, #3fc98a, var(--bg-3) 50%, var(--accent));
+  outline:none;
+  cursor:pointer;
+}
+#budgetSplitSlider::-webkit-slider-thumb{
+  -webkit-appearance:none;
+  appearance:none;
+  width:18px;height:18px;
+  border-radius:50%;
+  background:var(--text-0);
+  border:3px solid var(--accent);
+  cursor:pointer;
+  transition:transform .12s ease;
+}
+#budgetSplitSlider::-webkit-slider-thumb:hover{transform:scale(1.1);}
+#budgetSplitSlider::-moz-range-thumb{
+  width:18px;height:18px;
+  border-radius:50%;
+  background:var(--text-0);
+  border:3px solid var(--accent);
+  cursor:pointer;
+}
+#budgetSplitSlider::-moz-range-track{
+  height:6px;
+  border-radius:4px;
+  background:linear-gradient(90deg, #3fc98a, var(--bg-3) 50%, var(--accent));
+}
+.budget-slider-values{
+  display:flex;
+  justify-content:space-between;
+  margin-top:10px;
+}
+.budget-slider-value{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+.budget-slider-value.align-right{align-items:flex-end;text-align:right;}
+.budget-slider-value span{font-size:10px;color:var(--text-2);text-transform:uppercase;letter-spacing:.4px;}
+.budget-slider-value b{font-size:14px;color:var(--text-0);}

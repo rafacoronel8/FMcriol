@@ -151,6 +151,11 @@
 
     <!-- Técnico -->
     <div class="card attr-card">
+      <div class="attr-generator" id="attrGeneratorBar">
+        <label for="overallInput">Nível Geral (0-100)</label>
+        <input type="number" id="overallInput" min="0" max="100" step="1" placeholder="Ex: 75">
+        <button id="generateAttrsBtn" class="btn-mini">Gerar Atributos</button>
+      </div>
       <div class="card-title" id="technicalCardTitle">Técnica</div>
       <div class="attr-list" id="technicalList"></div>
       <div class="card-title sub" id="setPiecesCardTitle">Bolas Paradas</div>

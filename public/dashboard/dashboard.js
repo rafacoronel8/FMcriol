@@ -68,6 +68,8 @@ function fillClub(team){
   el('fTransfer').textContent = fmtMoney(team.transfer_budget);
   el('fTier').textContent = team.financial_tier;
 
+  updateBudgetRegulator(team);
+
   el('dDivision').textContent = team.division === 2 ? '2ª Divisão' : '1ª Divisão';
   el('dReputation').textContent = '★'.repeat(Math.round(team.reputation_stars)) + '☆'.repeat(5 - Math.round(team.reputation_stars)) + ` (${team.reputation_stars})`;
   el('dLocation').textContent = team.location || 'Não definida';
@@ -81,6 +83,50 @@ function fillClub(team){
   tierEl.textContent = team.financial_tier;
   tierEl.className = 'club-hero-tier ' + tierClass(team.financial_tier);
 }
+
+/* ---------- Regulador de Orçamento: salários ⇄ transferências ----------
+   Mesmo rácio de câmbio usado no servidor (ver BUDGET_EXCHANGE_RATE em
+   routes/teams.js) — tem de ser exatamente o mesmo dos dois lados, senão a
+   pré-visualização ao arrastar o cursor não bate certo com o valor
+   gravado ao soltar. */
+const BUDGET_EXCHANGE_RATE = 50;
+let budgetTotalUnits = 0; // recalculado sempre que os dados do clube chegam
+
+function updateBudgetRegulator(team){
+  budgetTotalUnits = team.transfer_budget + team.wage_budget * BUDGET_EXCHANGE_RATE;
+  const pct = budgetTotalUnits > 0 ? Math.round((team.transfer_budget / budgetTotalUnits) * 100) : 50;
+
+  const slider = el('budgetSplitSlider');
+  slider.value = pct;
+  el('budgetWagePreview').textContent = fmtMoney(team.wage_budget) + ' / sem';
+  el('budgetTransferPreview').textContent = fmtMoney(team.transfer_budget);
+}
+
+/* Enquanto arrastas: só pré-visualiza os valores, sem gravar a cada frame */
+el('budgetSplitSlider').addEventListener('input', (e) => {
+  const pct = Number(e.target.value);
+  const newTransfer = Math.round(budgetTotalUnits * (pct / 100));
+  const newWage = Math.round((budgetTotalUnits - newTransfer) / BUDGET_EXCHANGE_RATE);
+  el('budgetWagePreview').textContent = fmtMoney(newWage) + ' / sem';
+  el('budgetTransferPreview').textContent = fmtMoney(newTransfer);
+});
+
+/* Ao soltares o cursor: grava a nova distribuição no servidor */
+el('budgetSplitSlider').addEventListener('change', async (e) => {
+  const pct = Number(e.target.value);
+  try{
+    const res = await fetch(`/api/teams/${teamId}/budget-split`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transfer_pct: pct }),
+    });
+    if(!res.ok) throw new Error();
+    const team = await res.json();
+    fillClub(team);
+  }catch(err){
+    loadClub(); // repõe os valores reais se a gravação falhar
+  }
+});
 
 /* ---------- Visão Geral: próximo jogo, posição na tabela, resumo do plantel ---------- */
 function renderOverviewNextMatch(list){

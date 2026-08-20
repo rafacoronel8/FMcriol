@@ -667,3 +667,34 @@ body{
   color:var(--text-2);
   min-width:52px;
 }
+/* ---------- Gerador automático de atributos (Nível Geral 0-100) ---------- */
+.attr-generator{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-bottom:14px;
+  padding:10px 12px;
+  background:var(--bg-3);
+  border:1px solid var(--line);
+  border-radius:8px;
+}
+.attr-generator label{
+  font-size:11px;
+  color:var(--text-2);
+  text-transform:uppercase;
+  letter-spacing:.4px;
+  white-space:nowrap;
+}
+.attr-generator input[type="number"]{
+  width:64px;
+  background:var(--bg-2);
+  border:1px solid var(--line);
+  border-radius:6px;
+  color:var(--text-0);
+  font-size:13px;
+  font-family:inherit;
+  padding:5px 8px;
+}
+.attr-generator input[type="number"]:focus{outline:none;border-color:var(--accent);}
+.attr-generator .btn-mini{margin-left:auto;}

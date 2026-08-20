@@ -116,6 +116,26 @@
           <div class="finance-row"><span>Orçamento de transferências</span><b id="fTransfer">—</b></div>
           <div class="finance-row"><span>Situação financeira</span><b id="fTier">—</b></div>
         </div>
+
+        <div class="budget-regulator">
+          <div class="budget-regulator-title">Regulador de Orçamento</div>
+          <p class="budget-regulator-hint">Distribui a capacidade financeira do clube entre salários e transferências</p>
+          <div class="budget-slider-row">
+            <span class="budget-slider-icon" title="Mais para salários">💼</span>
+            <input type="range" id="budgetSplitSlider" min="0" max="100" step="1" value="50">
+            <span class="budget-slider-icon" title="Mais para transferências">🔄</span>
+          </div>
+          <div class="budget-slider-values">
+            <div class="budget-slider-value">
+              <span>Salários</span>
+              <b id="budgetWagePreview">—</b>
+            </div>
+            <div class="budget-slider-value align-right">
+              <span>Transferências</span>
+              <b id="budgetTransferPreview">—</b>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="card club-stat-card">
