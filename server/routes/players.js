@@ -96,10 +96,12 @@ router.get('/', (req, res) => {
     SELECT p.id, p.name, p.photo_path, p.jersey_number, p.position_tag, p.position_code, p.team_id,
            p.club_status, p.fitness_status, p.fitness_note, p.current_ability_stars, p.form_text,
            p.market_value_text, p.wage_text, p.personality, p.stood_down_until, p.stood_down_reason,
-           p.focus_role,
-           t.name AS team_name
+           p.focus_role, p.loan_from_team_id, p.loan_return_date,
+           t.name AS team_name,
+           loanFrom.name AS loan_from_team_name
     FROM players p
     LEFT JOIN teams t ON t.id = p.team_id
+    LEFT JOIN teams loanFrom ON loanFrom.id = p.loan_from_team_id
   `;
   const conditions = [];
   const params = {};
@@ -128,9 +130,12 @@ router.get('/:id', (req, res) => {
   const originalTeam = player.original_team_id
     ? db.prepare('SELECT id, name, shield_path FROM teams WHERE id = ?').get(player.original_team_id)
     : null;
+  const loanFromTeam = player.loan_from_team_id
+    ? db.prepare('SELECT id, name, shield_path FROM teams WHERE id = ?').get(player.loan_from_team_id)
+    : null;
   const awards = db.prepare('SELECT * FROM player_awards WHERE player_id = ? ORDER BY won_date DESC').all(req.params.id);
 
-  res.json({ ...deserialize(player), team, original_team: originalTeam, awards });
+  res.json({ ...deserialize(player), team, original_team: originalTeam, loan_from_team: loanFromTeam, awards });
 });
 
 /* ---------- POST /api/players — criar jogador novo (com defaults) ---------- */

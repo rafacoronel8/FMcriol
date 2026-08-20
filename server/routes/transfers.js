@@ -135,8 +135,96 @@ function decidePlayerConsent(player, buyerTeam, sellerTeam) {
   const expectedWage = Math.round(currentWage * (1.0 + Math.random() * 0.15)); // igual a até +15%
   const repDelta = (buyerTeam.reputation_stars - (sellerTeam?.reputation_stars ?? buyerTeam.reputation_stars)) / 5;
   const luck = (Math.random() * 0.2) - 0.1;
-  const score = (repDelta * 0.6) + luck + 0.05; // ligeiro viés a favor, já que o clube vendedor aceitou vender
+  /* consent_boost -> ganho numa reunião de transferência anterior, depois de
+     o treinador dizer ao jogador que não faz parte dos seus planos (ver
+     PUT /api/transfers/meetings/:id/respond). Consumido logo a seguir. */
+  const boost = Number(player.consent_boost) || 0;
+  const score = (repDelta * 0.6) + luck + 0.05 + boost; // ligeiro viés a favor, já que o clube vendedor aceitou vender
   return { accepted: score > 0, wageOffer: Math.max(expectedWage, currentWage) };
+}
+
+/* Próximo 1 de julho a partir da data atual do calendário do jogo — usado
+   como data de regresso de um empréstimo (ver reunião de transferência
+   abaixo). O mercado só está aberto entre 1 e 31 de julho (ver
+   isMarketWindowOpen em db/database.js), por isso uma reunião só pode
+   acontecer dentro dessa janela — "a época seguinte" começa sempre no
+   1 de julho do ANO SEGUINTE ao da data atual. */
+function nextJulyFirst(currentDateStr) {
+  const year = Number(String(currentDateStr).slice(0, 4));
+  return `${year + 1}-07-01`;
+}
+
+/* Concretiza a mudança de clube de um jogador, com ou sem empréstimo —
+   partilhado entre a aceitação normal de uma proposta (PUT
+   /:id/respond) e a reunião de transferência (PUT /meetings/:id/respond),
+   para as duas seguirem sempre exatamente as mesmas regras. */
+function finalizePlayerMove({ player, buyerTeam, sellerTeam, wageOffer, amount, isLoan, loanReturnDate }) {
+  const contractEndText = computeContractEndText();
+
+  if (isLoan) {
+    db.prepare(`
+      UPDATE players SET team_id = @team_id, loan_from_team_id = @loan_from_team_id,
+        loan_return_date = @loan_return_date, is_listed = 0, asking_price = NULL,
+        club_status = 'Emprestado', transferred_in_window = 1, consent_boost = 0,
+        updated_at = datetime('now')
+      WHERE id = @player_id
+    `).run({
+      team_id: buyerTeam.id, loan_from_team_id: sellerTeam ? sellerTeam.id : player.team_id,
+      loan_return_date: loanReturnDate, player_id: player.id,
+    });
+    return;
+  }
+
+  db.prepare(`
+    UPDATE players SET team_id = @team_id, is_listed = 0, asking_price = NULL,
+      club_status = 'Titular Regular', wage_text = @wage_text, contract_end = @contract_end,
+      transferred_in_window = 1, consent_boost = 0, updated_at = datetime('now')
+    WHERE id = @player_id
+  `).run({ team_id: buyerTeam.id, player_id: player.id, wage_text: `£${Number(wageOffer).toLocaleString('pt-PT')} p/s`, contract_end: contractEndText });
+
+  if (sellerTeam) {
+    db.prepare("UPDATE teams SET balance = balance + @amount, transfer_budget = transfer_budget + @amount, updated_at = datetime('now') WHERE id = @id")
+      .run({ amount, id: sellerTeam.id });
+  }
+  db.prepare("UPDATE teams SET balance = balance - @amount, transfer_budget = transfer_budget - @amount, updated_at = datetime('now') WHERE id = @id")
+    .run({ amount, id: buyerTeam.id });
+}
+
+/* ---------- Empréstimos: regresso automático ao clube de origem ----------
+   Chamado a partir de POST /api/game/advance (routes/game.js), tal como o
+   Campeonato e a Taça — assim que o calendário do jogo chega à
+   loan_return_date de um jogador, ele volta automaticamente para
+   loan_from_team_id e deixa de estar emprestado. */
+function runLoanReturnsIfDue(nextDateStr) {
+  const due = db.prepare(`
+    SELECT p.*, home.name AS home_name, home.shield_path AS home_shield,
+           away.name AS away_name
+    FROM players p
+    JOIN teams home ON home.id = p.loan_from_team_id
+    LEFT JOIN teams away ON away.id = p.team_id
+    WHERE p.loan_return_date IS NOT NULL AND p.loan_return_date <= ?
+  `).all(nextDateStr);
+
+  due.forEach((p) => {
+    db.prepare(`
+      UPDATE players SET team_id = @home_team_id, loan_from_team_id = NULL, loan_return_date = NULL,
+        club_status = 'Titular Regular', updated_at = datetime('now')
+      WHERE id = @id
+    `).run({ home_team_id: p.loan_from_team_id, id: p.id });
+
+    if (db.prepare('SELECT is_user_controlled FROM teams WHERE id = ?').get(p.loan_from_team_id)?.is_user_controlled) {
+      db.prepare(`
+        INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
+        VALUES (@team_id, 'loan_returned', @title, @body, @player_id, @related_team_id)
+      `).run({
+        team_id: p.loan_from_team_id, player_id: p.id, related_team_id: p.team_id,
+        title: `↩️ Empréstimo terminado: ${p.name}`,
+        body: `${p.name} terminou o empréstimo no ${p.away_name || 'outro clube'} e volta a estar disponível no plantel.`,
+      });
+    }
+  });
+
+  return due.length;
 }
 
 /* ---------- POST /api/transfers/offer — enviar proposta financeira por um jogador ---------- */
@@ -390,42 +478,54 @@ router.put('/:id/respond', (req, res) => {
   const consent = accept ? decidePlayerConsent(player, buyerTeam, sellerTeam) : null;
   const playerRefused = accept && consent && !consent.accepted;
 
+  /* O jogador recusou mudar-se: em vez do negócio cair já, o treinador
+     vendedor tem direito a uma reunião com ele antes de o negócio ser dado
+     como falhado — ver PUT /api/transfers/meetings/:id/respond. O estado da
+     proposta ainda fica 'accepted' (o acordo entre clubes mantém-se; falta
+     só o próprio jogador). */
+  if (playerRefused) {
+    db.prepare("UPDATE transfer_offers SET status = 'accepted', resolved_at = datetime('now') WHERE id = ?").run(offer.id);
+
+    const state = db.prepare('SELECT game_state.current_date FROM game_state WHERE id = 1').get();
+    const meetingInfo = db.prepare(`
+      INSERT INTO transfer_meetings (team_id, player_id, buyer_team_id, transfer_offer_id, offer_amount, event_date)
+      VALUES (@team_id, @player_id, @buyer_team_id, @transfer_offer_id, @offer_amount, @event_date)
+    `).run({
+      team_id: offer.seller_team_id, player_id: player.id, buyer_team_id: buyerTeam.id,
+      transfer_offer_id: offer.id, offer_amount: offer.offer_amount, event_date: state.current_date,
+    });
+
+    const amountFmt = `£${Math.round(offer.offer_amount).toLocaleString('pt-PT')}`;
+    db.prepare(`
+      INSERT INTO messages (team_id, type, title, body, player_id, related_team_id, meeting_id)
+      VALUES (@team_id, 'transfer_meeting', @title, @body, @player_id, @related_team_id, @meeting_id)
+    `).run({
+      team_id: offer.seller_team_id, player_id: player.id, related_team_id: buyerTeam.id,
+      meeting_id: meetingInfo.lastInsertRowid,
+      title: `Reunião necessária: ${player.name}`,
+      body: `Aceitaste a proposta do ${buyerTeam.name} de ${amountFmt} por ${player.name}, mas ele não quer mudar-se. Podes reunir com ele antes de o negócio cair — propõe um empréstimo (volta a 1 de julho da época seguinte) ou diz-lhe que não faz parte dos teus planos, para o deixar mais recetivo a sair.`,
+    });
+
+    return res.json({ ok: true, status: 'player_hesitant', meeting_id: meetingInfo.lastInsertRowid });
+  }
+
   const respond = db.transaction(() => {
     db.prepare("UPDATE transfer_offers SET status = ?, resolved_at = datetime('now') WHERE id = ?")
       .run(accept ? 'accepted' : 'rejected', offer.id);
 
-    if (accept && !playerRefused) {
-      const amount = offer.offer_amount;
-      const contractEndText = computeContractEndText();
-
-      db.prepare(`
-        UPDATE players SET team_id = @team_id, is_listed = 0, asking_price = NULL,
-          club_status = 'Titular Regular', wage_text = @wage_text, contract_end = @contract_end,
-          transferred_in_window = 1, updated_at = datetime('now')
-        WHERE id = @player_id
-      `).run({ team_id: buyerTeam.id, player_id: player.id, wage_text: `£${Number(consent.wageOffer).toLocaleString('pt-PT')} p/s`, contract_end: contractEndText });
-
-      if (sellerTeam) {
-        db.prepare('UPDATE teams SET balance = balance + @amount, transfer_budget = transfer_budget + @amount, updated_at = datetime(\'now\') WHERE id = @id')
-          .run({ amount, id: sellerTeam.id });
-      }
-      db.prepare('UPDATE teams SET balance = balance - @amount, transfer_budget = transfer_budget - @amount, updated_at = datetime(\'now\') WHERE id = @id')
-        .run({ amount, id: buyerTeam.id });
+    if (accept) {
+      finalizePlayerMove({ player, buyerTeam, sellerTeam, wageOffer: consent.wageOffer, amount: offer.offer_amount, isLoan: false });
     }
-    /* Proposta recusada por ti OU aceite mas recusada pelo próprio jogador:
-       o estado de "listado" do jogador não muda por causa disto. Se já
-       estava na lista de transferências, continua lá (outros clubes podem
-       voltar a propor); se não estava — porque a proposta chegou sem o
-       jogador estar à venda — continua sem estar, em vez de passar a ficar
-       listado automaticamente só por ter recusado uma proposta. */
+    /* Proposta recusada por ti: o estado de "listado" do jogador não muda
+       por causa disto. Se já estava na lista de transferências, continua
+       lá (outros clubes podem voltar a propor); se não estava — porque a
+       proposta chegou sem o jogador estar à venda — continua sem estar, em
+       vez de passar a ficar listado automaticamente só por ter recusado
+       uma proposta. */
 
     const amountFmt = `£${Math.round(offer.offer_amount).toLocaleString('pt-PT')}`;
     let title, body, msgType;
-    if (playerRefused) {
-      title = `Negócio caiu: ${player.name}`;
-      body = `Aceitaste a proposta do ${buyerTeam.name} de ${amountFmt} por ${player.name}, mas o próprio jogador recusou a mudança de clube. A transferência não se realizou.`;
-      msgType = 'transfer_player_refused';
-    } else if (accept) {
+    if (accept) {
       title = `Transferência aceite: ${player.name}`;
       body = `Aceitaste a proposta do ${buyerTeam.name} de ${amountFmt} por ${player.name}. A transferência foi concluída.`;
       msgType = 'player_sold';
@@ -445,7 +545,7 @@ router.put('/:id/respond', (req, res) => {
 
     db.logMarketNews({
       type: msgType,
-      headline: playerRefused ? `${player.name} recusa mudar-se para o ${buyerTeam.name}` : (accept ? `${player.name} muda-se para o ${buyerTeam.name}` : `${sellerTeam?.name || 'Clube'} recusa proposta por ${player.name}`),
+      headline: accept ? `${player.name} muda-se para o ${buyerTeam.name}` : `${sellerTeam?.name || 'Clube'} recusa proposta por ${player.name}`,
       body,
       player_name: player.name,
       player_photo: player.photo_path,
@@ -453,12 +553,117 @@ router.put('/:id/respond', (req, res) => {
       from_team_shield: sellerTeam?.shield_path,
       to_team_name: buyerTeam.name,
       to_team_shield: buyerTeam.shield_path,
-      amount: accept && !playerRefused ? offer.offer_amount : null,
+      amount: accept ? offer.offer_amount : null,
     });
   });
 
   respond();
-  res.json({ ok: true, status: playerRefused ? 'player_refused' : (accept ? 'accepted' : 'rejected') });
+  res.json({ ok: true, status: accept ? 'accepted' : 'rejected' });
+});
+
+/* ---------- PUT /api/transfers/meetings/:id/respond — reunião de transferência ----------
+   Chamada depois de o jogador ter recusado mudar-se apesar do clube vendedor
+   ter aceitado a proposta (ver acima). Duas opções:
+   - 'loan'         -> propõe um empréstimo ao jogador (ele pode aceitar ou não);
+                       se aceitar, muda-se já para o clube comprador e volta
+                       automaticamente a 1 de julho da época seguinte.
+   - 'not_in_plans' -> avisa o jogador de que não conta com ele; fica muito
+                       mais recetivo a sair e a decisão é logo reavaliada. */
+router.put('/meetings/:id/respond', (req, res) => {
+  const meeting = db.prepare('SELECT * FROM transfer_meetings WHERE id = ?').get(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Reunião não encontrada' });
+  if (meeting.status !== 'pending') return res.status(400).json({ error: 'Esta reunião já foi resolvida' });
+
+  const action = req.body.action;
+  if (!['loan', 'not_in_plans'].includes(action)) {
+    return res.status(400).json({ error: 'Ação inválida' });
+  }
+
+  const player = db.prepare('SELECT * FROM players WHERE id = ?').get(meeting.player_id);
+  const buyerTeam = db.prepare('SELECT * FROM teams WHERE id = ?').get(meeting.buyer_team_id);
+  const sellerTeam = meeting.team_id ? db.prepare('SELECT * FROM teams WHERE id = ?').get(meeting.team_id) : null;
+  if (!player || !buyerTeam) return res.status(404).json({ error: 'Jogador ou equipa não encontrados' });
+
+  const amountFmt = `£${Math.round(meeting.offer_amount).toLocaleString('pt-PT')}`;
+  let resolution, resultStatus, title, body, msgType, newsHeadline;
+
+  if (action === 'loan') {
+    /* O jogador está mais recetivo a um empréstimo (é temporário) do que a
+       uma venda definitiva — o mesmo cálculo de sempre, com um pequeno
+       viés extra a favor. */
+    const repDelta = (buyerTeam.reputation_stars - (sellerTeam?.reputation_stars ?? buyerTeam.reputation_stars)) / 5;
+    const luck = (Math.random() * 0.2) - 0.1;
+    const boost = Number(player.consent_boost) || 0;
+    const loanAccepted = ((repDelta * 0.6) + luck + 0.2 + boost) > 0;
+
+    if (loanAccepted) {
+      const state = db.prepare('SELECT game_state.current_date FROM game_state WHERE id = 1').get();
+      const returnDate = nextJulyFirst(state.current_date);
+      finalizePlayerMove({ player, buyerTeam, sellerTeam, isLoan: true, loanReturnDate: returnDate });
+
+      resolution = `Aceitaste propor um empréstimo e ${player.name} aceitou — está emprestado ao ${buyerTeam.name} até 1 de julho de ${Number(returnDate.slice(0, 4))}.`;
+      resultStatus = 'loan_accepted';
+      title = `Empréstimo acordado: ${player.name}`;
+      body = `${player.name} aceitou ser emprestado ao ${buyerTeam.name} até 1 de julho de ${Number(returnDate.slice(0, 4))}, depois de teres recusado a venda direta.`;
+      msgType = 'loan_agreed';
+      newsHeadline = `${player.name} sai por empréstimo para o ${buyerTeam.name}`;
+    } else {
+      resolution = `Propuseste um empréstimo, mas ${player.name} recusou. O negócio caiu.`;
+      resultStatus = 'loan_declined';
+      title = `Negócio caiu: ${player.name}`;
+      body = `Propuseste um empréstimo ao ${buyerTeam.name}, mas ${player.name} recusou. A transferência não se realizou.`;
+      msgType = 'transfer_player_refused';
+      newsHeadline = `${player.name} recusa empréstimo para o ${buyerTeam.name}`;
+    }
+  } else {
+    /* 'not_in_plans': aumenta a vontade do jogador em sair e reavalia já a
+       decisão original (venda definitiva) com esse reforço. */
+    db.prepare('UPDATE players SET consent_boost = consent_boost + 0.4 WHERE id = ?').run(player.id);
+    const boostedPlayer = db.prepare('SELECT * FROM players WHERE id = ?').get(player.id);
+    const consent = decidePlayerConsent(boostedPlayer, buyerTeam, sellerTeam);
+
+    if (consent.accepted) {
+      finalizePlayerMove({ player: boostedPlayer, buyerTeam, sellerTeam, wageOffer: consent.wageOffer, amount: meeting.offer_amount, isLoan: false });
+
+      resolution = `Disseste a ${player.name} que não faz parte dos teus planos — ele reconsiderou e aceitou mudar-se para o ${buyerTeam.name} por ${amountFmt}.`;
+      resultStatus = 'accepted_after_talk';
+      title = `Transferência concluída: ${player.name}`;
+      body = `Depois de lhe dizeres que não faz parte dos teus planos, ${player.name} aceitou mudar-se para o ${buyerTeam.name} por ${amountFmt}.`;
+      msgType = 'player_sold';
+      newsHeadline = `${player.name} muda-se para o ${buyerTeam.name}`;
+    } else {
+      db.prepare('UPDATE players SET consent_boost = 0 WHERE id = ?').run(player.id);
+      resolution = `Disseste a ${player.name} que não faz parte dos teus planos, mas mesmo assim ele recusou mudar-se. O negócio caiu.`;
+      resultStatus = 'refused_after_talk';
+      title = `Negócio caiu: ${player.name}`;
+      body = `Mesmo depois de lhe dizeres que não faz parte dos teus planos, ${player.name} recusou mudar-se para o ${buyerTeam.name}. A transferência não se realizou.`;
+      msgType = 'transfer_player_refused';
+      newsHeadline = `${player.name} recusa mudar-se para o ${buyerTeam.name}`;
+    }
+  }
+
+  db.prepare("UPDATE transfer_meetings SET status = 'resolved', resolution = ?, resolved_at = datetime('now') WHERE id = ?")
+    .run(resolution, meeting.id);
+
+  db.prepare(`
+    INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
+    VALUES (@team_id, @type, @title, @body, @player_id, @related_team_id)
+  `).run({ team_id: meeting.team_id, type: msgType, title, body, player_id: player.id, related_team_id: buyerTeam.id });
+
+  db.logMarketNews({
+    type: msgType,
+    headline: newsHeadline,
+    body,
+    player_name: player.name,
+    player_photo: player.photo_path,
+    from_team_name: sellerTeam?.name,
+    from_team_shield: sellerTeam?.shield_path,
+    to_team_name: buyerTeam.name,
+    to_team_shield: buyerTeam.shield_path,
+    amount: resultStatus === 'accepted_after_talk' ? meeting.offer_amount : null,
+  });
+
+  res.json({ ok: true, status: resultStatus, resolution });
 });
 
 /* ---------- GET /api/transfers/messages?team_id=X — caixa de entrada do clube ----------
@@ -486,7 +691,10 @@ router.get('/messages', (req, res) => {
       pi.resolution   AS incident_resolution,
       mq.options_json AS question_options_json,
       mq.status       AS question_status,
-      mq.chosen_key   AS question_chosen_key
+      mq.chosen_key   AS question_chosen_key,
+      tm.status       AS meeting_status,
+      tm.resolution   AS meeting_resolution,
+      tm.offer_amount AS meeting_offer_amount
     FROM messages m
     LEFT JOIN players p ON p.id = m.player_id
     LEFT JOIN teams myTeam ON myTeam.id = m.team_id
@@ -494,6 +702,7 @@ router.get('/messages', (req, res) => {
     LEFT JOIN transfer_offers t ON t.id = m.transfer_offer_id
     LEFT JOIN player_incidents pi ON pi.id = m.incident_id
     LEFT JOIN manager_questions mq ON mq.id = m.question_id
+    LEFT JOIN transfer_meetings tm ON tm.id = m.meeting_id
     WHERE m.team_id = ?
     ORDER BY m.created_at DESC, m.id DESC
   `).all(team_id);
@@ -527,6 +736,11 @@ router.delete('/messages', (req, res) => {
         JOIN manager_questions mq ON mq.id = m.question_id
         WHERE m.team_id = @team_id AND m.question_id IS NOT NULL AND mq.status = 'pending'
       )
+      AND id NOT IN (
+        SELECT m.id FROM messages m
+        JOIN transfer_meetings tm ON tm.id = m.meeting_id
+        WHERE m.team_id = @team_id AND m.meeting_id IS NOT NULL AND tm.status = 'pending'
+      )
   `).run({ team_id });
 
   res.json({ ok: true, deleted: info.changes });
@@ -538,4 +752,44 @@ router.put('/messages/:id/read', (req, res) => {
   res.json({ ok: true });
 });
 
+/* ---------- Ano do último mercado já fechado ----------
+   O mercado está sempre aberto de 1 a 31 de julho, todos os anos (ver
+   isMarketWindowOpen em db/database.js). A partir da data atual do jogo,
+   devolve o ano do último "1-31 de julho" que já passou por completo:
+   - se ainda estamos antes de julho (MM-DD < 07-01), foi julho do ano anterior;
+   - caso contrário (estamos em ou depois de julho), foi julho deste ano
+     (mesmo que o mercado esteja a decorrer agora mesmo). */
+function lastClosedOrCurrentWindowYear(currentDateStr) {
+  const year = Number(String(currentDateStr).slice(0, 4));
+  const monthDay = String(currentDateStr).slice(5, 10);
+  return monthDay < '07-01' ? year - 1 : year;
+}
+
+/* ---------- GET /api/transfers/window-summary — painel do fim do mercado ----------
+   Todas as transferências CONCLUÍDAS (contratos assinados/vendas diretas,
+   entre quaisquer clubes, incluindo negócios só entre equipas geridas pelo
+   jogo) durante o último mercado — 1 a 31 de julho — ordenadas por
+   relevância (valor da transferência, do maior para o menor). Pensado para
+   aparecer ao lado do jornal de notícias na aba Mercado assim que a janela
+   fecha (1 de agosto). */
+router.get('/window-summary', (req, res) => {
+  const state = db.prepare('SELECT game_state.current_date FROM game_state WHERE id = 1').get();
+  const year = lastClosedOrCurrentWindowYear(state.current_date);
+  const isOpenNow = db.isMarketWindowOpen();
+
+  const rows = db.prepare(`
+    SELECT * FROM market_news
+    WHERE type IN ('transfer_completed', 'player_sold', 'loan_agreed')
+      AND event_date BETWEEN ? AND ?
+    ORDER BY (amount IS NULL) ASC, amount DESC, id ASC
+  `).all(`${year}-07-01`, `${year}-07-31`);
+
+  res.json({
+    window_year: year,
+    is_market_closed: !isOpenNow,
+    transfers: rows,
+  });
+});
+
 module.exports = router;
+module.exports.runLoanReturnsIfDue = runLoanReturnsIfDue;

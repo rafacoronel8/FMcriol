@@ -274,7 +274,7 @@ document.querySelectorAll('.tab').forEach((tab) => {
     if (tab.dataset.tab === 'minhaEquipa') loadSquad();
     if (tab.dataset.tab === 'inscritos') loadInscritos();
     if (tab.dataset.tab === 'tatica') loadTactics();
-    if (tab.dataset.tab === 'mercado') loadMarketNews();
+    if (tab.dataset.tab === 'mercado') { loadMarketNews(); loadWindowSummary(); }
     if (tab.dataset.tab === 'campeonato') loadLeague();
     if (tab.dataset.tab === 'taca') loadCup();
   });
@@ -552,6 +552,12 @@ async function loadMessages(notify = false){
       if(newCount > 0) showNewMessageToast(newCount);
     }
     knownMessageIds = currentIds;
+
+    // Fim de época: assim que aparece o aviso de que a época terminou (ainda
+    // por ler), abre a cerimónia de prémios em vez de esperar que o
+    // utilizador vá procurar a mensagem na caixa de entrada.
+    const rolloverMsg = messages.find((m) => m.type === 'season_rollover' && !m.is_read);
+    if(rolloverMsg) maybeOpenAwardsCeremony(rolloverMsg.id);
   }catch(err){
     // mantém o estado anterior se a caixa de entrada não carregar
   }
@@ -594,6 +600,9 @@ const MESSAGE_ICONS = {
   season_rollover: '📅',
   trophy_won: '🏆',
   award_won: '🏅',
+  transfer_meeting: '🗣️',
+  loan_agreed: '🔄',
+  loan_returned: '↩️',
 };
 
 function truncateText(text, n){
@@ -612,7 +621,8 @@ function fmtMessageTimestamp(createdAt){
 function messageNeedsResponse(m){
   return (m.type === 'incoming_offer_pending' && m.offer_status === 'pending')
     || (m.type === 'player_incident' && m.incident_status === 'pending')
-    || (m.type === 'manager_question' && m.question_status === 'pending');
+    || (m.type === 'manager_question' && m.question_status === 'pending')
+    || (m.type === 'transfer_meeting' && m.meeting_status === 'pending');
 }
 
 function messageSmallAvatar(m){
@@ -725,6 +735,13 @@ function renderMessageDetail(m){
     actions = `<div class="msg-actions msg-actions-question" data-question-id="${m.question_id}">
          ${options.map((o) => `<button class="msg-btn msg-btn-neutral" data-action="${o.key}">${o.label}</button>`).join('')}
        </div>`;
+  }else if(m.type === 'transfer_meeting' && m.meeting_status === 'pending'){
+    actions = `<div class="msg-actions" data-meeting-id="${m.meeting_id}">
+         <button class="msg-btn msg-btn-neutral" data-action="loan">Propor Empréstimo</button>
+         <button class="msg-btn msg-btn-reject" data-action="not_in_plans">Não faz parte dos meus planos</button>
+       </div>`;
+  }else if(m.type === 'transfer_meeting' && m.meeting_resolution){
+    actions = `<p class="msg-decision-note">${m.meeting_resolution}</p>`;
   }
 
   box.innerHTML = `
@@ -754,6 +771,10 @@ function renderMessageDetail(m){
     }else if(actionsBox.dataset.questionId){
       actionsBox.querySelectorAll('.msg-btn').forEach((btn) => {
         btn.addEventListener('click', () => respondToQuestion(actionsBox.dataset.questionId, btn.dataset.action, actionsBox));
+      });
+    }else if(actionsBox.dataset.meetingId){
+      actionsBox.querySelectorAll('.msg-btn').forEach((btn) => {
+        btn.addEventListener('click', () => respondToMeeting(actionsBox.dataset.meetingId, btn.dataset.action, actionsBox));
       });
     }
   }
@@ -846,6 +867,25 @@ async function respondToQuestion(questionId, optionKey, actionsBox){
   }catch(err){
     actionsBox.querySelectorAll('.msg-btn').forEach((b) => (b.disabled = false));
     actionsBox.insertAdjacentHTML('afterend', '<p class="msg-decision-note">Não foi possível responder.</p>');
+  }
+}
+
+/* ---------- Responder a uma reunião de transferência (jogador hesitante) ---------- */
+async function respondToMeeting(meetingId, action, actionsBox){
+  actionsBox.querySelectorAll('.msg-btn').forEach((b) => (b.disabled = true));
+  try{
+    const res = await fetch(`/api/transfers/meetings/${meetingId}/respond`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    if(!res.ok) throw new Error();
+    await loadMessages();
+    await loadClub();
+    loadOverview();
+  }catch(err){
+    actionsBox.querySelectorAll('.msg-btn').forEach((b) => (b.disabled = false));
+    actionsBox.insertAdjacentHTML('afterend', '<p class="msg-decision-note">Não foi possível registar a decisão.</p>');
   }
 }
 
@@ -1635,6 +1675,64 @@ el('tacaDrawBtn').addEventListener('click', async () => {
   }
 });
 
+/* ---------- Cerimónia de Prémios de Fim de Época ---------- */
+let ceremonyShownForMsgId = null;
+
+async function maybeOpenAwardsCeremony(rolloverMsgId){
+  if(ceremonyShownForMsgId === rolloverMsgId) return; // já mostrada nesta sessão
+  ceremonyShownForMsgId = rolloverMsgId;
+
+  try{
+    const res = await fetch(`/api/league/awards-ceremony/${teamId}`);
+    if(!res.ok) throw new Error();
+    const data = await res.json();
+    if(data.status !== 'ready' || !data.awards.length) return;
+
+    openAwardsCeremony(data);
+    fetch(`/api/transfers/messages/${rolloverMsgId}/read`, { method: 'PUT' }).then(() => loadMessages());
+  }catch(err){
+    // se falhar, o utilizador continua a ver os prémios normalmente na caixa de entrada
+  }
+}
+
+function openAwardsCeremony(data){
+  el('ceremonyTitle').textContent = `Época ${data.season_label}`;
+  el('ceremonyReveal').classList.add('hidden');
+
+  el('ceremonyDots').innerHTML = data.awards.map((a, i) => `
+    <div class="ceremony-dot" id="ceremonyDot-${i}" data-index="${i}" title="${a.label}">
+      🏅
+      <span class="ceremony-dot-label">${a.label}</span>
+    </div>`).join('');
+
+  el('ceremonyDots').querySelectorAll('.ceremony-dot').forEach((dot) => {
+    dot.addEventListener('click', () => revealCeremonyAward(data.awards, Number(dot.dataset.index)));
+  });
+
+  el('ceremonyOverlay').classList.remove('hidden');
+}
+
+function revealCeremonyAward(awards, index){
+  const award = awards[index];
+  const dot = el(`ceremonyDot-${index}`);
+  if(!award || !dot || dot.classList.contains('ceremony-dot-revealed')) return;
+
+  dot.classList.add('ceremony-dot-revealed');
+  dot.innerHTML = `${award.icon}<span class="ceremony-dot-label">${award.label}</span>`;
+
+  el('ceremonyRevealIcon').textContent = award.icon;
+  el('ceremonyRevealAward').textContent = award.label;
+  el('ceremonyRevealPhoto').innerHTML = award.player_photo ? `<img src="${award.player_photo}" alt="">` : '🧑';
+  el('ceremonyRevealName').textContent = award.player_name;
+  el('ceremonyRevealTeam').textContent = award.team_name || '';
+  el('ceremonyReveal').classList.remove('hidden');
+}
+
+el('ceremonyClose').addEventListener('click', () => el('ceremonyOverlay').classList.add('hidden'));
+el('ceremonyOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'ceremonyOverlay') el('ceremonyOverlay').classList.add('hidden');
+});
+
 /* ---------- Mercado: jornal de notícias com todas as movimentações ---------- */
 const MARKET_NEWS_ICONS = {
   offer_accepted: '🤝',
@@ -1646,6 +1744,7 @@ const MARKET_NEWS_ICONS = {
   player_sold: '💰',
   offer_declined_by_user: '↩️',
   transfer_interest: '👀',
+  loan_agreed: '🔄',
 };
 
 let marketNewsCache = [];
@@ -1717,6 +1816,49 @@ function renderMarketNews(){
   list.querySelectorAll('.market-news-item').forEach((item) => {
     item.addEventListener('click', () => openNewsModal(Number(item.dataset.newsId)));
   });
+}
+
+/* ---------- Resumo do mercado: painel com todas as transferências do último mercado fechado ---------- */
+async function loadWindowSummary(){
+  const card = el('windowSummaryCard');
+  try{
+    const res = await fetch('/api/transfers/window-summary');
+    if(!res.ok) throw new Error();
+    const data = await res.json();
+    renderWindowSummary(data);
+  }catch(err){
+    card.classList.add('hidden');
+  }
+}
+
+function renderWindowSummary(data){
+  const card = el('windowSummaryCard');
+  const list = el('windowSummaryList');
+
+  if(!data.is_market_closed || !data.transfers.length){
+    card.classList.add('hidden');
+    return;
+  }
+
+  el('windowSummaryTitle').textContent = `Resumo do Mercado ${data.window_year}`;
+  list.innerHTML = data.transfers.map((t, i) => {
+    const photo = t.player_photo ? `<img src="${t.player_photo}" alt="">` : '🧑';
+    const fromShield = t.from_team_shield ? `<img src="${t.from_team_shield}" alt="">` : '';
+    const toShield = t.to_team_shield ? `<img src="${t.to_team_shield}" alt="">` : '';
+    const teams = [t.from_team_name, t.to_team_name].filter(Boolean).join(' → ');
+    return `
+      <div class="window-summary-item">
+        <div class="window-summary-rank">${i + 1}</div>
+        <div class="window-summary-photo">${photo}</div>
+        <div class="window-summary-mid">
+          <div class="window-summary-player">${t.player_name || '—'}</div>
+          <div class="window-summary-teams">${fromShield}${toShield}<span>${teams}</span></div>
+        </div>
+        ${t.amount ? `<div class="window-summary-amount">${fmtMoney(t.amount)}</div>` : ''}
+      </div>`;
+  }).join('');
+
+  card.classList.remove('hidden');
 }
 
 function openNewsModal(newsId){

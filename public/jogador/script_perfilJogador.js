@@ -771,6 +771,9 @@ const AWARD_LABELS = {
   best_defender: 'Melhor Defesa',
   best_assist: 'Melhor Assistente',
   best_goalkeeper: 'Melhor Guarda-Redes',
+  cup_top_scorer: 'Melhor Marcador da Taça',
+  cup_best_assist: 'Melhor Assistente da Taça',
+  cup_best_defender: 'Melhor Defesa da Taça',
 };
 const AWARD_ICONS = {
   best_player: '👑',
@@ -778,6 +781,9 @@ const AWARD_ICONS = {
   best_defender: '🛡️',
   best_assist: '🎯',
   best_goalkeeper: '🧤',
+  cup_top_scorer: '🏆⚽',
+  cup_best_assist: '🏆🎯',
+  cup_best_defender: '🏆🛡️',
 };
 
 function fmtAwardDate(isoDate){

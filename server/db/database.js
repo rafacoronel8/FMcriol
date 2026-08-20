@@ -128,6 +128,24 @@ const PLAYER_COLUMNS = [
   // transferido uma vez até o mercado fechar (ver isMarketWindowOpen abaixo).
   ['transferred_in_window', 'INTEGER DEFAULT 0'],
 
+  /* ---------- Empréstimos ----------
+     loan_from_team_id -> clube "dono" do jogador enquanto ele está emprestado
+                           (team_id passa a ser o clube que o está a usar).
+                           NULL quando o jogador não está emprestado.
+     loan_return_date  -> data do calendário do jogo em que o empréstimo acaba
+                           e o jogador volta automaticamente para loan_from_team_id
+                           (ver runLoanReturnsIfDue em routes/transfers.js, chamado
+                           a partir de POST /api/game/advance). Sempre a 1 de julho
+                           da época seguinte à do empréstimo — ver reunião de
+                           transferência em routes/transfers.js. */
+  ['loan_from_team_id', 'INTEGER'],
+  ['loan_return_date', 'TEXT'],
+
+  /* Vontade extra de mudar de clube, ganha numa "reunião de transferência"
+     depois de o jogador ter recusado uma primeira vez (opção "não faz parte
+     dos planos" — ver routes/transfers.js). Consumida assim que é usada. */
+  ['consent_boost', 'REAL DEFAULT 0'],
+
   /* ---------- Moral / personalidade do balneário ----------
      stood_down_until  -> data (do calendário do jogo) até à qual o jogador fica de fora
                            de qualquer escolha para o onze/suplentes, depois de o
@@ -344,6 +362,30 @@ CREATE TABLE IF NOT EXISTS manager_questions (
 
 if (!messageCols.includes('incident_id')) db.exec('ALTER TABLE messages ADD COLUMN incident_id INTEGER REFERENCES player_incidents(id)');
 if (!messageCols.includes('question_id')) db.exec('ALTER TABLE messages ADD COLUMN question_id INTEGER REFERENCES manager_questions(id)');
+
+/* ---------- Reuniões de transferência ----------
+   Criada quando o clube vendedor aceita uma proposta mas o PRÓPRIO
+   JOGADOR recusa mudar-se (ver decidePlayerConsent em routes/transfers.js).
+   Em vez do negócio cair logo ali, o treinador vendedor fica com a
+   oportunidade de reunir com o jogador antes de o negócio ser dado como
+   falhado — ver PUT /api/transfers/meetings/:id/respond. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS transfer_meetings (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id            INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  player_id          INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  buyer_team_id      INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  transfer_offer_id  INTEGER NOT NULL REFERENCES transfer_offers(id) ON DELETE CASCADE,
+  offer_amount       REAL NOT NULL,
+  status             TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','resolved')),
+  resolution         TEXT,
+  event_date         TEXT NOT NULL,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_transfer_meetings_team ON transfer_meetings(team_id);
+`);
+if (!messageCols.includes('meeting_id')) db.exec('ALTER TABLE messages ADD COLUMN meeting_id INTEGER REFERENCES transfer_meetings(id)');
 
 /* ---------- Backfill: jogadores já existentes que ainda não têm original_team_id
    ficam com o clube atual como "clube de origem" (melhor opção possível sem re-semear). */
@@ -885,7 +927,10 @@ CREATE TABLE IF NOT EXISTS player_awards (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   player_id     INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
   team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
-  award_key     TEXT NOT NULL CHECK (award_key IN ('best_player','top_scorer','best_defender','best_assist','best_goalkeeper')),
+  award_key     TEXT NOT NULL CHECK (award_key IN (
+                  'best_player','top_scorer','best_defender','best_assist','best_goalkeeper',
+                  'cup_top_scorer','cup_best_assist','cup_best_defender'
+                )),
   season_label  TEXT NOT NULL,
   won_date      TEXT NOT NULL,
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
@@ -893,12 +938,46 @@ CREATE TABLE IF NOT EXISTS player_awards (
 CREATE INDEX IF NOT EXISTS idx_player_awards_player ON player_awards(player_id);
 `);
 
+/* ---------- Migração segura: alarga o CHECK de award_key ----------
+   Bases de dados criadas antes dos prémios da Taça (cup_top_scorer,
+   cup_best_assist, cup_best_defender) têm a tabela já criada com o CHECK
+   antigo — "CREATE TABLE IF NOT EXISTS" acima não o atualiza. SQLite não
+   permite alterar um CHECK existente, por isso recria-se a tabela quando
+   o CHECK guardado no próprio SQLite ainda não conhece as chaves novas. */
+{
+  const schemaRow = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'player_awards'").get();
+  if (schemaRow && !schemaRow.sql.includes('cup_top_scorer')) {
+    db.exec(`
+      ALTER TABLE player_awards RENAME TO player_awards_old;
+      CREATE TABLE player_awards (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id     INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+        award_key     TEXT NOT NULL CHECK (award_key IN (
+                        'best_player','top_scorer','best_defender','best_assist','best_goalkeeper',
+                        'cup_top_scorer','cup_best_assist','cup_best_defender'
+                      )),
+        season_label  TEXT NOT NULL,
+        won_date      TEXT NOT NULL,
+        created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO player_awards (id, player_id, team_id, award_key, season_label, won_date, created_at)
+        SELECT id, player_id, team_id, award_key, season_label, won_date, created_at FROM player_awards_old;
+      DROP TABLE player_awards_old;
+      CREATE INDEX IF NOT EXISTS idx_player_awards_player ON player_awards(player_id);
+    `);
+  }
+}
+
 db.AWARD_LABELS = {
   best_player: 'Melhor Jogador',
   top_scorer: 'Melhor Marcador',
   best_defender: 'Melhor Defesa',
   best_assist: 'Melhor Assistente',
   best_goalkeeper: 'Melhor Guarda-Redes',
+  cup_top_scorer: 'Melhor Marcador da Taça',
+  cup_best_assist: 'Melhor Assistente da Taça',
+  cup_best_defender: 'Melhor Defesa da Taça',
 };
 db.AWARD_ICONS = {
   best_player: '👑',
@@ -906,7 +985,17 @@ db.AWARD_ICONS = {
   best_defender: '🛡️',
   best_assist: '🎯',
   best_goalkeeper: '🧤',
+  cup_top_scorer: '🏆⚽',
+  cup_best_assist: '🏆🎯',
+  cup_best_defender: '🏆🛡️',
 };
+/* Ordem "de gala" para a cerimónia de prémios (ver GET
+   /api/league/awards-ceremony/:teamId) — os prémios da Taça primeiro,
+   depois os do Campeonato/geral, a fechar sempre com o Melhor Jogador. */
+db.AWARD_CEREMONY_ORDER = [
+  'cup_top_scorer', 'cup_best_assist', 'cup_best_defender',
+  'top_scorer', 'best_assist', 'best_goalkeeper', 'best_defender', 'best_player',
+];
 
 /* ---------- Especialização do jogador (escolhida no perfil) ----------
    Goleador -> pesa mais a favor deste jogador quando se escolhe quem marca

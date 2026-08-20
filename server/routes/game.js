@@ -8,6 +8,7 @@ const db = require('../db/database');
 const liveMatch = require('./liveMatch');
 const league = require('./league');
 const cup = require('./cup');
+const transfers = require('./transfers');
 const morale = require('./morale');
 
 const router = express.Router();
@@ -150,6 +151,11 @@ router.post('/reset', (req, res) => {
     /* Palmarés e prémios individuais também recomeçam do zero num "Novo Jogo". */
     db.prepare('DELETE FROM trophies').run();
     db.prepare('DELETE FROM player_awards').run();
+
+    /* Reuniões de transferência e empréstimos por resolver de um save
+       anterior também não fazem sentido continuar. */
+    db.prepare('DELETE FROM transfer_meetings').run();
+    db.prepare('UPDATE players SET loan_from_team_id = NULL, loan_return_date = NULL, consent_boost = 0').run();
 
     /* Comissão técnica: volta toda para a bolsa de contratação disponível —
        um "Novo Jogo" começa sem nenhum adjunto/fisioterapeuta/preparador
@@ -1224,6 +1230,10 @@ router.post('/advance', (req, res) => {
      depois de sorteadas (ver routes/cup.js) — se não houver nenhuma ronda
      agendada para hoje, isto não faz nada. */
   const cupResults = cup.runCupTick(nextDateStr);
+
+  /* Empréstimos: jogadores cuja loan_return_date chegou voltam hoje
+     automaticamente ao clube de origem — ver routes/transfers.js. */
+  transfers.runLoanReturnsIfDue(nextDateStr);
 
   /* Cache partilhada das necessidades do plantel (por posição) para este
      avanço de dia — assim as duas funções abaixo veem sempre a versão mais

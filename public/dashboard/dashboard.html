@@ -74,13 +74,21 @@
   </section>
 
   <section class="tab-panel hidden" id="panel-mercado">
-    <div class="card">
-      <div class="messages-header">
-        <div class="card-title no-margin">Mercado de Transferências</div>
-        <span class="market-hint">Clica numa notícia para veres os detalhes</span>
+    <div class="market-layout">
+      <div class="card market-layout-news">
+        <div class="messages-header">
+          <div class="card-title no-margin">Mercado de Transferências</div>
+          <span class="market-hint">Clica numa notícia para veres os detalhes</span>
+        </div>
+        <div class="market-news-list" id="marketNewsList"></div>
+        <p class="placeholder-text hidden" id="marketNewsEmpty">Ainda não há movimentações no mercado. Avança o calendário para veres a atividade dos outros clubes.</p>
       </div>
-      <div class="market-news-list" id="marketNewsList"></div>
-      <p class="placeholder-text hidden" id="marketNewsEmpty">Ainda não há movimentações no mercado. Avança o calendário para veres a atividade dos outros clubes.</p>
+
+      <div class="card market-layout-summary hidden" id="windowSummaryCard">
+        <div class="card-title no-margin" id="windowSummaryTitle">Resumo do Mercado</div>
+        <p class="market-hint">Todas as transferências concluídas, por ordem de relevância</p>
+        <div class="window-summary-list" id="windowSummaryList"></div>
+      </div>
     </div>
   </section>
 
@@ -465,6 +473,28 @@
     <div class="news-modal-teams" id="newsModalTeams"></div>
     <p class="news-modal-body" id="newsModalBody"></p>
     <div class="news-modal-amount hidden" id="newsModalAmount"></div>
+  </div>
+</div>
+
+<!-- ===== Cerimónia de Prémios de Fim de Época ===== -->
+<div id="ceremonyOverlay" class="ceremony-overlay hidden">
+  <div class="ceremony-modal">
+    <button class="news-modal-close" id="ceremonyClose" aria-label="Fechar">×</button>
+    <div class="ceremony-kicker">CERIMÓNIA DE PRÉMIOS</div>
+    <h2 class="ceremony-title" id="ceremonyTitle">Época 2026/2027</h2>
+    <p class="ceremony-hint">Clica em cada bolinha para revelares o vencedor</p>
+
+    <div class="ceremony-dots" id="ceremonyDots"><!-- gerado via JS --></div>
+
+    <div class="ceremony-reveal hidden" id="ceremonyReveal">
+      <div class="ceremony-reveal-icon" id="ceremonyRevealIcon">🏅</div>
+      <div class="ceremony-reveal-award" id="ceremonyRevealAward">Melhor Jogador</div>
+      <div class="ceremony-reveal-player">
+        <div class="ceremony-reveal-photo" id="ceremonyRevealPhoto">🧑</div>
+        <div class="ceremony-reveal-name" id="ceremonyRevealName"></div>
+        <div class="ceremony-reveal-team" id="ceremonyRevealTeam"></div>
+      </div>
+    </div>
   </div>
 </div>
 

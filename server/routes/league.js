@@ -211,6 +211,34 @@ function assignSeasonAwards(teamIds, seasonLabel, wonDate) {
   award('best_player', [...eligible].sort((a, b) => b.avg_rating - a.avg_rating)[0]);
   award('best_defender', [...eligible].filter((r) => classifyForAwards(r.position_code) === 'DEF').sort((a, b) => b.avg_rating - a.avg_rating)[0]);
   award('best_goalkeeper', [...eligible].filter((r) => classifyForAwards(r.position_code) === 'GR').sort((a, b) => b.avg_rating - a.avg_rating)[0]);
+
+  /* ---------- Prémios só da Taça São Vicente ----------
+     Mesma ideia dos prémios combinados acima, mas usando só estatísticas
+     de jogos da Taça (competition = 'cup') — para equipas eliminadas cedo,
+     ou em épocas em que a Taça nem chegou a terminar antes do 1 de agosto,
+     simplesmente não há dados suficientes e o prémio não é atribuído. */
+  const cupRows = db.prepare(`
+    SELECT fps.player_id, fps.team_id, p.name AS player_name, p.position_code,
+      SUM(fps.goals) AS goals, SUM(fps.assists) AS assists,
+      AVG(fps.rating) AS avg_rating, COUNT(*) AS games
+    FROM friendly_player_stats fps
+    JOIN players p ON p.id = fps.player_id
+    WHERE fps.competition = 'cup' AND fps.player_id IS NOT NULL AND fps.team_id IN (${placeholders})
+    GROUP BY fps.player_id
+  `).all(...teamIds);
+
+  if (cupRows.length) {
+    const cupTopScorer = [...cupRows].sort((a, b) => b.goals - a.goals)[0];
+    award('cup_top_scorer', cupTopScorer.goals > 0 ? cupTopScorer : null);
+
+    const cupTopAssist = [...cupRows].sort((a, b) => b.assists - a.assists)[0];
+    award('cup_best_assist', cupTopAssist.assists > 0 ? cupTopAssist : null);
+
+    const cupBestDefender = [...cupRows]
+      .filter((r) => classifyForAwards(r.position_code) === 'DEF')
+      .sort((a, b) => b.avg_rating - a.avg_rating)[0];
+    award('cup_best_defender', cupBestDefender);
+  }
 }
 
 /* ---------- Reinício automático da época ----------
@@ -462,6 +490,55 @@ router.get('/:teamId', (req, res) => {
     leaders,
     upcoming,
     history,
+  });
+});
+
+/* ---------- GET /api/league/awards-ceremony/:teamId — cerimónia de prémios ----------
+   Devolve os prémios da época mais recente já atribuída à divisão do clube
+   (Campeonato + Taça, incluindo os prémios só da Taça), na ordem "de gala"
+   definida em db.AWARD_CEREMONY_ORDER — para a interface mostrar uma
+   bolinha por prémio, clicável, que revela o vencedor ao ser clicada.
+   Devolve status 'none' se a divisão ainda não teve nenhuma época
+   terminada (ex: primeiro ano de um save novo). */
+router.get('/awards-ceremony/:teamId', (req, res) => {
+  const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(req.params.teamId);
+  if (!team) return res.status(404).json({ error: 'Equipa não encontrada' });
+
+  const divisionTeamIds = db.prepare('SELECT id FROM teams WHERE division = ?').all(team.division).map((t) => t.id);
+  if (!divisionTeamIds.length) return res.json({ status: 'none' });
+  const placeholders = divisionTeamIds.map(() => '?').join(',');
+
+  const latest = db.prepare(`
+    SELECT season_label, won_date FROM player_awards
+    WHERE team_id IN (${placeholders})
+    ORDER BY won_date DESC, id DESC LIMIT 1
+  `).get(...divisionTeamIds);
+  if (!latest) return res.json({ status: 'none' });
+
+  const rows = db.prepare(`
+    SELECT pa.award_key, pa.player_id, p.name AS player_name, p.photo_path AS player_photo,
+           t.id AS team_id, t.name AS team_name, t.shield_path AS team_shield
+    FROM player_awards pa
+    JOIN players p ON p.id = pa.player_id
+    LEFT JOIN teams t ON t.id = pa.team_id
+    WHERE pa.season_label = ? AND pa.won_date = ? AND pa.team_id IN (${placeholders})
+  `).all(latest.season_label, latest.won_date, ...divisionTeamIds);
+
+  const byKey = new Map(rows.map((r) => [r.award_key, r]));
+  const awards = db.AWARD_CEREMONY_ORDER
+    .filter((key) => byKey.has(key))
+    .map((key) => ({
+      award_key: key,
+      label: db.AWARD_LABELS[key] || key,
+      icon: db.AWARD_ICONS[key] || '🏅',
+      ...byKey.get(key),
+    }));
+
+  res.json({
+    status: awards.length ? 'ready' : 'none',
+    season_label: latest.season_label,
+    won_date: latest.won_date,
+    awards,
   });
 });
 
