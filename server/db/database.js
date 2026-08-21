@@ -365,25 +365,48 @@ CREATE TABLE IF NOT EXISTS manager_questions (
    criadas antes do pedido de tempo de jogo ('playing_time') têm a tabela
    já criada com o CHECK antigo. */
 {
+  /* Defensivo: se um arranque anterior falhou a meio desta mesma migração
+     (ex: erro entre o RENAME e o DROP), ficava para trás uma tabela
+     "player_incidents_old" órfã — e como db.exec corria cada instrução com
+     o seu próprio commit automático, um erro a meio NÃO desfazia os passos
+     já feitos. Isso deixava o jogo preso: o schema de player_incidents já
+     tinha 'playing_time' (por isso a migração nunca mais voltava a correr),
+     mas a tabela "_old" continuava lá — e QUALQUER coluna com uma FOREIGN
+     KEY criada nesse intervalo (ex: messages.incident_id, ver mais abaixo)
+     ou uma nova tentativa de migração passava a apontar/mexer numa tabela
+     que já não devia existir, rebentando com "no such table:
+     main.player_incidents_old". Envolver tudo numa única transação evita
+     que isto volte a acontecer (ou tudo corre, ou nada fica feito), e o
+     DROP TABLE IF EXISTS no arranque limpa qualquer resto que já tenha
+     ficado de trás por este motivo antes de tentar outra vez. */
   const schemaRow = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'player_incidents'").get();
   if (schemaRow && !schemaRow.sql.includes('playing_time')) {
-    db.exec(`
-      ALTER TABLE player_incidents RENAME TO player_incidents_old;
-      CREATE TABLE player_incidents (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        team_id     INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-        player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-        kind        TEXT NOT NULL CHECK (kind IN ('fight','tantrum','playing_time')),
-        status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','resolved')),
-        resolution  TEXT,
-        event_date  TEXT NOT NULL,
-        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-        resolved_at TEXT
-      );
-      INSERT INTO player_incidents (id, team_id, player_id, kind, status, resolution, event_date, created_at, resolved_at)
-        SELECT id, team_id, player_id, kind, status, resolution, event_date, created_at, resolved_at FROM player_incidents_old;
-      DROP TABLE player_incidents_old;
-    `);
+    db.transaction(() => {
+      db.exec('DROP TABLE IF EXISTS player_incidents_old');
+      db.exec('ALTER TABLE player_incidents RENAME TO player_incidents_old');
+      db.exec(`
+        CREATE TABLE player_incidents (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          team_id     INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+          player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          kind        TEXT NOT NULL CHECK (kind IN ('fight','tantrum','playing_time')),
+          status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','resolved')),
+          resolution  TEXT,
+          event_date  TEXT NOT NULL,
+          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          resolved_at TEXT
+        );
+      `);
+      db.exec(`
+        INSERT INTO player_incidents (id, team_id, player_id, kind, status, resolution, event_date, created_at, resolved_at)
+          SELECT id, team_id, player_id, kind, status, resolution, event_date, created_at, resolved_at FROM player_incidents_old
+      `);
+      db.exec('DROP TABLE player_incidents_old');
+    })();
+  } else {
+    /* Limpa qualquer tabela órfã de uma falha anterior mesmo quando a
+       migração acima já não precisa de correr desta vez. */
+    db.exec('DROP TABLE IF EXISTS player_incidents_old');
   }
 }
 
@@ -419,6 +442,58 @@ if (!messageCols.includes('meeting_id')) db.exec('ALTER TABLE messages ADD COLUM
    (club_friendlies.status ainda 'accepted') e abrir o jogo certo a partir dos
    botões Jogar/Simular. Ver routes/game.js e routes/liveMatch.js. */
 if (!messageCols.includes('friendly_id')) db.exec('ALTER TABLE messages ADD COLUMN friendly_id INTEGER REFERENCES club_friendlies(id)');
+
+/* ---------- Reparação: FK partida em messages.incident_id ("player_incidents_old") ----------
+   Isto é o que estava mesmo a causar o crash em produção, mesmo depois da
+   migração de player_incidents acima ter sido tornada atómica: numa versão
+   ANTIGA do código, a linha "ALTER TABLE messages ADD COLUMN incident_id ..."
+   correu num momento em que a tabela ainda se chamava "player_incidents_old"
+   (a meio de uma migração anterior que falhou a meio). O SQLite guarda o
+   texto do REFERENCES tal como foi escrito nesse momento — por isso a
+   coluna incident_id de bases de dados já existentes ficou PARA SEMPRE a
+   apontar para "player_incidents_old", mesmo depois do código ter sido
+   corrigido. Com PRAGMA foreign_keys = ON, qualquer INSERT/UPDATE em
+   messages (ex: mensagens da caixa de entrada durante amigáveis — ver
+   routes/game.js) obriga o SQLite a verificar essa referência e falha com
+   "no such table: main.player_incidents_old", porque essa tabela nunca
+   voltou a existir. A única forma de corrigir isto numa base de dados que
+   já tem o problema é reconstruir a tabela messages do zero, com o
+   REFERENCES correto — não há "ALTER TABLE ... DROP CONSTRAINT" em SQLite. */
+{
+  const messagesSchema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'").get();
+  if (messagesSchema && messagesSchema.sql.includes('player_incidents_old')) {
+    db.transaction(() => {
+      db.exec('DROP TABLE IF EXISTS messages_fixed');
+      db.exec(`
+        CREATE TABLE messages_fixed (
+          id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+          team_id            INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+          type               TEXT NOT NULL DEFAULT 'info',
+          title              TEXT NOT NULL,
+          body               TEXT NOT NULL,
+          player_id          INTEGER REFERENCES players(id) ON DELETE SET NULL,
+          is_read            INTEGER NOT NULL DEFAULT 0,
+          created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+          related_team_id    INTEGER,
+          transfer_offer_id  INTEGER,
+          incident_id        INTEGER REFERENCES player_incidents(id),
+          question_id        INTEGER REFERENCES manager_questions(id),
+          meeting_id         INTEGER REFERENCES transfer_meetings(id),
+          friendly_id        INTEGER REFERENCES club_friendlies(id)
+        );
+      `);
+      db.exec(`
+        INSERT INTO messages_fixed
+          (id, team_id, type, title, body, player_id, is_read, created_at, related_team_id, transfer_offer_id, incident_id, question_id, meeting_id, friendly_id)
+        SELECT id, team_id, type, title, body, player_id, is_read, created_at, related_team_id, transfer_offer_id, incident_id, question_id, meeting_id, friendly_id
+        FROM messages
+      `);
+      db.exec('DROP TABLE messages');
+      db.exec('ALTER TABLE messages_fixed RENAME TO messages');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_messages_team ON messages(team_id)');
+    })();
+  }
+}
 
 /* ---------- Backfill: jogadores já existentes que ainda não têm original_team_id
    ficam com o clube atual como "clube de origem" (melhor opção possível sem re-semear). */
@@ -680,36 +755,43 @@ for (const [colName, colDef] of FRIENDLY_STAT_COLUMNS) {
    friendly_id era obrigatório). Só corre uma vez — fica marcada pela
    presença da coluna "competition". */
 {
+  /* Mesma proteção aplicada a player_incidents/player_awards — ver o
+     comentário grande junto a "player_incidents_old" mais acima. */
   const cols = db.prepare("PRAGMA table_info(friendly_player_stats)").all();
   const hasCompetitionCol = cols.some((c) => c.name === 'competition');
   if (!hasCompetitionCol) {
-    db.exec('ALTER TABLE friendly_player_stats RENAME TO friendly_player_stats_old');
-    db.exec(`
-      CREATE TABLE friendly_player_stats (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        friendly_id   INTEGER REFERENCES club_friendlies(id) ON DELETE CASCADE,
-        competition   TEXT NOT NULL DEFAULT 'friendly' CHECK (competition IN ('friendly','league','cup')),
-        team_id       INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-        player_id     INTEGER REFERENCES players(id) ON DELETE SET NULL,
-        player_name   TEXT NOT NULL,
-        position_tag  TEXT,
-        goals         INTEGER NOT NULL DEFAULT 0,
-        assists       INTEGER NOT NULL DEFAULT 0,
-        rating        REAL NOT NULL DEFAULT 6.0,
-        yellow_cards  INTEGER DEFAULT 0,
-        red_card      INTEGER DEFAULT 0,
-        tackles       INTEGER DEFAULT 0,
-        pass_pct      REAL,
-        created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-    `);
-    db.exec(`
-      INSERT INTO friendly_player_stats
-        (id, friendly_id, competition, team_id, player_id, player_name, position_tag, goals, assists, rating, yellow_cards, red_card, tackles, pass_pct, created_at)
-      SELECT id, friendly_id, 'friendly', team_id, player_id, player_name, position_tag, goals, assists, rating, yellow_cards, red_card, 0, NULL, created_at
-      FROM friendly_player_stats_old
-    `);
-    db.exec('DROP TABLE friendly_player_stats_old');
+    db.transaction(() => {
+      db.exec('DROP TABLE IF EXISTS friendly_player_stats_old');
+      db.exec('ALTER TABLE friendly_player_stats RENAME TO friendly_player_stats_old');
+      db.exec(`
+        CREATE TABLE friendly_player_stats (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          friendly_id   INTEGER REFERENCES club_friendlies(id) ON DELETE CASCADE,
+          competition   TEXT NOT NULL DEFAULT 'friendly' CHECK (competition IN ('friendly','league','cup')),
+          team_id       INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+          player_id     INTEGER REFERENCES players(id) ON DELETE SET NULL,
+          player_name   TEXT NOT NULL,
+          position_tag  TEXT,
+          goals         INTEGER NOT NULL DEFAULT 0,
+          assists       INTEGER NOT NULL DEFAULT 0,
+          rating        REAL NOT NULL DEFAULT 6.0,
+          yellow_cards  INTEGER DEFAULT 0,
+          red_card      INTEGER DEFAULT 0,
+          tackles       INTEGER DEFAULT 0,
+          pass_pct      REAL,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec(`
+        INSERT INTO friendly_player_stats
+          (id, friendly_id, competition, team_id, player_id, player_name, position_tag, goals, assists, rating, yellow_cards, red_card, tackles, pass_pct, created_at)
+        SELECT id, friendly_id, 'friendly', team_id, player_id, player_name, position_tag, goals, assists, rating, yellow_cards, red_card, 0, NULL, created_at
+        FROM friendly_player_stats_old
+      `);
+      db.exec('DROP TABLE friendly_player_stats_old');
+    })();
+  } else {
+    db.exec('DROP TABLE IF EXISTS friendly_player_stats_old');
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_friendly_player_stats_friendly ON friendly_player_stats(friendly_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_friendly_player_stats_competition ON friendly_player_stats(competition, player_id)');
@@ -984,29 +1066,85 @@ CREATE INDEX IF NOT EXISTS idx_player_awards_player ON player_awards(player_id);
    permite alterar um CHECK existente, por isso recria-se a tabela quando
    o CHECK guardado no próprio SQLite ainda não conhece as chaves novas. */
 {
+  /* Mesma proteção aplicada acima a player_incidents — ver o comentário
+     grande junto a "player_incidents_old" para a explicação completa do
+     porquê de isto ter de ser atómico. */
   const schemaRow = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'player_awards'").get();
   if (schemaRow && !schemaRow.sql.includes('cup_top_scorer')) {
-    db.exec(`
-      ALTER TABLE player_awards RENAME TO player_awards_old;
-      CREATE TABLE player_awards (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        player_id     INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-        team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
-        award_key     TEXT NOT NULL CHECK (award_key IN (
-                        'best_player','top_scorer','best_defender','best_assist','best_goalkeeper',
-                        'cup_top_scorer','cup_best_assist','cup_best_defender'
-                      )),
-        season_label  TEXT NOT NULL,
-        won_date      TEXT NOT NULL,
-        created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      INSERT INTO player_awards (id, player_id, team_id, award_key, season_label, won_date, created_at)
-        SELECT id, player_id, team_id, award_key, season_label, won_date, created_at FROM player_awards_old;
-      DROP TABLE player_awards_old;
-      CREATE INDEX IF NOT EXISTS idx_player_awards_player ON player_awards(player_id);
-    `);
+    db.transaction(() => {
+      db.exec('DROP TABLE IF EXISTS player_awards_old');
+      db.exec('ALTER TABLE player_awards RENAME TO player_awards_old');
+      db.exec(`
+        CREATE TABLE player_awards (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          player_id     INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+          award_key     TEXT NOT NULL CHECK (award_key IN (
+                          'best_player','top_scorer','best_defender','best_assist','best_goalkeeper',
+                          'cup_top_scorer','cup_best_assist','cup_best_defender'
+                        )),
+          season_label  TEXT NOT NULL,
+          won_date      TEXT NOT NULL,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec(`
+        INSERT INTO player_awards (id, player_id, team_id, award_key, season_label, won_date, created_at)
+          SELECT id, player_id, team_id, award_key, season_label, won_date, created_at FROM player_awards_old
+      `);
+      db.exec('DROP TABLE player_awards_old');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_player_awards_player ON player_awards(player_id)');
+    })();
+  } else {
+    db.exec('DROP TABLE IF EXISTS player_awards_old');
   }
 }
+
+/* ---------- Histórico de carreira: estatísticas por época + títulos coletivos ----------
+   Até aqui, o fim de uma época (runSeasonRolloverIfDue em routes/league.js)
+   limpava season_stats_json e friendly_player_stats do Campeonato/Taça sem
+   guardar nada — a aba "Carreira" do perfil só tinha os 3 totais manuais
+   (career_clubs/career_apps/career_goals) e os prémios individuais, nunca
+   um histórico ano a ano. player_season_history guarda uma "fotografia"
+   das estatísticas de cada jogador por competição, no momento em que a
+   época fecha. player_trophies faz o mesmo para os troféus de equipa
+   (Campeonato/Taça): fica registado para cada jogador que estava no
+   plantel da equipa campeã nesse preciso momento, para o perfil dele
+   poder mostrar também os títulos coletivos que ajudou a conquistar. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS player_season_history (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  player_id     INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  team_name     TEXT,
+  team_shield   TEXT,
+  season_label  TEXT NOT NULL,
+  competition   TEXT NOT NULL,
+  games         INTEGER NOT NULL DEFAULT 0,
+  goals         INTEGER NOT NULL DEFAULT 0,
+  assists       INTEGER NOT NULL DEFAULT 0,
+  yellow_cards  INTEGER NOT NULL DEFAULT 0,
+  red_cards     INTEGER NOT NULL DEFAULT 0,
+  tackles       INTEGER NOT NULL DEFAULT 0,
+  pass_pct      REAL,
+  rating        REAL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_player_season_history_player ON player_season_history(player_id);
+
+CREATE TABLE IF NOT EXISTS player_trophies (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  player_id     INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  team_name     TEXT,
+  team_shield   TEXT,
+  competition   TEXT NOT NULL CHECK (competition IN ('league','cup')),
+  season_label  TEXT NOT NULL,
+  won_date      TEXT NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_player_trophies_player ON player_trophies(player_id);
+`);
 
 db.AWARD_LABELS = {
   best_player: 'Melhor Jogador',

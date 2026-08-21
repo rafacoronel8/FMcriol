@@ -486,6 +486,8 @@ function queueSave(patch){
   saveTimer = setTimeout(flushSave, 500);
 }
 
+const ATTRIBUTE_JSON_FIELDS = ['technical_json', 'set_pieces_json', 'mental_json', 'physical_json', 'goalkeeping_json'];
+
 async function flushSave(){
   if(!playerId || Object.keys(saveQueue).length === 0) return;
   const payload = saveQueue;
@@ -498,6 +500,17 @@ async function flushSave(){
     });
     if(!res.ok) throw new Error('Falha ao gravar');
     setSaveStatus('saved');
+
+    /* Um atributo individual (Técnica/Bolas Paradas/Mental/Físico/GR) foi
+       editado à mão nesta gravação — o valor de mercado e o salário têm de
+       subir/descer na mesma proporção, usando a mesma fórmula do botão
+       "Gerar Atributos" (ver refreshMarketValue() / PUT
+       /api/players/:id/generate-value), em vez de ficarem "presos" no
+       valor calculado da última vez que o Nível Geral foi usado. Só corre
+       DEPOIS de a gravação do atributo ter sido confirmada, para nunca
+       recalcular a partir de um valor ainda por gravar. */
+    const touchedAttributes = Object.keys(payload).some((key) => ATTRIBUTE_JSON_FIELDS.includes(key));
+    if(touchedAttributes) await refreshMarketValue();
   }catch(err){
     setSaveStatus('error');
   }
@@ -759,6 +772,9 @@ function fillFromPlayer(p){
   el('careerGoals').textContent = p.career_goals ?? 0;
 
   renderBadges(p.awards || []);
+  renderBadges(p.awards || [], 'careerBadgesList');
+  renderCareerHistory(p.season_history || []);
+  renderCollectiveTrophies(p.trophies || []);
 
   setupNegotiateTab(p);
   setupOriginClubField(p);
@@ -792,8 +808,8 @@ function fmtAwardDate(isoDate){
   return `${d}/${m}/${y}`;
 }
 
-function renderBadges(awards){
-  const box = el('badgesList');
+function renderBadges(awards, targetId = 'badgesList'){
+  const box = el(targetId);
   if(!box) return;
   if(!awards.length){
     box.innerHTML = '<p class="placeholder-text">Sem prémios ganhos ainda.</p>';
@@ -805,6 +821,58 @@ function renderBadges(awards){
       <div class="badge-info">
         <span class="badge-label">${AWARD_LABELS[a.award_key] || a.award_key}</span>
         <span class="badge-meta">${a.season_label} · ${fmtAwardDate(a.won_date)}</span>
+      </div>
+    </div>`).join('');
+}
+
+/* ---------- Aba Carreira: histórico ano a ano + títulos coletivos ----------
+   season_history vem já arquivado por época (ver runSeasonRolloverIfDue em
+   routes/league.js) — uma linha por competição (Campeonato/Taça) por época
+   em que o jogador realmente jogou. trophies são os títulos de equipa que
+   o jogador ajudou a conquistar (creditado a todo o plantel da equipa
+   campeã no momento em que a época fechou). */
+function renderCareerHistory(rows){
+  const body = el('careerHistoryBody');
+  const empty = el('careerHistoryEmpty');
+  if(!body) return;
+  if(!rows.length){
+    body.innerHTML = '';
+    empty?.classList.remove('hidden');
+    return;
+  }
+  empty?.classList.add('hidden');
+  body.innerHTML = rows.map((r) => `
+    <tr>
+      <td class="career-season-label">${r.season_label}</td>
+      <td>${r.team_name || '—'}</td>
+      <td>${r.competition}</td>
+      <td>${r.games ?? 0}</td>
+      <td>${r.goals ?? 0}</td>
+      <td>${r.assists ?? 0}</td>
+      <td>${r.yellow_cards ?? 0}</td>
+      <td>${r.red_cards ?? 0}</td>
+      <td>${r.tackles ?? 0}</td>
+      <td>${r.pass_pct != null ? `${r.pass_pct}%` : '-'}</td>
+      <td class="rating">${r.rating != null ? Number(r.rating).toFixed(2) : '-'}</td>
+    </tr>`).join('');
+}
+
+const TROPHY_LABELS = { league: 'Campeão do Campeonato', cup: 'Campeão da Taça São Vicente' };
+const TROPHY_ICONS = { league: '🏆', cup: '🏆⚔️' };
+
+function renderCollectiveTrophies(trophies){
+  const box = el('collectiveTrophiesList');
+  if(!box) return;
+  if(!trophies.length){
+    box.innerHTML = '<p class="placeholder-text">Sem títulos coletivos ainda.</p>';
+    return;
+  }
+  box.innerHTML = trophies.map((t) => `
+    <div class="trophy-item">
+      <div class="trophy-icon">${TROPHY_ICONS[t.competition] || '🏆'}</div>
+      <div class="trophy-info">
+        <span class="trophy-label">${TROPHY_LABELS[t.competition] || t.competition} · ${t.team_name || ''}</span>
+        <span class="trophy-meta">${t.season_label} · ${fmtAwardDate(t.won_date)}</span>
       </div>
     </div>`).join('');
 }
@@ -913,17 +981,7 @@ el('generateAttrsBtn')?.addEventListener('click', async () => {
     // Depois de gerar os atributos, atualiza logo o valor de mercado e o
     // salário (ver PUT /api/players/:id/generate-value) — assim os dois
     // ficam sempre coerentes um com o outro, sem passo extra manual.
-    try{
-      const valueRes = await fetch(`/api/players/${playerId}/generate-value`, { method: 'PUT' });
-      if(valueRes.ok){
-        const withValue = await valueRes.json();
-        if(el('marketValue')) el('marketValue').textContent = withValue.market_value_text || '—';
-        if(el('salaryValue')) el('salaryValue').textContent = withValue.wage_text || '—';
-        if(el('wage')) el('wage').textContent = withValue.wage_text || '';
-      }
-    }catch(valueErr){
-      // se isto falhar, os atributos já foram gerados na mesma — não é crítico
-    }
+    await refreshMarketValue();
   }catch(err){
     input.focus();
   }finally{
@@ -931,6 +989,31 @@ el('generateAttrsBtn')?.addEventListener('click', async () => {
     btn.textContent = originalLabel;
   }
 });
+
+/* Recalcula o valor de mercado e o salário a partir dos atributos ATUAIS do
+   jogador na base de dados (mesma fórmula do botão "Gerar Atributos" — ver
+   computePlayerValuation em routes/players.js). Chamado depois de gerar o
+   Nível Geral, e também sempre que um atributo é editado manualmente (ver
+   saveAttrGroup mais abaixo) — assim subir um atributo à mão sobe o preço e
+   o salário na mesma proporção, sem precisar de carregar outra vez em
+   "Gerar Atributos". */
+async function refreshMarketValue(){
+  if(!playerId) return;
+  try{
+    const valueRes = await fetch(`/api/players/${playerId}/generate-value`, { method: 'PUT' });
+    if(!valueRes.ok) return;
+    const withValue = await valueRes.json();
+    if(el('marketValue')) el('marketValue').textContent = withValue.market_value_text || '—';
+    if(el('salaryValue')) el('salaryValue').textContent = withValue.wage_text || '—';
+    if(el('wage')) el('wage').textContent = withValue.wage_text || '';
+    if(player){
+      player.market_value_text = withValue.market_value_text;
+      player.wage_text = withValue.wage_text;
+    }
+  }catch(valueErr){
+    // não crítico — o(s) atributo(s) já ficaram gravados na mesma
+  }
+}
 
 /* ---------- 10c. Negociar: proposta de transferência + contrato ---------- */
 function fmtMoneyNegotiate(v){

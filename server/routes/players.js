@@ -372,7 +372,22 @@ router.get('/:id', (req, res) => {
     : null;
   const awards = db.prepare('SELECT * FROM player_awards WHERE player_id = ? ORDER BY won_date DESC').all(req.params.id);
 
-  res.json({ ...deserialize(player), team, original_team: originalTeam, loan_from_team: loanFromTeam, awards });
+  /* Aba "Carreira": histórico de estatísticas por época (Campeonato/Taça,
+     arquivado a cada fim de época por runSeasonRolloverIfDue em
+     routes/league.js) + títulos coletivos que o jogador ajudou a
+     conquistar (creditados ao plantel completo da equipa campeã nesse
+     momento). Ver player_season_history / player_trophies em db/database.js. */
+  const seasonHistory = db.prepare(`
+    SELECT * FROM player_season_history WHERE player_id = ? ORDER BY season_label DESC, competition ASC
+  `).all(req.params.id);
+  const collectiveTrophies = db.prepare(`
+    SELECT * FROM player_trophies WHERE player_id = ? ORDER BY won_date DESC
+  `).all(req.params.id);
+
+  res.json({
+    ...deserialize(player), team, original_team: originalTeam, loan_from_team: loanFromTeam,
+    awards, season_history: seasonHistory, trophies: collectiveTrophies,
+  });
 });
 
 /* ---------- POST /api/players — criar jogador novo (com defaults) ---------- */

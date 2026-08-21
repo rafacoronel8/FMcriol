@@ -302,6 +302,44 @@
   </div>
   <!-- /panel-overview -->
 
+  <!-- ===== CARREIRA (histórico ano a ano + títulos) ===== -->
+  <div class="tab-panel hidden" id="panel-career">
+
+    <div class="card career-history-card">
+      <div class="card-title">Estatísticas por Época</div>
+      <table class="stats-table career-history-table">
+        <thead>
+          <tr>
+            <th>Época</th><th>Clube</th><th>Competição</th><th>J</th><th>G</th><th>A</th>
+            <th>Am</th><th>Verm</th><th>Cortes</th><th>% Passe</th><th>Média</th>
+          </tr>
+        </thead>
+        <tbody id="careerHistoryBody">
+          <!-- preenchido via JS -->
+        </tbody>
+      </table>
+      <p id="careerHistoryEmpty" class="placeholder-text hidden">Ainda sem épocas completas no histórico deste jogador.</p>
+    </div>
+
+    <div class="career-awards-grid">
+      <div class="card">
+        <div class="card-title">🏆 Títulos Coletivos</div>
+        <div id="collectiveTrophiesList" class="badges-list">
+          <p class="placeholder-text">Sem títulos coletivos ainda.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🏅 Prémios Individuais</div>
+        <div id="careerBadgesList" class="badges-list">
+          <p class="placeholder-text">Sem prémios ganhos ainda.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <!-- /panel-career -->
+
   <!-- ===== NEGOCIAR / MERCADO (conteúdo muda consoante o dono do jogador) ===== -->
   <div class="tab-panel hidden" id="panel-negotiate">
 

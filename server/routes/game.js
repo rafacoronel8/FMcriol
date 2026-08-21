@@ -81,19 +81,24 @@ router.post('/reset', (req, res) => {
     db.prepare("UPDATE players SET is_listed = 0, asking_price = NULL WHERE is_listed = 1 OR asking_price IS NOT NULL").run();
 
     /* 1b. Repõe TODOS os jogadores aos valores iniciais ("de fábrica") —
-       atributos, condição física, forma, disciplina, felicidade e
-       estatísticas da época. É o treino e os amigáveis que vão fazendo
-       estes números subir/descer ao longo da carreira; sem isto, um "Novo
-       Jogo" herdava os números já alterados da carreira anterior em vez de
-       recomeçar do zero. Ver baseline_* em db/database.js. */
+       condição física, forma, disciplina, felicidade e estatísticas da
+       época. É o treino e os amigáveis que vão fazendo estes números
+       subir/descer ao longo da carreira; sem isto, um "Novo Jogo" herdava
+       os números já alterados da carreira anterior em vez de recomeçar do
+       zero. Ver baseline_* em db/database.js.
+
+       Os ATRIBUTOS INDIVIDUAIS (technical_json/set_pieces_json/mental_json/
+       physical_json/goalkeeping_json) ficam de FORA de propósito: um
+       jogador editado/desenvolvido à mão (ou pelo "Gerar Atributos") deve
+       manter esses valores para sempre, mesmo depois de "Apagar jogo
+       guardado" / "Novo Jogo" — só o resto do estado da época (forma,
+       condição física, disciplina, felicidade, estatísticas) é que
+       recomeça do zero. As colunas baseline_technical_json e afins
+       continuam a existir na base de dados (não fazem mal a ninguém), só
+       deixaram de ser aplicadas aqui. */
     const allPlayerIds = db.prepare('SELECT id FROM players').all();
     const restoreBaseline = db.prepare(`
       UPDATE players SET
-        technical_json = COALESCE(baseline_technical_json, technical_json),
-        set_pieces_json = COALESCE(baseline_set_pieces_json, set_pieces_json),
-        mental_json = COALESCE(baseline_mental_json, mental_json),
-        physical_json = COALESCE(baseline_physical_json, physical_json),
-        goalkeeping_json = COALESCE(baseline_goalkeeping_json, goalkeeping_json),
         training_status = COALESCE(baseline_training_status, training_status),
         training_rating = COALESCE(baseline_training_rating, training_rating),
         fitness_status = COALESCE(baseline_fitness_status, fitness_status),
@@ -148,9 +153,14 @@ router.post('/reset', (req, res) => {
     db.prepare("UPDATE players SET stood_down_until = NULL, stood_down_reason = NULL").run();
     db.prepare("UPDATE game_state SET manager_name = NULL, welcome_sent = 0, current_season_start = '2026-08-01' WHERE id = 1").run();
 
-    /* Palmarés e prémios individuais também recomeçam do zero num "Novo Jogo". */
+    /* Palmarés, prémios individuais e o histórico de carreira (estatísticas
+       por época + títulos coletivos) também recomeçam do zero num "Novo
+       Jogo" — sem isto, um jogador herdava anos de carreira de um save
+       completamente diferente. */
     db.prepare('DELETE FROM trophies').run();
     db.prepare('DELETE FROM player_awards').run();
+    db.prepare('DELETE FROM player_season_history').run();
+    db.prepare('DELETE FROM player_trophies').run();
 
     /* Reuniões de transferência e empréstimos por resolver de um save
        anterior também não fazem sentido continuar. */
@@ -210,8 +220,20 @@ router.post('/reset', (req, res) => {
     return { players_revertidos: moved.length, equipas_repostas: teams.length };
   });
 
-  const summary = resetAll();
-  res.json({ ok: true, ...summary });
+  try {
+    const summary = resetAll();
+    res.json({ ok: true, ...summary });
+  } catch (err) {
+    /* Antes disto, um erro aqui dentro (ex: a tabela órfã
+       "player_incidents_old" — ver a migração em db/database.js) fazia o
+       Express devolver um 500 em HTML sem o frontend perceber que o
+       reset falhou a meio — por isso "Apagar jogo guardado"/"Novo Jogo"
+       parecia não fazer nada e o save anterior continuava. Devolver um
+       JSON com o erro dá ao frontend uma resposta que consegue verificar
+       (res.ok) e mostrar ao treinador, em vez de falhar em silêncio. */
+    console.error('Falha ao repor o jogo (POST /api/game/reset):', err);
+    res.status(500).json({ error: 'Não foi possível reiniciar o jogo. Tenta novamente.', detail: err.message });
+  }
 });
 
 /* ---------- POST /api/game/claim-team — marca a equipa do utilizador ----------

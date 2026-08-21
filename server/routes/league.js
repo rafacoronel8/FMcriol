@@ -241,6 +241,28 @@ function assignSeasonAwards(teamIds, seasonLabel, wonDate) {
   }
 }
 
+/* ---------- Crédito de título coletivo aos jogadores do plantel ----------
+   Chamado sempre que um troféu (Campeonato ou Taça) é atribuído a uma
+   equipa em runSeasonRolloverIfDue — regista em player_trophies, para
+   CADA jogador atualmente no plantel dessa equipa, que ele fez parte do
+   título. Alimenta a secção "Títulos Coletivos" da aba Carreira do perfil
+   do jogador (ver GET /api/players/:id em routes/players.js). */
+function creditPlayerTrophy(teamId, competition, seasonLabel, wonDate) {
+  const team = db.prepare('SELECT name, shield_path FROM teams WHERE id = ?').get(teamId);
+  const roster = db.prepare('SELECT id FROM players WHERE team_id = ?').all(teamId);
+  const insertTrophy = db.prepare(`
+    INSERT INTO player_trophies (player_id, team_id, team_name, team_shield, competition, season_label, won_date)
+    VALUES (@player_id, @team_id, @team_name, @team_shield, @competition, @season_label, @won_date)
+  `);
+  roster.forEach((pl) => {
+    insertTrophy.run({
+      player_id: pl.id, team_id: teamId,
+      team_name: team ? team.name : null, team_shield: team ? team.shield_path : null,
+      competition, season_label: seasonLabel, won_date: wonDate,
+    });
+  });
+}
+
 /* ---------- Reinício automático da época ----------
    Chamado no início de todos os dias (ver runLeagueTick). Assim que o
    calendário chega ao 1 de agosto SEGUINTE ao início da época em curso:
@@ -272,6 +294,7 @@ function runSeasonRolloverIfDue(nextDateStr) {
       db.prepare(`
         INSERT INTO trophies (team_id, competition, season_label, won_date) VALUES (?, 'league', ?, ?)
       `).run(standings[0].team_id, seasonLabel, nextDateStr);
+      creditPlayerTrophy(standings[0].team_id, 'league', seasonLabel, nextDateStr);
     }
 
     const cupState = cup.getCupState(division);
@@ -279,10 +302,53 @@ function runSeasonRolloverIfDue(nextDateStr) {
       db.prepare(`
         INSERT INTO trophies (team_id, competition, season_label, won_date) VALUES (?, 'cup', ?, ?)
       `).run(cupState.champion.id, seasonLabel, nextDateStr);
+      creditPlayerTrophy(cupState.champion.id, 'cup', seasonLabel, nextDateStr);
     }
 
     assignSeasonAwards(teams.map((t) => t.id), seasonLabel, nextDateStr);
   });
+
+  /* ---------- Arquiva o histórico de carreira ANTES de limpar a época ----------
+     Uma cópia dos totais de Campeonato/Taça desta época (já acumulados em
+     season_stats_json por routes/competitionStats.js) fica guardada em
+     player_season_history antes de serem apagados logo a seguir — é isto
+     que alimenta a aba "Carreira" do perfil do jogador com um histórico
+     ano a ano, em vez de só o resumo da época em curso (que se perdia
+     por completo em cada "Novo Jogo"/mudança de época). */
+  {
+    const insertHistory = db.prepare(`
+      INSERT INTO player_season_history
+        (player_id, team_id, team_name, team_shield, season_label, competition, games, goals, assists, yellow_cards, red_cards, tackles, pass_pct, rating)
+      VALUES (@player_id, @team_id, @team_name, @team_shield, @season_label, @competition, @games, @goals, @assists, @yellow_cards, @red_cards, @tackles, @pass_pct, @rating)
+    `);
+    const historyRowNames = [db.COMPETITION_ROW_NAMES.league, db.COMPETITION_ROW_NAMES.cup];
+    db.prepare('SELECT id, team_id, season_stats_json FROM players').all().forEach((p) => {
+      let rows;
+      try { rows = JSON.parse(p.season_stats_json || '[]'); } catch { rows = []; }
+      if (!Array.isArray(rows)) return;
+      const team = p.team_id ? db.prepare('SELECT name, shield_path FROM teams WHERE id = ?').get(p.team_id) : null;
+      rows
+        .filter((r) => historyRowNames.includes(r.competition) && (Number(r.j) || 0) > 0)
+        .forEach((r) => {
+          insertHistory.run({
+            player_id: p.id,
+            team_id: p.team_id || null,
+            team_name: team ? team.name : null,
+            team_shield: team ? team.shield_path : null,
+            season_label: seasonLabel,
+            competition: r.competition,
+            games: Number(r.j) || 0,
+            goals: Number(r.g) || 0,
+            assists: Number(r.a) || 0,
+            yellow_cards: Number(r.am) || 0,
+            red_cards: Number(r.verm) || 0,
+            tackles: Number(r.tk) || 0,
+            pass_pct: Number.isFinite(parseFloat(r.pp)) ? parseFloat(r.pp) : null,
+            rating: Number.isFinite(parseFloat(r.media)) ? parseFloat(r.media) : null,
+          });
+        });
+    });
+  }
 
   db.prepare("DELETE FROM friendly_player_stats WHERE competition IN ('league','cup')").run();
   const resettableRowNames = [db.COMPETITION_ROW_NAMES.league, db.COMPETITION_ROW_NAMES.cup];
