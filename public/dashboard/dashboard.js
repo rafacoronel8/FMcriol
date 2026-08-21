@@ -649,6 +649,7 @@ const MESSAGE_ICONS = {
   transfer_meeting: '🗣️',
   loan_agreed: '🔄',
   loan_returned: '↩️',
+  match_day: '⚽',
 };
 
 function truncateText(text, n){
@@ -668,7 +669,8 @@ function messageNeedsResponse(m){
   return (m.type === 'incoming_offer_pending' && m.offer_status === 'pending')
     || (m.type === 'player_incident' && m.incident_status === 'pending')
     || (m.type === 'manager_question' && m.question_status === 'pending')
-    || (m.type === 'transfer_meeting' && m.meeting_status === 'pending');
+    || (m.type === 'transfer_meeting' && m.meeting_status === 'pending')
+    || (m.type === 'match_day' && m.friendly_status === 'accepted');
 }
 
 function messageSmallAvatar(m){
@@ -788,6 +790,11 @@ function renderMessageDetail(m){
        </div>`;
   }else if(m.type === 'transfer_meeting' && m.meeting_resolution){
     actions = `<p class="msg-decision-note">${m.meeting_resolution}</p>`;
+  }else if(m.type === 'match_day' && m.friendly_status === 'accepted'){
+    actions = `<div class="msg-actions" data-friendly-id="${m.friendly_id}">
+         <button class="msg-btn msg-btn-neutral" data-action="play">▶ Jogar</button>
+         <button class="msg-btn msg-btn-neutral" data-action="simulate">⏭ Simular</button>
+       </div>`;
   }
 
   box.innerHTML = `
@@ -821,6 +828,17 @@ function renderMessageDetail(m){
     }else if(actionsBox.dataset.meetingId){
       actionsBox.querySelectorAll('.msg-btn').forEach((btn) => {
         btn.addEventListener('click', () => respondToMeeting(actionsBox.dataset.meetingId, btn.dataset.action, actionsBox));
+      });
+    }else if(actionsBox.dataset.friendlyId){
+      const friendlyId = Number(actionsBox.dataset.friendlyId);
+      actionsBox.querySelectorAll('.msg-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if(btn.dataset.action === 'play'){
+            openPreMatchTalk(friendlyId);
+          }else{
+            simulateTodayMatch(friendlyId, btn);
+          }
+        });
       });
     }
   }
@@ -1363,8 +1381,10 @@ async function loadFriendlies(){
   }
 }
 
-/* ---------- Banner "Jogo de Hoje" — aparece quando há um amigável marcado
-   para a data atual do calendário, com um botão para o assistir ao vivo. ---------- */
+/* ---------- Banner "Jogo de Hoje" — aparece quando há um jogo marcado
+   para a data atual do calendário, com os botões Jogar / Simular. Mesma
+   informação da mensagem "match_day" na caixa de entrada (ver
+   renderMessageDetail) — o banner é só um atalho mais visível. ---------- */
 function updateTodayMatchBanner(){
   const banner = el('todayMatchBanner');
   if(!currentGameDate){ banner.classList.add('hidden'); return; }
@@ -1374,7 +1394,29 @@ function updateTodayMatchBanner(){
   el('todayMatchTeams').innerHTML =
     `${friendlyTeamHtml(todayMatch.home_name, todayMatch.home_shield)} <span class="friendly-vs">vs</span> ${friendlyTeamHtml(todayMatch.away_name, todayMatch.away_shield)}`;
   banner.classList.remove('hidden');
-  el('watchTodayMatchBtn').onclick = () => openLiveMatch(todayMatch.id);
+  el('playTodayMatchBtn').onclick = () => openPreMatchTalk(todayMatch.id);
+  el('simulateTodayMatchBtn').onclick = () => simulateTodayMatch(todayMatch.id, el('simulateTodayMatchBtn'));
+}
+
+/* ---------- Botão "Simular": resolve o jogo já, sem abrir o ecrã ao vivo ---------- */
+async function simulateTodayMatch(friendlyId, btn){
+  btn.disabled = true;
+  const playBtn = el('playTodayMatchBtn');
+  if(playBtn) playBtn.disabled = true;
+  try{
+    const res = await fetch(`/api/game/matches/${friendlyId}/simulate-now`, { method: 'POST' });
+    if(!res.ok) throw new Error();
+    const result = await res.json();
+    await loadMessages();
+    await loadFriendlies();
+    loadOverview();
+    if(result.home_score !== undefined){
+      showNewMessageToast(1);
+    }
+  }catch(err){
+    btn.disabled = false;
+    if(playBtn) playBtn.disabled = false;
+  }
 }
 
 async function cancelFriendly(id){
@@ -2299,6 +2341,7 @@ async function openLiveMatch(friendlyId){
   liveState = null;
   liveBusy = false;
   liveSubOutId = null;
+  postTalkPromptShownFor = null;
   el('liveMatchOverlay').classList.remove('hidden');
   el('liveFeed').innerHTML = '<p class="placeholder-text">A carregar…</p>';
   el('livePitchTokens').innerHTML = '';
@@ -2467,6 +2510,13 @@ function applyLiveState(data, newEvents){
     loadFriendlies();
     loadClub();
     loadSquad();
+
+    // Palestra de pós-jogo: abre-se sozinha assim que o jogo termina,
+    // uma única vez (ver postTalkPromptShownFor) e só se ainda não foi dada.
+    if(!data.post_talk_given && postTalkPromptShownFor !== liveFriendlyId){
+      postTalkPromptShownFor = liveFriendlyId;
+      setTimeout(() => openPostMatchTalk(), 900);
+    }
   }else{
     playBtn.disabled = liveBusy;
     autoBtn.disabled = false;
@@ -2474,6 +2524,181 @@ function applyLiveState(data, newEvents){
     if(!liveBusy) hint.textContent = '';
   }
 }
+
+/* ==========================================================
+   Palestra de Balneário (pré-jogo / pós-jogo)
+   ========================================================== */
+let teamTalkFriendlyId = null;
+let teamTalkPhase = null;      // 'pre' | 'post'
+let teamTalkOptions = [];
+let teamTalkSelectedKey = null;
+let postTalkPromptShownFor = null; // evita reabrir a palestra de pós-jogo sozinha mais do que uma vez por jogo
+
+function renderTeamTalkOptions(options){
+  teamTalkOptions = options;
+  teamTalkSelectedKey = null;
+  el('teamTalkConfirmBtn').disabled = true;
+
+  el('teamTalkOptions').innerHTML = options.map((o) => `
+    <button type="button" class="team-talk-option" data-key="${o.key}">
+      <div class="team-talk-option-label">${o.label}</div>
+      <div class="team-talk-option-desc">${o.description}</div>
+    </button>`).join('');
+
+  el('teamTalkOptions').querySelectorAll('.team-talk-option').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      teamTalkSelectedKey = btn.dataset.key;
+      el('teamTalkOptions').querySelectorAll('.team-talk-option').forEach((b) => b.classList.toggle('selected', b === btn));
+      el('teamTalkConfirmBtn').disabled = false;
+    });
+  });
+}
+
+async function renderTeamTalkLineup(){
+  const lineupBox = el('teamTalkLineup');
+  const namesBox = el('teamTalkLineupNames');
+  lineupBox.classList.remove('hidden');
+  namesBox.textContent = 'A carregar…';
+
+  try{
+    const [tacticsRes, playersRes] = await Promise.all([
+      fetch(`/api/tactics/${teamId}`),
+      fetch(`/api/players?team_id=${teamId}`),
+    ]);
+    const tactics = await tacticsRes.json();
+    const players = await playersRes.json();
+
+    const names = (tactics.lineup || [])
+      .map((entry) => players.find((p) => p.id === (entry.player_id ?? entry))?.name)
+      .filter(Boolean);
+
+    namesBox.textContent = names.length
+      ? `${tactics.formation} — ${names.join(', ')}`
+      : 'Ainda não guardaste um onze inicial — vai ser usado o plantel por ordem.';
+  }catch(err){
+    namesBox.textContent = 'Não foi possível carregar a escalação.';
+  }
+}
+
+el('teamTalkEditLineupBtn').addEventListener('click', () => {
+  el('teamTalkOverlay').classList.add('hidden');
+  document.querySelector('.tab[data-tab="tatica"]')?.click();
+});
+
+/* ---------- Abre a palestra de PRÉ-JOGO (botão "Jogar") ---------- */
+async function openPreMatchTalk(friendlyId){
+  teamTalkFriendlyId = friendlyId;
+  teamTalkPhase = 'pre';
+
+  el('teamTalkKicker').textContent = 'PRÉ-JOGO';
+  el('teamTalkHeadline').textContent = 'Palestra de Pré-Jogo';
+  el('teamTalkPrompt').textContent = 'Escolhe o tom da tua palestra antes de entrarem em campo:';
+  el('teamTalkResult').classList.add('hidden');
+  el('teamTalkConfirmBtn').classList.remove('hidden');
+  el('teamTalkConfirmBtn').textContent = 'Começar Jogo';
+  el('teamTalkConfirmBtn').disabled = true;
+  el('teamTalkContinueBtn').classList.add('hidden');
+  el('teamTalkDoneBtn').classList.add('hidden');
+  el('teamTalkOptions').innerHTML = '<p class="placeholder-text">A carregar…</p>';
+  el('teamTalkOverlay').classList.remove('hidden');
+
+  renderTeamTalkLineup();
+
+  try{
+    const res = await fetch(`/api/live-matches/${friendlyId}/team-talk-options`);
+    if(!res.ok) throw new Error();
+    const data = await res.json();
+
+    if(data.pre_talk_given){
+      el('teamTalkPrompt').textContent = 'Já deste a palestra de pré-jogo para este encontro.';
+      el('teamTalkOptions').innerHTML = '';
+      el('teamTalkConfirmBtn').classList.add('hidden');
+      el('teamTalkContinueBtn').classList.remove('hidden');
+    }else{
+      renderTeamTalkOptions(data.pre);
+    }
+  }catch(err){
+    el('teamTalkOptions').innerHTML = '<p class="placeholder-text">Não foi possível carregar as opções de palestra.</p>';
+  }
+}
+
+/* ---------- Abre a palestra de PÓS-JOGO (automático ao terminar o jogo ao vivo) ---------- */
+async function openPostMatchTalk(){
+  teamTalkFriendlyId = liveFriendlyId;
+  teamTalkPhase = 'post';
+
+  el('teamTalkKicker').textContent = 'PÓS-JOGO';
+  el('teamTalkHeadline').textContent = `Resultado Final: ${liveState.home_score} - ${liveState.away_score}`;
+  el('teamTalkPrompt').textContent = 'Escolhe o tom da tua palestra depois do apito final:';
+  el('teamTalkLineup').classList.add('hidden');
+  el('teamTalkResult').classList.add('hidden');
+  el('teamTalkConfirmBtn').classList.remove('hidden');
+  el('teamTalkConfirmBtn').textContent = 'Dar Palestra';
+  el('teamTalkConfirmBtn').disabled = true;
+  el('teamTalkContinueBtn').classList.add('hidden');
+  el('teamTalkDoneBtn').classList.add('hidden');
+  el('teamTalkOptions').innerHTML = '<p class="placeholder-text">A carregar…</p>';
+  el('teamTalkOverlay').classList.remove('hidden');
+
+  try{
+    const res = await fetch(`/api/live-matches/${teamTalkFriendlyId}/team-talk-options`);
+    if(!res.ok) throw new Error();
+    const data = await res.json();
+
+    if(data.post_talk_given || !data.post.length){
+      el('teamTalkOverlay').classList.add('hidden');
+      return;
+    }
+    renderTeamTalkOptions(data.post);
+  }catch(err){
+    el('teamTalkOptions').innerHTML = '<p class="placeholder-text">Não foi possível carregar as opções de palestra.</p>';
+  }
+}
+
+/* ---------- Confirmar palestra escolhida ---------- */
+el('teamTalkConfirmBtn').addEventListener('click', async () => {
+  if(!teamTalkSelectedKey || !teamTalkFriendlyId) return;
+  const btn = el('teamTalkConfirmBtn');
+  btn.disabled = true;
+
+  try{
+    const res = await fetch(`/api/live-matches/${teamTalkFriendlyId}/team-talk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phase: teamTalkPhase, talk_key: teamTalkSelectedKey }),
+    });
+    if(!res.ok) throw new Error();
+    const summary = await res.json();
+
+    el('teamTalkOptions').querySelectorAll('.team-talk-option').forEach((b) => (b.style.pointerEvents = 'none'));
+    const resultBox = el('teamTalkResult');
+    resultBox.textContent = summary.up || summary.down
+      ? `${summary.up ? `😊 ${summary.up} jogador${summary.up === 1 ? '' : 'es'} ficaram mais motivados. ` : ''}${summary.down ? `☹️ ${summary.down} jogador${summary.down === 1 ? '' : 'es'} ficaram descontentes.` : ''}`
+      : 'A palestra não teve grande impacto imediato no balneário.';
+    resultBox.classList.remove('hidden');
+
+    btn.classList.add('hidden');
+    if(teamTalkPhase === 'pre'){
+      el('teamTalkContinueBtn').classList.remove('hidden');
+    }else{
+      el('teamTalkDoneBtn').classList.remove('hidden');
+    }
+    loadSquad();
+  }catch(err){
+    btn.disabled = false;
+    el('teamTalkResult').textContent = 'Não foi possível registar a palestra.';
+    el('teamTalkResult').classList.remove('hidden');
+  }
+});
+
+el('teamTalkContinueBtn').addEventListener('click', () => {
+  const friendlyId = teamTalkFriendlyId;
+  el('teamTalkOverlay').classList.add('hidden');
+  openLiveMatch(friendlyId);
+});
+
+el('teamTalkDoneBtn').addEventListener('click', () => el('teamTalkOverlay').classList.add('hidden'));
+el('teamTalkClose').addEventListener('click', () => el('teamTalkOverlay').classList.add('hidden'));
 
 async function liveTick(minutes){
   if(!liveFriendlyId || !liveState || liveState.status === 'finished' || liveBusy) return;

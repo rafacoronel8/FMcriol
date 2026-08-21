@@ -387,6 +387,12 @@ CREATE INDEX IF NOT EXISTS idx_transfer_meetings_team ON transfer_meetings(team_
 `);
 if (!messageCols.includes('meeting_id')) db.exec('ALTER TABLE messages ADD COLUMN meeting_id INTEGER REFERENCES transfer_meetings(id)');
 
+/* Liga uma mensagem "Jogo de Hoje" (match_day) ao amigável/jornada/eliminatória
+   em causa — permite à caixa de entrada saber se ainda precisa de resposta
+   (club_friendlies.status ainda 'accepted') e abrir o jogo certo a partir dos
+   botões Jogar/Simular. Ver routes/game.js e routes/liveMatch.js. */
+if (!messageCols.includes('friendly_id')) db.exec('ALTER TABLE messages ADD COLUMN friendly_id INTEGER REFERENCES club_friendlies(id)');
+
 /* ---------- Backfill: jogadores já existentes que ainda não têm original_team_id
    ficam com o clube atual como "clube de origem" (melhor opção possível sem re-semear). */
 db.prepare('UPDATE players SET original_team_id = team_id WHERE original_team_id IS NULL AND team_id IS NOT NULL').run();
@@ -524,6 +530,12 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_club_friendlies_away ON club_friendlies(
 {
   const cfCols = db.prepare("PRAGMA table_info(club_friendlies)").all().map((c) => c.name);
   if (!cfCols.includes('is_league')) db.exec('ALTER TABLE club_friendlies ADD COLUMN is_league INTEGER DEFAULT 0');
+  /* Marca se a palestra de balneário de pré-jogo/pós-jogo já foi dada para
+     este jogo — cada uma só pode ser dada uma vez (ver routes/liveMatch.js).
+     pre_talk_given também serve para o botão "Jogar" da mensagem de "Jogo de
+     Hoje" (routes/game.js) saber se ainda pode abrir o ecrã de pré-jogo. */
+  if (!cfCols.includes('pre_talk_given')) db.exec('ALTER TABLE club_friendlies ADD COLUMN pre_talk_given INTEGER DEFAULT 0');
+  if (!cfCols.includes('post_talk_given')) db.exec('ALTER TABLE club_friendlies ADD COLUMN post_talk_given INTEGER DEFAULT 0');
 }
 
 /* ---------- Campeonato: calendário oficial (round-robin a duas voltas) ----------

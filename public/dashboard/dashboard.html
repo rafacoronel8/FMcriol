@@ -238,7 +238,10 @@
         <span class="today-match-kicker">JOGO DE HOJE</span>
         <div class="today-match-teams" id="todayMatchTeams"></div>
       </div>
-      <button id="watchTodayMatchBtn" class="btn-advance small">▶ Assistir ao Jogo</button>
+      <div class="today-match-actions">
+        <button id="playTodayMatchBtn" class="btn-advance small">▶ Jogar</button>
+        <button id="simulateTodayMatchBtn" class="btn-mini">⏭ Simular</button>
+      </div>
     </div>
 
     <div class="grid-2col calendar-grid">
@@ -514,6 +517,32 @@
         <div class="ceremony-reveal-name" id="ceremonyRevealName"></div>
         <div class="ceremony-reveal-team" id="ceremonyRevealTeam"></div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Palestra de Balneário (pré-jogo / pós-jogo) ===== -->
+<div id="teamTalkOverlay" class="news-modal-overlay hidden">
+  <div class="news-modal team-talk-modal">
+    <button class="news-modal-close" id="teamTalkClose" aria-label="Fechar">×</button>
+    <div class="news-modal-kicker" id="teamTalkKicker">PRÉ-JOGO</div>
+    <h2 class="news-modal-headline" id="teamTalkHeadline"></h2>
+
+    <div class="team-talk-lineup hidden" id="teamTalkLineup">
+      <div class="team-talk-lineup-title">Onze Inicial</div>
+      <div class="team-talk-lineup-names" id="teamTalkLineupNames"></div>
+      <button class="btn-mini" id="teamTalkEditLineupBtn">Editar Escalação</button>
+    </div>
+
+    <p class="team-talk-prompt" id="teamTalkPrompt">Escolhe o tom da tua palestra:</p>
+    <div class="team-talk-options" id="teamTalkOptions"></div>
+
+    <div class="team-talk-result hidden" id="teamTalkResult"></div>
+
+    <div class="team-talk-buttons">
+      <button class="btn-advance small" id="teamTalkConfirmBtn" disabled>Começar Jogo</button>
+      <button class="btn-advance small hidden" id="teamTalkContinueBtn">Entrar em Campo ▶</button>
+      <button class="btn-advance small hidden" id="teamTalkDoneBtn">Fechar</button>
     </div>
   </div>
 </div>

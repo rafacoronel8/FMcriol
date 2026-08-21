@@ -1116,73 +1116,134 @@ function runFriendliesTick(nextDateStr) {
 
   due.forEach((f) => {
     /* Jogo de hoje com o clube do utilizador envolvido: fica para ser
-       assistido ao vivo (ou resolvido no próximo avanço, se for ignorado). */
-    if (f.match_date === nextDateStr && (f.home_user || f.away_user)) return;
+       assistido ao vivo ou simulado a partir da mensagem "Jogo de Hoje" na
+       caixa de entrada (ver abaixo) — nunca aqui diretamente. Se for
+       ignorado, resolve-se sozinho no próximo avanço, como sempre. */
+    if (f.match_date === nextDateStr && (f.home_user || f.away_user)) {
+      /* Garante que a mensagem com os botões Jogar/Simular existe — só
+         insere uma vez por jogo (várias chamadas a /advance no mesmo dia,
+         ou o utilizador a recarregar a página, não devem duplicar a
+         mensagem). */
+      const userTeamId = f.home_user ? f.home_team_id : f.away_team_id;
+      const opponentName = f.home_user ? f.away_name : f.home_name;
+      const opponentTeamId = f.home_user ? f.away_team_id : f.home_team_id;
+      const already = db.prepare('SELECT 1 FROM messages WHERE friendly_id = ? AND type = \'match_day\'').get(f.id);
+      if (!already) {
+        const label = f.is_cup ? 'Taça São Vicente' : (f.is_league ? 'Campeonato' : 'Amigável');
+        const venue = f.home_user ? 'em casa' : 'fora';
+        db.prepare(`
+          INSERT INTO messages (team_id, type, title, body, related_team_id, friendly_id)
+          VALUES (@team_id, 'match_day', @title, @body, @related_team_id, @friendly_id)
+        `).run({
+          team_id: userTeamId, related_team_id: opponentTeamId, friendly_id: f.id,
+          title: `⚽ Jogo de Hoje: ${label} contra o ${opponentName}`,
+          body: `Tens um jogo hoje (${venue}) contra o ${opponentName}, a contar para ${label === 'Amigável' ? 'um amigável' : label}. Queres jogar (escalar, dar a palestra e assistir ao vivo) ou simular o resultado?`,
+        });
+      }
+      return;
+    }
 
-    const homeGoals = simulateFriendlyGoals(f.home_reputation + 0.25, f.away_reputation);
-    const awayGoals = simulateFriendlyGoals(f.away_reputation, f.home_reputation + 0.25);
-
-    db.prepare(`
-      UPDATE club_friendlies SET status = 'played', home_score = ?, away_score = ?, resolved_at = datetime('now')
-      WHERE id = ?
-    `).run(homeGoals, awayGoals, f.id);
-
-    /* Se este "amigável" foi na verdade criado para uma jornada do
-       Campeonato (ver is_league em db/database.js e routes/league.js),
-       propaga o resultado para league_fixtures — é o que mantém a tabela
-       classificativa e o histórico do Campeonato atualizados quando o
-       jogo do utilizador não é assistido ao vivo. */
-    db.syncLeagueFixtureFromFriendly(f.id, homeGoals, awayGoals);
-    db.syncCupFixtureFromFriendly(f.id, homeGoals, awayGoals);
-
-    simulateFriendlyMatchDetails(f.id, f.home_team_id, f.away_team_id, homeGoals, awayGoals, f.is_cup ? 'cup' : (f.is_league ? 'league' : 'friendly'));
-
-    const scoreText = `${f.home_name} ${homeGoals}-${awayGoals} ${f.away_name}`;
-    const outcomeFor = (isHome) => {
-      const us = isHome ? homeGoals : awayGoals;
-      const them = isHome ? awayGoals : homeGoals;
-      if (us > them) return 'Vitória';
-      if (us < them) return 'Derrota';
-      return 'Empate';
-    };
-
-    /* Na Taça não há empates — se ficou empatado a 90 minutos,
-       syncCupFixtureFromFriendly (db/database.js) já decidiu o vencedor
-       por desempate; usa-se isso para a mensagem em vez do resultado
-       literal do marcador, e nota-se que foi "nos penáltis". */
-    const cupFixture = f.is_cup ? db.prepare('SELECT winner_team_id, decided_by_penalties FROM cup_fixtures WHERE friendly_id = ?').get(f.id) : null;
-    const cupOutcomeFor = (teamId) => (cupFixture.winner_team_id === teamId ? 'Vitória' : 'Derrota');
-
-    [
-      { userFlag: f.home_user, teamId: f.home_team_id, opponentName: f.away_name, isHome: true },
-      { userFlag: f.away_user, teamId: f.away_team_id, opponentName: f.home_name, isHome: false },
-    ].forEach(({ userFlag, teamId, opponentName, isHome }) => {
-      if (!userFlag) return;
-      const result = cupFixture ? cupOutcomeFor(teamId) : outcomeFor(isHome);
-      const label = f.is_cup ? 'Taça São Vicente' : (f.is_league ? 'Campeonato' : 'Amigável');
-      const penaltiesNote = cupFixture?.decided_by_penalties ? ' (nos penáltis)' : '';
-      const cupTail = f.is_cup
-        ? (result === 'Vitória' ? ' Seguem em frente na competição.' : ' Estão eliminados da Taça São Vicente.')
-        : '';
-      db.prepare(`
-        INSERT INTO messages (team_id, type, title, body)
-        VALUES (@team_id, @type, @title, @body)
-      `).run({
-        team_id: teamId,
-        type: f.is_cup ? 'cup_played' : (f.is_league ? 'league_played' : 'friendly_played'),
-        title: `${result === 'Vitória' ? '🏆' : '📉'} ${label}: ${result.toLowerCase()} contra o ${opponentName}${penaltiesNote}`,
-        body: `Resultado final: ${scoreText}${penaltiesNote}.${cupTail}`,
-      });
-    });
-
+    simulateSingleFriendly(f);
     results.push({
       id: f.id, home_team: f.home_name, away_team: f.away_name,
-      home_score: homeGoals, away_score: awayGoals, is_league: !!f.is_league, is_cup: !!f.is_cup,
+      home_score: f.__homeGoals, away_score: f.__awayGoals, is_league: !!f.is_league, is_cup: !!f.is_cup,
     });
   });
 
   return results;
 }
+
+/* ---------- Resolve um único jogo (amigável/Campeonato/Taça) já devido ----------
+   Extraído do corpo de runFriendliesTick para poder ser chamado também a
+   partir de POST /api/game/matches/:friendlyId/simulate-now (botão
+   "Simular" na mensagem "Jogo de Hoje" da caixa de entrada) — as duas vias
+   têm de produzir exatamente o mesmo resultado, por isso ficam no mesmo
+   sítio em vez de duplicadas. `f` é a linha de club_friendlies já com os
+   nomes/reputações das equipas feitos por JOIN (ver query acima e a rota
+   /simulate-now mais abaixo). */
+function simulateSingleFriendly(f) {
+  const homeGoals = simulateFriendlyGoals(f.home_reputation + 0.25, f.away_reputation);
+  const awayGoals = simulateFriendlyGoals(f.away_reputation, f.home_reputation + 0.25);
+
+  db.prepare(`
+    UPDATE club_friendlies SET status = 'played', home_score = ?, away_score = ?, resolved_at = datetime('now')
+    WHERE id = ?
+  `).run(homeGoals, awayGoals, f.id);
+
+  /* Se este "amigável" foi na verdade criado para uma jornada do
+     Campeonato (ver is_league em db/database.js e routes/league.js),
+     propaga o resultado para league_fixtures — é o que mantém a tabela
+     classificativa e o histórico do Campeonato atualizados quando o
+     jogo do utilizador não é assistido ao vivo. */
+  db.syncLeagueFixtureFromFriendly(f.id, homeGoals, awayGoals);
+  db.syncCupFixtureFromFriendly(f.id, homeGoals, awayGoals);
+
+  simulateFriendlyMatchDetails(f.id, f.home_team_id, f.away_team_id, homeGoals, awayGoals, f.is_cup ? 'cup' : (f.is_league ? 'league' : 'friendly'));
+
+  const scoreText = `${f.home_name} ${homeGoals}-${awayGoals} ${f.away_name}`;
+  const outcomeFor = (isHome) => {
+    const us = isHome ? homeGoals : awayGoals;
+    const them = isHome ? awayGoals : homeGoals;
+    if (us > them) return 'Vitória';
+    if (us < them) return 'Derrota';
+    return 'Empate';
+  };
+
+  /* Na Taça não há empates — se ficou empatado a 90 minutos,
+     syncCupFixtureFromFriendly (db/database.js) já decidiu o vencedor
+     por desempate; usa-se isso para a mensagem em vez do resultado
+     literal do marcador, e nota-se que foi "nos penáltis". */
+  const cupFixture = f.is_cup ? db.prepare('SELECT winner_team_id, decided_by_penalties FROM cup_fixtures WHERE friendly_id = ?').get(f.id) : null;
+  const cupOutcomeFor = (teamId) => (cupFixture.winner_team_id === teamId ? 'Vitória' : 'Derrota');
+
+  [
+    { userFlag: f.home_user, teamId: f.home_team_id, opponentName: f.away_name, isHome: true },
+    { userFlag: f.away_user, teamId: f.away_team_id, opponentName: f.home_name, isHome: false },
+  ].forEach(({ userFlag, teamId, opponentName, isHome }) => {
+    if (!userFlag) return;
+    const result = cupFixture ? cupOutcomeFor(teamId) : outcomeFor(isHome);
+    const label = f.is_cup ? 'Taça São Vicente' : (f.is_league ? 'Campeonato' : 'Amigável');
+    const penaltiesNote = cupFixture?.decided_by_penalties ? ' (nos penáltis)' : '';
+    const cupTail = f.is_cup
+      ? (result === 'Vitória' ? ' Seguem em frente na competição.' : ' Estão eliminados da Taça São Vicente.')
+      : '';
+    db.prepare(`
+      INSERT INTO messages (team_id, type, title, body)
+      VALUES (@team_id, @type, @title, @body)
+    `).run({
+      team_id: teamId,
+      type: f.is_cup ? 'cup_played' : (f.is_league ? 'league_played' : 'friendly_played'),
+      title: `${result === 'Vitória' ? '🏆' : '📉'} ${label}: ${result.toLowerCase()} contra o ${opponentName}${penaltiesNote}`,
+      body: `Resultado final: ${scoreText}${penaltiesNote}.${cupTail}`,
+    });
+  });
+
+  f.__homeGoals = homeGoals;
+  f.__awayGoals = awayGoals;
+  return { home_score: homeGoals, away_score: awayGoals };
+}
+
+/* ---------- POST /api/game/matches/:friendlyId/simulate-now ----------
+   Botão "Simular" na mensagem "Jogo de Hoje" — resolve o jogo já, sem
+   esperar pelo próximo avanço de calendário e sem abrir o jogo ao vivo. */
+router.post('/matches/:friendlyId/simulate-now', (req, res) => {
+  const f = db.prepare(`
+    SELECT cf.*, h.name AS home_name, h.reputation_stars AS home_reputation, h.is_user_controlled AS home_user,
+           a.name AS away_name, a.reputation_stars AS away_reputation, a.is_user_controlled AS away_user
+    FROM club_friendlies cf
+    JOIN teams h ON h.id = cf.home_team_id
+    JOIN teams a ON a.id = cf.away_team_id
+    WHERE cf.id = ?
+  `).get(req.params.friendlyId);
+  if (!f) return res.status(404).json({ error: 'Jogo não encontrado' });
+  if (f.status !== 'accepted') return res.status(400).json({ error: 'Este jogo já foi resolvido.' });
+  if (!f.home_user && !f.away_user) return res.status(400).json({ error: 'Este jogo não envolve o teu clube.' });
+
+  const result = simulateSingleFriendly(f);
+  db.prepare("UPDATE messages SET is_read = 1 WHERE friendly_id = ? AND type = 'match_day'").run(f.id);
+
+  res.json({ ok: true, home_team: f.home_name, away_team: f.away_name, ...result });
+});
 
 /* ---------- POST /api/game/advance — avança 1 dia no calendário ----------
    IMPORTANTE: o cálculo do "dia seguinte" tem de ser sempre o mesmo,

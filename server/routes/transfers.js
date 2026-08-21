@@ -694,7 +694,8 @@ router.get('/messages', (req, res) => {
       mq.chosen_key   AS question_chosen_key,
       tm.status       AS meeting_status,
       tm.resolution   AS meeting_resolution,
-      tm.offer_amount AS meeting_offer_amount
+      tm.offer_amount AS meeting_offer_amount,
+      cf.status       AS friendly_status
     FROM messages m
     LEFT JOIN players p ON p.id = m.player_id
     LEFT JOIN teams myTeam ON myTeam.id = m.team_id
@@ -703,6 +704,7 @@ router.get('/messages', (req, res) => {
     LEFT JOIN player_incidents pi ON pi.id = m.incident_id
     LEFT JOIN manager_questions mq ON mq.id = m.question_id
     LEFT JOIN transfer_meetings tm ON tm.id = m.meeting_id
+    LEFT JOIN club_friendlies cf ON cf.id = m.friendly_id
     WHERE m.team_id = ?
     ORDER BY m.created_at DESC, m.id DESC
   `).all(team_id);
@@ -740,6 +742,11 @@ router.delete('/messages', (req, res) => {
         SELECT m.id FROM messages m
         JOIN transfer_meetings tm ON tm.id = m.meeting_id
         WHERE m.team_id = @team_id AND m.meeting_id IS NOT NULL AND tm.status = 'pending'
+      )
+      AND id NOT IN (
+        SELECT m.id FROM messages m
+        JOIN club_friendlies cf ON cf.id = m.friendly_id
+        WHERE m.team_id = @team_id AND m.friendly_id IS NOT NULL AND cf.status = 'accepted'
       )
   `).run({ team_id });
 

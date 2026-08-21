@@ -115,6 +115,81 @@ function randomMinute() {
   return 1 + Math.floor(Math.random() * MATCH_LENGTH);
 }
 
+/* ---------- Palestras de balneário (pré-jogo / pós-jogo) ----------
+   Cópia deliberada da mesma ideia (ladder de 3 níveis + efeito up/down por
+   jogador) já usada em routes/morale.js para as perguntas ao treinador —
+   mantém-se separada porque routes/morale.js só corre no avanço diário do
+   calendário, e isto tem de correr no momento em que o treinador escolhe a
+   palestra, no meio de um jogo ao vivo. */
+const TALK_HAPPINESS_LADDER = ['Insatisfeito', 'Descontente', 'Contente'];
+function talkHappinessIndex(text) {
+  const i = TALK_HAPPINESS_LADDER.indexOf(text);
+  return i === -1 ? TALK_HAPPINESS_LADDER.indexOf('Contente') : i;
+}
+function shiftTalkHappiness(text, delta) {
+  const next = Math.max(0, Math.min(TALK_HAPPINESS_LADDER.length - 1, talkHappinessIndex(text) + delta));
+  return TALK_HAPPINESS_LADDER[next];
+}
+
+/* Palestra de PRÉ-JOGO — o mesmo leque de opções serve para qualquer jogo,
+   porque ainda não há resultado. */
+const TEAM_TALK_PRE = [
+  { key: 'calma', label: 'Calma e Confiança', description: 'Discurso tranquilo, focado em manter todos confiantes.', effect: { up: 0.5, down: 0.05 } },
+  { key: 'motivadora', label: 'Discurso Motivador', description: 'Palavras fortes para levantar o grupo — mais impacto, mas mais risco.', effect: { up: 0.65, down: 0.15 } },
+  { key: 'exigente', label: 'Exigir Mais', description: 'Pedes mais nível a todos — pode incomodar os mais sensíveis.', effect: { up: 0.35, down: 0.35 } },
+  { key: 'tatica', label: 'Foco Tático', description: 'Sem grandes emoções, só instruções — efeito reduzido dos dois lados.', effect: { up: 0.15, down: 0.05 } },
+];
+
+/* Palestra de PÓS-JOGO — as opções mudam consoante o resultado. */
+const TEAM_TALK_POST = {
+  win: [
+    { key: 'elogiar', label: 'Elogiar a Equipa', description: 'Reconheces o esforço de todos.', effect: { up: 0.6, down: 0.05 } },
+    { key: 'moderado', label: 'Parabéns Comedidos', description: 'Contente, mas sem exageros.', effect: { up: 0.35, down: 0.05 } },
+    { key: 'exigir_mais', label: 'Avisar Para Não Baixar o Nível', description: 'Festejas pouco e já pedes mais para o próximo jogo — alguns podem sentir-se pouco reconhecidos.', effect: { up: 0.25, down: 0.25 } },
+  ],
+  draw: [
+    { key: 'compreensivo', label: 'Compreensão e Confiança', description: 'Mostras que confias no grupo apesar do empate.', effect: { up: 0.5, down: 0.1 } },
+    { key: 'motivar', label: 'Motivar Para o Próximo Jogo', description: 'Vira a página rapidamente.', effect: { up: 0.4, down: 0.1 } },
+    { key: 'criticar', label: 'Criticar a Falta de Ambição', description: 'Mostras descontentamento com o resultado.', effect: { up: 0.15, down: 0.4 } },
+  ],
+  loss: [
+    { key: 'apoiar', label: 'Apoiar o Grupo', description: 'Não culpas ninguém, foca-te em recuperar juntos.', effect: { up: 0.45, down: 0.1 } },
+    { key: 'motivar', label: 'Focar na Recuperação', description: 'Discurso equilibrado, olhando já para o próximo jogo.', effect: { up: 0.3, down: 0.2 } },
+    { key: 'criticar', label: 'Criticar Duramente', description: 'Não escondes o descontentamento com a exibição — arriscado.', effect: { up: 0.1, down: 0.55 } },
+  ],
+};
+
+function matchResultFor(homeScore, awayScore, isHome) {
+  const us = isHome ? homeScore : awayScore;
+  const them = isHome ? awayScore : homeScore;
+  if (us > them) return 'win';
+  if (us < them) return 'loss';
+  return 'draw';
+}
+
+/* Aplica o efeito escolhido a todo o plantel do clube do utilizador — cada
+   jogador tem uma hipótese independente de subir, descer, ou não mudar de
+   nível de moral (happiness), tal como em applyQuestionEffect
+   (routes/morale.js). */
+function applyTeamTalkEffect(teamId, effect) {
+  const players = db.prepare('SELECT id, happiness FROM players WHERE team_id = ?').all(teamId);
+  const update = db.prepare("UPDATE players SET happiness = ?, updated_at = datetime('now') WHERE id = ?");
+  let up = 0; let down = 0;
+
+  players.forEach((p) => {
+    const roll = Math.random();
+    if (roll < effect.up) {
+      update.run(shiftTalkHappiness(p.happiness, 1), p.id);
+      up += 1;
+    } else if (roll < effect.up + effect.down) {
+      update.run(shiftTalkHappiness(p.happiness, -1), p.id);
+      down += 1;
+    }
+  });
+
+  return { up, down, total: players.length };
+}
+
 /* ---------- Monta o plantel de uma equipa para este jogo ao vivo ----------
    Usa a Tática guardada (onze + suplentes); completa com o resto do
    plantel, tal como na simulação offline, para o jogo nunca ficar sem
@@ -451,6 +526,7 @@ function rowToPayload(row, newEvents) {
   const home = JSON.parse(row.home_state_json);
   const away = JSON.parse(row.away_state_json);
   const events = JSON.parse(row.events_json || '[]');
+  const friendly = db.prepare('SELECT is_cup, is_league, pre_talk_given, post_talk_given FROM club_friendlies WHERE id = ?').get(row.friendly_id);
   return {
     friendly_id: row.friendly_id,
     status: row.status,
@@ -461,6 +537,8 @@ function rowToPayload(row, newEvents) {
     away: teamStateForClient(away),
     events,
     new_events: newEvents || [],
+    pre_talk_given: !!friendly?.pre_talk_given,
+    post_talk_given: !!friendly?.post_talk_given,
   };
 }
 
@@ -677,6 +755,68 @@ function finishStaleLiveMatches(todayDateStr) {
   });
   return finished;
 }
+
+/* ---------- GET /api/live-matches/:friendlyId/team-talk-options ----------
+   Devolve as opções de palestra disponíveis: pré-jogo (sempre as mesmas) e
+   pós-jogo (só depois de terminado, já filtradas pelo resultado real do
+   clube do utilizador) — assim o frontend nunca precisa de duplicar estes
+   textos nem de adivinhar o resultado por conta própria. */
+router.get('/:friendlyId/team-talk-options', (req, res) => {
+  const friendly = db.prepare('SELECT * FROM club_friendlies WHERE id = ?').get(req.params.friendlyId);
+  if (!friendly) return res.status(404).json({ error: 'Jogo não encontrado' });
+
+  const userTeam = db.prepare('SELECT id FROM teams WHERE is_user_controlled = 1').get();
+  const isHomeUser = userTeam && friendly.home_team_id === userTeam.id;
+
+  const strip = (list) => list.map(({ key, label, description }) => ({ key, label, description }));
+  const post = friendly.status === 'played'
+    ? strip(TEAM_TALK_POST[matchResultFor(friendly.home_score, friendly.away_score, isHomeUser)] || [])
+    : [];
+
+  res.json({
+    pre: strip(TEAM_TALK_PRE),
+    pre_talk_given: !!friendly.pre_talk_given,
+    post,
+    post_talk_given: !!friendly.post_talk_given,
+  });
+});
+
+/* ---------- POST /api/live-matches/:friendlyId/team-talk — palestra de balneário ----------
+   phase: 'pre' (antes do jogo começar) ou 'post' (depois do apito final).
+   Cada uma só pode ser dada uma vez por jogo (ver pre_talk_given /
+   post_talk_given em club_friendlies) — nem o pré-jogo nem o pós-jogo se
+   repetem, mesmo que a janela seja reaberta. */
+router.post('/:friendlyId/team-talk', (req, res) => {
+  const friendly = db.prepare('SELECT * FROM club_friendlies WHERE id = ?').get(req.params.friendlyId);
+  if (!friendly) return res.status(404).json({ error: 'Jogo não encontrado' });
+
+  const userTeam = db.prepare('SELECT id FROM teams WHERE is_user_controlled = 1').get();
+  const isHomeUser = userTeam && friendly.home_team_id === userTeam.id;
+  const isAwayUser = userTeam && friendly.away_team_id === userTeam.id;
+  if (!isHomeUser && !isAwayUser) return res.status(400).json({ error: 'Este jogo não envolve o teu clube.' });
+
+  const { phase, talk_key } = req.body;
+  let option;
+
+  if (phase === 'pre') {
+    if (friendly.pre_talk_given) return res.status(400).json({ error: 'Já deste a palestra de pré-jogo.' });
+    option = TEAM_TALK_PRE.find((o) => o.key === talk_key);
+    if (!option) return res.status(400).json({ error: 'Palestra inválida.' });
+    db.prepare('UPDATE club_friendlies SET pre_talk_given = 1 WHERE id = ?').run(friendly.id);
+  } else if (phase === 'post') {
+    if (friendly.status !== 'played') return res.status(400).json({ error: 'O jogo ainda não terminou.' });
+    if (friendly.post_talk_given) return res.status(400).json({ error: 'Já deste a palestra de pós-jogo.' });
+    const result = matchResultFor(friendly.home_score, friendly.away_score, isHomeUser);
+    option = (TEAM_TALK_POST[result] || []).find((o) => o.key === talk_key);
+    if (!option) return res.status(400).json({ error: 'Palestra inválida.' });
+    db.prepare('UPDATE club_friendlies SET post_talk_given = 1 WHERE id = ?').run(friendly.id);
+  } else {
+    return res.status(400).json({ error: 'Fase de palestra inválida.' });
+  }
+
+  const summary = applyTeamTalkEffect(userTeam.id, option.effect);
+  res.json({ ok: true, ...summary });
+});
 
 module.exports = router;
 module.exports.finishStaleLiveMatches = finishStaleLiveMatches;
