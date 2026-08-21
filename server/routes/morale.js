@@ -12,6 +12,7 @@
    ========================================================== */
 const express = require('express');
 const db = require('../db/database');
+const league = require('./league');
 
 const router = express.Router();
 
@@ -47,6 +48,11 @@ const TANTRUM_FLAVOUR = [
   'exigiu explicações por não estar a jogar mais minutos',
   'recusou-se a participar no treino, queixando-se da falta de oportunidades',
   'fez queixa junto da equipa técnica por continuar afastado da titularidade',
+];
+const PLAYING_TIME_FLAVOUR = [
+  'veio ter contigo depois do treino a pedir mais oportunidades',
+  'pediu uma reunião para perceber porque continua tão pouco utilizado',
+  'mostrou-se visivelmente frustrado com a falta de minutos em campo',
 ];
 
 function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
@@ -239,6 +245,49 @@ function runMoraleTick(nextDateStr) {
       });
     });
 
+  /* ---------- Pedidos de tempo de jogo ----------
+     Qualquer jogador (não só os "Problemáticos") com muito poucos jogos
+     disputados esta época pode vir pedir-te mais oportunidades — a forma
+     como respondes (routes/morale.js, PUT /incidents/:id/respond) mexe na
+     moral e, se ignorado, também no rendimento nos treinos. Só começa a
+     ser possível depois de a época já ir com alguma folga (35 dias),
+     para não acontecer logo nos primeiros jogos. */
+  const seasonStart = league.getCurrentSeasonStart();
+  const daysIntoSeason = Math.floor((new Date(`${nextDateStr}T00:00:00Z`) - new Date(`${seasonStart}T00:00:00Z`)) / 86400000);
+
+  if (daysIntoSeason >= 35) {
+    players
+      .filter((p) => !hasPendingIncident.has(p.id) && !p.stood_down_until)
+      .forEach((p) => {
+        let statsList = [];
+        try { statsList = JSON.parse(p.season_stats_json || '[]'); } catch { statsList = []; }
+        const general = statsList.find((r) => r.competition === 'Geral (Clube)') || { j: 0 };
+        const gamesPlayed = Number(general.j) || 0;
+        if (gamesPlayed > 1) return;
+
+        let chance = 0.01;
+        if (PROBLEM_TIERS.includes(p.personality)) chance *= 2;
+        else if (LOYAL_TIERS.includes(p.personality)) chance *= 0.4;
+        if (Math.random() >= chance) return;
+
+        const info = db.prepare(`
+          INSERT INTO player_incidents (team_id, player_id, kind, event_date)
+          VALUES (@team_id, @player_id, 'playing_time', @event_date)
+        `).run({ team_id: myTeam.id, player_id: p.id, event_date: nextDateStr });
+
+        db.prepare(`
+          INSERT INTO messages (team_id, type, title, body, player_id, incident_id)
+          VALUES (@team_id, 'player_incident', @title, @body, @player_id, @incident_id)
+        `).run({
+          team_id: myTeam.id,
+          player_id: p.id,
+          incident_id: info.lastInsertRowid,
+          title: `😤 ${p.name} pede-te tempo de jogo`,
+          body: `${p.name} só disputou ${gamesPlayed} jogo${gamesPlayed === 1 ? '' : 's'} esta época e ${pick(PLAYING_TIME_FLAVOUR)}. É preciso decidir o que fazer.`,
+        });
+      });
+  }
+
   /* ---------- Pergunta ocasional ao treinador ---------- */
   const hasPendingQuestion = db.prepare("SELECT id FROM manager_questions WHERE team_id = ? AND status = 'pending'").get(myTeam.id);
   if (!hasPendingQuestion && Math.random() < 0.01) {
@@ -273,7 +322,12 @@ router.put('/incidents/:id/respond', (req, res) => {
   const { action } = req.body;
   let resolution = '';
 
-  if (action === 'transfer_list') {
+  if (action === 'promise') {
+    if (incident.kind !== 'playing_time') return res.status(400).json({ error: 'Ação inválida' });
+    db.prepare("UPDATE players SET happiness = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(shiftHappiness(player.happiness, 1), player.id);
+    resolution = `Prometeste mais oportunidades a ${player.name} — ele ficou satisfeito, por agora. É melhor cumprires a promessa em breve.`;
+  } else if (action === 'transfer_list') {
     let askingPrice = Number(req.body.asking_price);
     if (!askingPrice || askingPrice <= 0) {
       const parsed = parseFloat(String(player.market_value_text || '').replace(/[^\d.,]/g, '').replace(',', '.'));
@@ -294,7 +348,20 @@ router.put('/incidents/:id/respond', (req, res) => {
     `).run(untilStr, incident.kind === 'fight' ? 'Afastado por conflito com um colega' : 'Afastado por birra no treino', player.id);
     resolution = `${player.name} foi afastado do plantel durante ${days} dia${days === 1 ? '' : 's'} (até ${untilStr.split('-').reverse().join('/')}).`;
   } else if (action === 'ignore') {
-    resolution = `Decidiste não tomar nenhuma medida sobre ${player.name}.`;
+    /* Ignorar um pedido de tempo de jogo não é neutro como ignorar uma
+       briga ou uma birra pontual — o jogador sente-se mesmo desprezado:
+       a moral desce a sério e o rendimento nos treinos ressente-se
+       (training_rating), refletindo o pedido do treinador de que isto
+       "influencie no jogo, comportamento e rendimento". */
+    if (incident.kind === 'playing_time') {
+      const newRating = Math.max(0, (Number(player.training_rating) || 5) - (1 + Math.random() * 1.5));
+      db.prepare(`
+        UPDATE players SET happiness = ?, training_rating = ?, updated_at = datetime('now') WHERE id = ?
+      `).run(shiftHappiness(player.happiness, -1), Number(newRating.toFixed(1)), player.id);
+      resolution = `Decidiste não fazer nada — ${player.name} ficou visivelmente desmotivado e o seu rendimento nos treinos ressentiu-se.`;
+    } else {
+      resolution = `Decidiste não tomar nenhuma medida sobre ${player.name}.`;
+    }
   } else {
     return res.status(400).json({ error: 'Ação inválida' });
   }

@@ -339,7 +339,7 @@ CREATE TABLE IF NOT EXISTS player_incidents (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   team_id     INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
   player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-  kind        TEXT NOT NULL CHECK (kind IN ('fight','tantrum')),
+  kind        TEXT NOT NULL CHECK (kind IN ('fight','tantrum','playing_time')),
   status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','resolved')),
   resolution  TEXT,
   event_date  TEXT NOT NULL,
@@ -359,6 +359,33 @@ CREATE TABLE IF NOT EXISTS manager_questions (
   resolved_at  TEXT
 );
 `);
+
+/* ---------- Migração segura: alarga o CHECK de kind em player_incidents ----------
+   Mesma ideia da migração de player_awards mais abaixo — bases de dados
+   criadas antes do pedido de tempo de jogo ('playing_time') têm a tabela
+   já criada com o CHECK antigo. */
+{
+  const schemaRow = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'player_incidents'").get();
+  if (schemaRow && !schemaRow.sql.includes('playing_time')) {
+    db.exec(`
+      ALTER TABLE player_incidents RENAME TO player_incidents_old;
+      CREATE TABLE player_incidents (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_id     INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        kind        TEXT NOT NULL CHECK (kind IN ('fight','tantrum','playing_time')),
+        status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','resolved')),
+        resolution  TEXT,
+        event_date  TEXT NOT NULL,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        resolved_at TEXT
+      );
+      INSERT INTO player_incidents (id, team_id, player_id, kind, status, resolution, event_date, created_at, resolved_at)
+        SELECT id, team_id, player_id, kind, status, resolution, event_date, created_at, resolved_at FROM player_incidents_old;
+      DROP TABLE player_incidents_old;
+    `);
+  }
+}
 
 if (!messageCols.includes('incident_id')) db.exec('ALTER TABLE messages ADD COLUMN incident_id INTEGER REFERENCES player_incidents(id)');
 if (!messageCols.includes('question_id')) db.exec('ALTER TABLE messages ADD COLUMN question_id INTEGER REFERENCES manager_questions(id)');

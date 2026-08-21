@@ -179,8 +179,29 @@
 
   <section class="tab-panel hidden" id="panel-minhaEquipa">
     <div class="card">
-      <div class="card-title">Plantel <span id="squadCount" class="squad-count-badge">0</span></div>
-      <div class="squad-grid" id="squadGrid"></div>
+      <div class="squad-header-row">
+        <div class="card-title no-margin">Plantel <span id="squadCount" class="squad-count-badge">0</span></div>
+        <button id="generateSquadValuesBtn" class="btn-mini">💰 Gerar Valores Automáticos</button>
+      </div>
+      <div class="squad-table-wrap">
+        <table class="squad-table">
+          <thead>
+            <tr>
+              <th class="squad-th-photo"></th>
+              <th>Nome</th>
+              <th>Pos</th>
+              <th>Idade</th>
+              <th title="Jogos">J</th>
+              <th title="Golos">G</th>
+              <th title="Assistências">A</th>
+              <th title="Média de Classificação">Média</th>
+              <th>VM</th>
+              <th>Salário</th>
+            </tr>
+          </thead>
+          <tbody id="squadTableBody"></tbody>
+        </table>
+      </div>
       <p class="placeholder-text hidden" id="squadEmpty">Ainda não tens jogadores. Cria o teu plantel na Gestão de Jogadores.</p>
     </div>
   </section>

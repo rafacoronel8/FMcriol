@@ -343,8 +343,30 @@ function starsText(value){
   return '★'.repeat(Math.max(0, Math.min(5, n))) + '☆'.repeat(Math.max(0, 5 - n));
 }
 
+/* Idade a partir da data de nascimento, usando a data do calendário do
+   jogo (currentGameDate) — mesma ideia de calcAge em script_perfilJogador.js. */
+function calcAgeFromBirth(birthDateStr){
+  if(!birthDateStr || !currentGameDate) return '—';
+  const birth = new Date(`${birthDateStr}T00:00:00`);
+  const today = new Date(`${currentGameDate}T00:00:00`);
+  if(isNaN(birth)) return '—';
+  let age = today.getFullYear() - birth.getFullYear();
+  const m = today.getMonth() - birth.getMonth();
+  if(m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
+  return age;
+}
+
+function squadGeneralStats(seasonStatsJson){
+  try{
+    const list = JSON.parse(seasonStatsJson || '[]');
+    return list.find((r) => r.competition === 'Geral (Clube)') || { j: 0, g: 0, a: 0, media: '-' };
+  }catch(err){
+    return { j: 0, g: 0, a: 0, media: '-' };
+  }
+}
+
 async function loadSquad(){
-  const grid = el('squadGrid');
+  const tbody = el('squadTableBody');
   const empty = el('squadEmpty');
   try{
     const res = await fetch(`/api/players?team_id=${teamId}`);
@@ -354,48 +376,66 @@ async function loadSquad(){
     el('squadCount').textContent = players.length;
 
     if(!players.length){
-      grid.innerHTML = '';
+      tbody.innerHTML = '';
       empty.classList.remove('hidden');
       return;
     }
     empty.classList.add('hidden');
 
-    grid.innerHTML = players.map((p) => {
+    tbody.innerHTML = players.map((p) => {
       const avatar = p.photo_path ? `<img src="${p.photo_path}" alt="">` : '🧑';
-      const fClass = fitnessClass(p.fitness_status);
       const isStoodDown = p.stood_down_until && p.stood_down_until >= currentGameDate;
-      const standDownPill = isStoodDown ? `<span class="squad-pill squad-pill-standdown">🚫 Afastado</span>` : '';
+      const stats = squadGeneralStats(p.season_stats_json);
       return `
-        <div class="squad-card${isStoodDown ? ' squad-card-standdown' : ''}">
-          <div class="squad-avatar">${avatar}</div>
-          <div class="squad-info">
-            <div class="squad-name-row">
-              <span class="squad-name">${p.name}</span>
-              <span class="squad-jersey">#${p.jersey_number || '00'}</span>
+        <tr class="${isStoodDown ? 'squad-row-standdown' : ''}" data-id="${p.id}">
+          <td><div class="squad-row-photo">${avatar}</div></td>
+          <td>
+            <div class="squad-row-name-cell">
+              <span class="squad-row-name">${p.name}${isStoodDown ? '<span class="squad-row-standdown-pill">🚫 Afastado</span>' : ''}</span>
+              <span class="squad-row-jersey">#${p.jersey_number || '00'}</span>
             </div>
-            <div class="squad-position">${p.position_tag || 'Posição não definida'}</div>
-            <div class="squad-status-row">
-              <span class="squad-pill ${fClass}">${p.fitness_status || '—'}</span>
-              <span class="squad-pill">${p.club_status || '—'}</span>
-              ${standDownPill}
-            </div>
-            <div class="squad-stars">${starsText(p.current_ability_stars)}</div>
-          </div>
-        </div>`;
+          </td>
+          <td><span class="squad-row-pos">${p.position_code || p.position_tag || '—'}</span></td>
+          <td>${calcAgeFromBirth(p.birth_date)}</td>
+          <td>${stats.j ?? 0}</td>
+          <td>${stats.g ?? 0}</td>
+          <td>${stats.a ?? 0}</td>
+          <td>${stats.media ?? '-'}</td>
+          <td>${p.market_value_text || '—'}</td>
+          <td>${p.wage_text || '—'}</td>
+        </tr>`;
     }).join('');
 
-    grid.querySelectorAll('.squad-card').forEach((card, i) => {
-      card.style.cursor = 'pointer';
-      card.addEventListener('click', () => {
-        window.location.href = `/jogador/perfilJogador.html?id=${players[i].id}`;
+    tbody.querySelectorAll('tr').forEach((row) => {
+      row.addEventListener('click', () => {
+        window.location.href = `/jogador/perfilJogador.html?id=${row.dataset.id}`;
       });
     });
   }catch(err){
-    grid.innerHTML = '';
+    tbody.innerHTML = '';
     empty.textContent = 'Não foi possível carregar o plantel.';
     empty.classList.remove('hidden');
   }
 }
+
+/* ---------- Botão "Gerar Valores Automáticos" — valor de mercado e
+   salário de todo o plantel, a partir dos atributos e da idade. ---------- */
+el('generateSquadValuesBtn').addEventListener('click', async () => {
+  const btn = el('generateSquadValuesBtn');
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'A gerar...';
+  try{
+    const res = await fetch(`/api/players/generate-values?team_id=${teamId}`, { method: 'PUT' });
+    if(!res.ok) throw new Error();
+    await loadSquad();
+  }catch(err){
+    // sem feedback especial — a tabela simplesmente não muda
+  }finally{
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
+});
 
 /* ---------- Inscritos: números da camisola ---------- */
 function renderInscritos(players){
@@ -770,11 +810,17 @@ function renderMessageDetail(m){
   }else if(m.type === 'incoming_offer_pending'){
     actions = `<p class="msg-decision-note">${m.offer_status === 'accepted' ? 'Proposta aceite.' : 'Proposta recusada.'}</p>`;
   }else if(isPendingIncident){
-    actions = `<div class="msg-actions" data-incident-id="${m.incident_id}">
-         <button class="msg-btn msg-btn-reject" data-action="transfer_list">Lista de Transferências</button>
-         <button class="msg-btn msg-btn-neutral" data-action="stand_down">Afastar Temporariamente</button>
-         <button class="msg-btn msg-btn-neutral" data-action="ignore">Ignorar</button>
-       </div>`;
+    actions = m.incident_kind === 'playing_time'
+      ? `<div class="msg-actions" data-incident-id="${m.incident_id}">
+           <button class="msg-btn msg-btn-accept" data-action="promise">Prometer Mais Minutos</button>
+           <button class="msg-btn msg-btn-reject" data-action="transfer_list">Lista de Transferências</button>
+           <button class="msg-btn msg-btn-neutral" data-action="ignore">Ignorar</button>
+         </div>`
+      : `<div class="msg-actions" data-incident-id="${m.incident_id}">
+           <button class="msg-btn msg-btn-reject" data-action="transfer_list">Lista de Transferências</button>
+           <button class="msg-btn msg-btn-neutral" data-action="stand_down">Afastar Temporariamente</button>
+           <button class="msg-btn msg-btn-neutral" data-action="ignore">Ignorar</button>
+         </div>`;
   }else if(m.type === 'player_incident' && m.incident_resolution){
     actions = `<p class="msg-decision-note">${m.incident_resolution}</p>`;
   }else if(isPendingQuestion){

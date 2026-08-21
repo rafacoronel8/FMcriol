@@ -909,6 +909,21 @@ el('generateAttrsBtn')?.addEventListener('click', async () => {
     }
     renderAttrList('mentalList', updated.mental_json, 'mental_json');
     renderAttrList('physicalList', updated.physical_json, 'physical_json');
+
+    // Depois de gerar os atributos, atualiza logo o valor de mercado e o
+    // salário (ver PUT /api/players/:id/generate-value) — assim os dois
+    // ficam sempre coerentes um com o outro, sem passo extra manual.
+    try{
+      const valueRes = await fetch(`/api/players/${playerId}/generate-value`, { method: 'PUT' });
+      if(valueRes.ok){
+        const withValue = await valueRes.json();
+        if(el('marketValue')) el('marketValue').textContent = withValue.market_value_text || '—';
+        if(el('salaryValue')) el('salaryValue').textContent = withValue.wage_text || '—';
+        if(el('wage')) el('wage').textContent = withValue.wage_text || '';
+      }
+    }catch(valueErr){
+      // se isto falhar, os atributos já foram gerados na mesma — não é crítico
+    }
   }catch(err){
     input.focus();
   }finally{

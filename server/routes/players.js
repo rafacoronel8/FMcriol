@@ -131,6 +131,109 @@ function generateAttrList(names, weights, overall) {
   return names.map((name) => [name, scaledAttrValue(overall, weights[name] ?? 0)]);
 }
 
+/* ---------- Valor de mercado e salário automáticos, por atributos + idade ---------- */
+function currentGameDateStr() {
+  const row = db.prepare('SELECT current_date FROM game_state WHERE id = 1').get();
+  return row ? row.current_date : null;
+}
+
+function ageFromBirthDate(birthDateStr) {
+  const today = currentGameDateStr();
+  if (!birthDateStr || !today) return null;
+  const [ty, tm, td] = today.split('-').map(Number);
+  const [by, bm, bd] = String(birthDateStr).slice(0, 10).split('-').map(Number);
+  if (!by) return null;
+  let age = ty - by;
+  if (tm < bm || (tm === bm && td < bd)) age -= 1;
+  return age;
+}
+
+/* Média de TODOS os atributos individuais do jogador (1-20), guarda-redes
+   incluídos — a mesma escala usada em scaledAttrValue acima. Não distingue
+   por posição (ao contrário da geração de atributos): aqui só interessa
+   "quão bom é este jogador no total", que a idade depois pondera. */
+function computePlayerQuality(player) {
+  const isGK = isGoalkeeperPosition(player.position_code);
+  const fields = isGK
+    ? ['goalkeeping_json', 'technical_json', 'mental_json', 'physical_json']
+    : ['technical_json', 'set_pieces_json', 'mental_json', 'physical_json'];
+  let sum = 0; let count = 0;
+  fields.forEach((field) => {
+    let list;
+    try { list = JSON.parse(player[field] || '[]'); } catch { list = []; }
+    if (Array.isArray(list)) {
+      list.forEach(([, value]) => {
+        const v = Number(value);
+        if (Number.isFinite(v)) { sum += v; count += 1; }
+      });
+    }
+  });
+  return count ? sum / count : 10;
+}
+
+/* Curva de idade para o VALOR DE MERCADO — sobe até ao pico (27 anos) e
+   desce mais depressa depois disso (um jogador em fim de carreira vale
+   muito pouco no mercado, mesmo que ainda jogue bem). */
+function ageValueFactor(age) {
+  if (!Number.isFinite(age)) return 0.55;
+  if (age <= 27) return Math.max(0.22, 1 - 0.006 * (27 - age) ** 2);
+  return Math.max(0.05, 1 - 0.012 * (age - 27) ** 2);
+}
+
+/* Curva de idade para o SALÁRIO — desce depois do pico de forma mais lenta
+   do que o valor de mercado, porque a experiência ainda pesa no ordenado
+   de um veterano mesmo quando já vale pouco numa venda. */
+function ageWageFactor(age) {
+  if (!Number.isFinite(age)) return 0.55;
+  return Math.max(0.15, 1 - 0.006 * (age - 27) ** 2);
+}
+
+const MAX_MARKET_VALUE = 400000;
+const MAX_WAGE = 5000;
+
+function computePlayerValuation(player) {
+  const quality01 = Math.max(0, Math.min(1, (computePlayerQuality(player) - 1) / 19));
+  const age = ageFromBirthDate(player.birth_date);
+
+  const marketValue = Math.max(1000, Math.round((MAX_MARKET_VALUE * (quality01 ** 1.8) * ageValueFactor(age)) / 1000) * 1000);
+  const wage = Math.max(50, Math.round((MAX_WAGE * (quality01 ** 1.5) * ageWageFactor(age)) / 10) * 10);
+
+  return {
+    market_value_text: `£${Math.min(MAX_MARKET_VALUE, marketValue).toLocaleString('pt-PT')}`,
+    wage_text: `£${Math.min(MAX_WAGE, wage).toLocaleString('pt-PT')} p/s`,
+  };
+}
+
+/* ---------- PUT /api/players/:id/generate-value — um jogador de cada vez ---------- */
+router.put('/:id/generate-value', (req, res) => {
+  const player = db.prepare('SELECT * FROM players WHERE id = ?').get(req.params.id);
+  if (!player) return res.status(404).json({ error: 'Jogador não encontrado' });
+
+  const { market_value_text, wage_text } = computePlayerValuation(player);
+  db.prepare("UPDATE players SET market_value_text = ?, wage_text = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(market_value_text, wage_text, player.id);
+
+  res.json(deserialize(db.prepare('SELECT * FROM players WHERE id = ?').get(player.id)));
+});
+
+/* ---------- PUT /api/players/generate-values?team_id=X — todo o plantel de uma vez ----------
+   Pensado para o botão "Gerar Valores Automáticos" na aba Minha Equipa —
+   aplica a mesma fórmula a cada jogador do plantel, um a um. */
+router.put('/generate-values', (req, res) => {
+  const teamId = req.query.team_id || req.body.team_id;
+  if (!teamId) return res.status(400).json({ error: 'É preciso indicar team_id' });
+
+  const players = db.prepare('SELECT * FROM players WHERE team_id = ?').all(teamId);
+  const update = db.prepare("UPDATE players SET market_value_text = @market_value_text, wage_text = @wage_text, updated_at = datetime('now') WHERE id = @id");
+
+  players.forEach((p) => {
+    const { market_value_text, wage_text } = computePlayerValuation(p);
+    update.run({ id: p.id, market_value_text, wage_text });
+  });
+
+  res.json({ ok: true, updated: players.length });
+});
+
 /* ---------- PUT /api/players/:id/generate-attributes ----------
    Recebe um "Nível Geral" de 0 a 100 e gera automaticamente TODOS os
    atributos individuais do jogador (Técnica/Guarda-Redes, Bolas Paradas,
@@ -230,7 +333,7 @@ router.get('/', (req, res) => {
     SELECT p.id, p.name, p.photo_path, p.jersey_number, p.position_tag, p.position_code, p.team_id,
            p.club_status, p.fitness_status, p.fitness_note, p.current_ability_stars, p.form_text,
            p.market_value_text, p.wage_text, p.personality, p.stood_down_until, p.stood_down_reason,
-           p.focus_role, p.loan_from_team_id, p.loan_return_date,
+           p.focus_role, p.loan_from_team_id, p.loan_return_date, p.birth_date, p.season_stats_json,
            t.name AS team_name,
            loanFrom.name AS loan_from_team_name
     FROM players p
