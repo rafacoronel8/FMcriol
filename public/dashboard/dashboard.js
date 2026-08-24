@@ -15,6 +15,10 @@ function fmtMoney(v){
   return '£' + Number(v || 0).toLocaleString('pt-PT');
 }
 
+/* Tem de bater certo com MAX_NEGOTIATION_ROUNDS em routes/transfers.js —
+   só serve para decidir se ainda mostramos o botão "Contrapropor". */
+const MAX_NEGOTIATION_ROUNDS = 3;
+
 function tierClass(tier){
   const t = String(tier || '').toLowerCase();
   if(t.includes('muito rico') || t === 'rico') return 'tier-good';
@@ -904,8 +908,12 @@ function renderMessageDetail(m){
   const isPendingQuestion = m.type === 'manager_question' && m.question_status === 'pending';
 
   if(isPendingOffer){
+    const roundsLeft = MAX_NEGOTIATION_ROUNDS - (m.offer_negotiation_round || 0);
+    const counterBtn = roundsLeft > 0
+      ? `<button class="msg-btn msg-btn-neutral" data-action="counter">Contrapropor</button>` : '';
     actions = `<div class="msg-actions" data-offer-id="${m.transfer_offer_id}">
          <button class="msg-btn msg-btn-accept" data-action="accept">Aceitar</button>
+         ${counterBtn}
          <button class="msg-btn msg-btn-reject" data-action="reject">Recusar</button>
        </div>`;
   }else if(m.type === 'incoming_offer_pending'){
@@ -964,7 +972,13 @@ function renderMessageDetail(m){
   if(actionsBox){
     if(actionsBox.dataset.offerId){
       actionsBox.querySelectorAll('.msg-btn').forEach((btn) => {
-        btn.addEventListener('click', () => respondToOffer(actionsBox.dataset.offerId, btn.dataset.action === 'accept', actionsBox));
+        btn.addEventListener('click', () => {
+          if(btn.dataset.action === 'counter'){
+            counterOffer(actionsBox.dataset.offerId, actionsBox, m.offer_amount);
+          }else{
+            respondToOffer(actionsBox.dataset.offerId, btn.dataset.action === 'accept', actionsBox);
+          }
+        });
       });
     }else if(actionsBox.dataset.incidentId){
       actionsBox.querySelectorAll('.msg-btn').forEach((btn) => {
@@ -1030,12 +1044,135 @@ async function respondToOffer(offerId, accept, actionsBox){
   }
 }
 
+/* ---------- Painel genérico de decisão (substitui window.prompt) ----------
+   Usado sempre que é preciso pedir um valor ao treinador antes de continuar
+   uma ação — contrapropostas, dias de afastamento, preço de lista de
+   transferências, etc. — com um painel próprio da interface em vez do
+   prompt() nativo do browser. Devolve uma Promise que resolve com o texto
+   introduzido, ou null se o treinador cancelar (Cancelar, X, clique fora,
+   ou tecla Esc). */
+function openDecisionModal({
+  title = '',
+  message = '',
+  label = '',
+  placeholder = '',
+  defaultValue = '',
+  hint = '',
+  confirmLabel = 'OK',
+  cancelLabel = 'Cancelar',
+  inputMode = '',
+} = {}){
+  return new Promise((resolve) => {
+    const overlay = el('decisionModalOverlay');
+    const input = el('decisionModalInput');
+    const labelEl = el('decisionModalLabel');
+    const hintEl = el('decisionModalHint');
+    const errorEl = el('decisionModalError');
+    const confirmBtn = el('decisionModalConfirm');
+    const cancelBtn = el('decisionModalCancel');
+    const closeBtn = el('decisionModalClose');
+
+    el('decisionModalTitle').textContent = title;
+    el('decisionModalMessage').textContent = message;
+    labelEl.textContent = label;
+    labelEl.classList.toggle('hidden', !label);
+    input.value = defaultValue;
+    input.placeholder = placeholder;
+    input.inputMode = inputMode || '';
+    if(hint){ hintEl.textContent = hint; hintEl.classList.remove('hidden'); }
+    else{ hintEl.classList.add('hidden'); }
+    errorEl.textContent = '';
+    errorEl.classList.add('hidden');
+    confirmBtn.textContent = confirmLabel;
+    cancelBtn.textContent = cancelLabel;
+
+    overlay.classList.remove('hidden');
+    setTimeout(() => { input.focus(); input.select(); }, 20);
+
+    function cleanup(){
+      overlay.classList.add('hidden');
+      confirmBtn.removeEventListener('click', onConfirm);
+      cancelBtn.removeEventListener('click', onCancel);
+      closeBtn.removeEventListener('click', onCancel);
+      overlay.removeEventListener('click', onOverlayClick);
+      input.removeEventListener('keydown', onKeydown);
+    }
+    function onConfirm(){
+      const value = input.value;
+      cleanup();
+      resolve(value);
+    }
+    function onCancel(){
+      cleanup();
+      resolve(null);
+    }
+    function onOverlayClick(e){
+      if(e.target === overlay) onCancel();
+    }
+    function onKeydown(e){
+      if(e.key === 'Enter'){ e.preventDefault(); onConfirm(); }
+      else if(e.key === 'Escape'){ e.preventDefault(); onCancel(); }
+    }
+
+    confirmBtn.addEventListener('click', onConfirm);
+    cancelBtn.addEventListener('click', onCancel);
+    closeBtn.addEventListener('click', onCancel);
+    overlay.addEventListener('click', onOverlayClick);
+    input.addEventListener('keydown', onKeydown);
+  });
+}
+
+/* ---------- Contrapropor uma oferta pendente ---------- */
+async function counterOffer(offerId, actionsBox, currentAmount){
+  const suggested = Math.round((Number(currentAmount) || 0) * 1.15);
+  const amountText = await openDecisionModal({
+    title: 'Contraproposta',
+    message: `Oferta atual: ${fmtMoney(currentAmount)}. Por quanto queres contrapropor?`,
+    label: 'Valor da contraproposta',
+    placeholder: suggested ? String(suggested) : '',
+    defaultValue: suggested ? String(suggested) : '',
+    inputMode: 'decimal',
+    confirmLabel: 'Enviar Contraproposta',
+  });
+  if(amountText === null) return; // cancelou
+
+  const counterAmount = Number(String(amountText).replace(/[^\d.,]/g, '').replace(',', '.'));
+  if(!counterAmount || counterAmount <= Number(currentAmount)){
+    actionsBox.insertAdjacentHTML('afterend', '<p class="msg-decision-note">A contraproposta tem de ser um valor acima da oferta atual.</p>');
+    return;
+  }
+
+  actionsBox.querySelectorAll('.msg-btn').forEach((b) => (b.disabled = true));
+  try{
+    const res = await fetch(`/api/transfers/${offerId}/counter`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ counter_amount: counterAmount }),
+    });
+    const data = await res.json().catch(() => null);
+    if(!res.ok) throw new Error(data?.error || 'Erro ao contrapropor');
+    await loadMessages();
+    await loadClub();
+    loadOverview();
+  }catch(err){
+    actionsBox.querySelectorAll('.msg-btn').forEach((b) => (b.disabled = false));
+    actionsBox.insertAdjacentHTML('afterend', `<p class="msg-decision-note">${err.message || 'Não foi possível enviar a contraproposta.'}</p>`);
+  }
+}
+
 /* ---------- Responder a um incidente de personalidade ---------- */
 async function respondToIncident(incidentId, action, actionsBox){
   const body = { action };
 
   if(action === 'stand_down'){
-    const daysText = window.prompt('Durante quantos dias fica o jogador afastado do plantel?', '7');
+    const daysText = await openDecisionModal({
+      title: 'Afastar Temporariamente',
+      message: 'Durante quantos dias fica o jogador afastado do plantel?',
+      label: 'Dias de afastamento',
+      defaultValue: '7',
+      inputMode: 'numeric',
+      confirmLabel: 'Confirmar Afastamento',
+    });
     if(daysText === null) return; // cancelou
     const days = Number(daysText);
     if(!days || days <= 0){
@@ -1044,7 +1181,15 @@ async function respondToIncident(incidentId, action, actionsBox){
     }
     body.duration_days = days;
   }else if(action === 'transfer_list'){
-    const priceText = window.prompt('Por quanto colocas o jogador na lista de transferências? (deixa em branco para um valor automático)', '');
+    const priceText = await openDecisionModal({
+      title: 'Lista de Transferências',
+      message: 'Por quanto colocas o jogador na lista de transferências?',
+      label: 'Preço pedido',
+      placeholder: 'Automático',
+      hint: 'Deixa em branco para um valor automático.',
+      inputMode: 'decimal',
+      confirmLabel: 'Colocar na Lista',
+    });
     if(priceText === null) return; // cancelou
     if(priceText.trim()) body.asking_price = Number(priceText);
   }
@@ -2877,24 +3022,61 @@ let teamTalkOptions = [];
 let teamTalkSelectedKey = null;
 let postTalkPromptShownFor = null; // evita reabrir a palestra de pós-jogo sozinha mais do que uma vez por jogo
 
+/* ---------- Heurística visual: cada tom de palestra ganha um ícone e uma
+   cor de acento com base nas palavras do próprio label/descrição que já
+   vêm da API — não depende de conhecer as chaves exatas no backend. ---------- */
+const TEAM_TALK_TONE_RULES = [
+  { test: /calm|tranquil|seren|sereno/i, icon: '😌', tone: 'calm' },
+  { test: /motiv|incentiv|encoraj|confia|acredit|inspira/i, icon: '💪', tone: 'positive' },
+  { test: /elogi|parabén|satisfeit|orgulh|felicit/i, icon: '👏', tone: 'positive' },
+  { test: /agress|exig|duro|pressã|press[aã]o|grit|forte/i, icon: '🔥', tone: 'intense' },
+  { test: /crític|critic|repreend|zang|irrit|dur[ao]s?/i, icon: '⚠️', tone: 'harsh' },
+  { test: /realist|honest|direto|direta|sincer/i, icon: '🎯', tone: 'calm' },
+  { test: /humor|engraç|descontra|leve|brinca/i, icon: '😄', tone: 'light' },
+  { test: /silên|silenc|nada|ignora|passiv/i, icon: '🤐', tone: 'calm' },
+];
+function guessTeamTalkVisual(o){
+  const text = `${o.label || ''} ${o.description || ''}`;
+  const rule = TEAM_TALK_TONE_RULES.find((r) => r.test.test(text));
+  return rule || { icon: '🗣️', tone: 'calm' };
+}
+
 function renderTeamTalkOptions(options){
   teamTalkOptions = options;
   teamTalkSelectedKey = null;
   el('teamTalkConfirmBtn').disabled = true;
 
-  el('teamTalkOptions').innerHTML = options.map((o) => `
-    <button type="button" class="team-talk-option" data-key="${o.key}">
-      <div class="team-talk-option-label">${o.label}</div>
-      <div class="team-talk-option-desc">${o.description}</div>
-    </button>`).join('');
+  const box = el('teamTalkOptions');
+  box.classList.remove('locked');
+  box.innerHTML = options.map((o) => {
+    const { icon, tone } = guessTeamTalkVisual(o);
+    return `
+    <button type="button" class="team-talk-option" data-key="${o.key}" data-tone="${tone}">
+      <span class="team-talk-option-icon">${icon}</span>
+      <span class="team-talk-option-text">
+        <span class="team-talk-option-label">${o.label}</span>
+        <span class="team-talk-option-desc">${o.description}</span>
+      </span>
+      <span class="team-talk-option-radio" aria-hidden="true"></span>
+    </button>`;
+  }).join('');
 
-  el('teamTalkOptions').querySelectorAll('.team-talk-option').forEach((btn) => {
+  box.querySelectorAll('.team-talk-option').forEach((btn) => {
     btn.addEventListener('click', () => {
       teamTalkSelectedKey = btn.dataset.key;
-      el('teamTalkOptions').querySelectorAll('.team-talk-option').forEach((b) => b.classList.toggle('selected', b === btn));
+      box.querySelectorAll('.team-talk-option').forEach((b) => b.classList.toggle('selected', b === btn));
       el('teamTalkConfirmBtn').disabled = false;
     });
   });
+}
+
+function renderTeamTalkSkeleton(){
+  el('teamTalkOptions').innerHTML = `
+    <div class="team-talk-skeleton">
+      <div class="team-talk-skeleton-row"></div>
+      <div class="team-talk-skeleton-row"></div>
+      <div class="team-talk-skeleton-row"></div>
+    </div>`;
 }
 
 async function renderTeamTalkLineup(){
@@ -2933,6 +3115,8 @@ async function openPreMatchTalk(friendlyId){
   teamTalkFriendlyId = friendlyId;
   teamTalkPhase = 'pre';
 
+  el('teamTalkModal').classList.remove('result-win', 'result-loss', 'result-draw');
+  el('teamTalkIcon').textContent = '🎙️';
   el('teamTalkKicker').textContent = 'PRÉ-JOGO';
   el('teamTalkHeadline').textContent = 'Palestra de Pré-Jogo';
   el('teamTalkPrompt').textContent = 'Escolhe o tom da tua palestra antes de entrarem em campo:';
@@ -2942,7 +3126,7 @@ async function openPreMatchTalk(friendlyId){
   el('teamTalkConfirmBtn').disabled = true;
   el('teamTalkContinueBtn').classList.add('hidden');
   el('teamTalkDoneBtn').classList.add('hidden');
-  el('teamTalkOptions').innerHTML = '<p class="placeholder-text">A carregar…</p>';
+  renderTeamTalkSkeleton();
   el('teamTalkOverlay').classList.remove('hidden');
 
   renderTeamTalkLineup();
@@ -2965,12 +3149,23 @@ async function openPreMatchTalk(friendlyId){
   }
 }
 
-/* ---------- Abre a palestra de PÓS-JOGO (automático ao terminar o jogo ao vivo) ---------- */
+/* ---------- Abre a palestra de PÓS-JOGO (automático ao terminar o jogo ao vivo) ----------
+   O ícone e a cor do painel refletem logo o resultado (vitória, derrota ou
+   empate) do ponto de vista do clube do treinador. */
 async function openPostMatchTalk(){
   teamTalkFriendlyId = liveFriendlyId;
   teamTalkPhase = 'post';
 
-  el('teamTalkKicker').textContent = 'PÓS-JOGO';
+  const us = liveMySide === 'away' ? liveState.away_score : liveState.home_score;
+  const them = liveMySide === 'away' ? liveState.home_score : liveState.away_score;
+  const resultClass = us > them ? 'result-win' : (us < them ? 'result-loss' : 'result-draw');
+  const resultIcon = us > them ? '🏆' : (us < them ? '😞' : '🤝');
+  const resultKicker = us > them ? 'VITÓRIA' : (us < them ? 'DERROTA' : 'EMPATE');
+
+  el('teamTalkModal').classList.remove('result-win', 'result-loss', 'result-draw');
+  el('teamTalkModal').classList.add(resultClass);
+  el('teamTalkIcon').textContent = resultIcon;
+  el('teamTalkKicker').textContent = `PÓS-JOGO · ${resultKicker}`;
   el('teamTalkHeadline').textContent = `Resultado Final: ${liveState.home_score} - ${liveState.away_score}`;
   el('teamTalkPrompt').textContent = 'Escolhe o tom da tua palestra depois do apito final:';
   el('teamTalkLineup').classList.add('hidden');
@@ -2980,7 +3175,7 @@ async function openPostMatchTalk(){
   el('teamTalkConfirmBtn').disabled = true;
   el('teamTalkContinueBtn').classList.add('hidden');
   el('teamTalkDoneBtn').classList.add('hidden');
-  el('teamTalkOptions').innerHTML = '<p class="placeholder-text">A carregar…</p>';
+  renderTeamTalkSkeleton();
   el('teamTalkOverlay').classList.remove('hidden');
 
   try{
@@ -3013,11 +3208,21 @@ el('teamTalkConfirmBtn').addEventListener('click', async () => {
     if(!res.ok) throw new Error();
     const summary = await res.json();
 
-    el('teamTalkOptions').querySelectorAll('.team-talk-option').forEach((b) => (b.style.pointerEvents = 'none'));
-    const resultBox = el('teamTalkResult');
-    resultBox.textContent = summary.up || summary.down
-      ? `${summary.up ? `😊 ${summary.up} jogador${summary.up === 1 ? '' : 'es'} ficaram mais motivados. ` : ''}${summary.down ? `☹️ ${summary.down} jogador${summary.down === 1 ? '' : 'es'} ficaram descontentes.` : ''}`
+    el('teamTalkOptions').classList.add('locked');
+
+    const chips = [];
+    if(summary.up) chips.push(`<span class="team-talk-mood-chip mood-up">😊 +${summary.up} motivado${summary.up === 1 ? '' : 's'}</span>`);
+    if(summary.down) chips.push(`<span class="team-talk-mood-chip mood-down">☹️ ${summary.down} descontente${summary.down === 1 ? '' : 's'}</span>`);
+    if(!chips.length) chips.push('<span class="team-talk-mood-chip mood-neutral">〰️ Sem grande reação</span>');
+
+    const resultText = summary.up || summary.down
+      ? 'O balneário reagiu às tuas palavras.'
       : 'A palestra não teve grande impacto imediato no balneário.';
+
+    const resultBox = el('teamTalkResult');
+    resultBox.innerHTML = `
+      <div class="team-talk-result-mood">${chips.join('')}</div>
+      <p class="team-talk-result-text">${resultText}</p>`;
     resultBox.classList.remove('hidden');
 
     btn.classList.add('hidden');
@@ -3029,7 +3234,7 @@ el('teamTalkConfirmBtn').addEventListener('click', async () => {
     loadSquad();
   }catch(err){
     btn.disabled = false;
-    el('teamTalkResult').textContent = 'Não foi possível registar a palestra.';
+    el('teamTalkResult').innerHTML = '<p class="team-talk-result-text">Não foi possível registar a palestra.</p>';
     el('teamTalkResult').classList.remove('hidden');
   }
 });

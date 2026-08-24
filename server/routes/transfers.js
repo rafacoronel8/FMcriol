@@ -30,6 +30,34 @@ const TIER_ACCEPT_RATIO = {
   'Muito Pobre': 0.40,
 };
 
+/* ---------- Negociação de propostas recebidas ----------
+   Quando UM CLUBE ADVERSÁRIO propõe por um jogador teu (mensagem
+   'incoming_offer_pending'), em vez de só Aceitar/Recusar podes
+   contrapropor um valor mais alto — ver PUT /:id/counter mais abaixo.
+
+   BUYER_CEILING_RATIO é o equivalente, do lado do COMPRADOR, ao
+   TIER_ACCEPT_RATIO de cima (que é do lado do vendedor): até quanto,
+   acima do valor de referência do jogador, o clube comprador está
+   disposto a esticar-se para fechar o negócio quando lhe pedes mais
+   dinheiro. Clubes ricos/reputados aguentam contrapropostas bem acima
+   do valor de mercado; clubes pobres desistem depressa. */
+const BUYER_CEILING_RATIO = {
+  'Muito Rico': 1.35,
+  'Rico': 1.20,
+  'Medio': 1.05,
+  'Pobre': 0.90,
+  'Muito Pobre': 0.75,
+};
+
+/* Nunca mais do que isto de trocas de valores por proposta — ao fim
+   destas rondas o comprador aceita a última oferta que puser em cima da
+   mesa ou desiste, nunca fica a negociar para sempre. */
+const MAX_NEGOTIATION_ROUNDS = 3;
+
+/* Se pedires bem mais do que isto acima do teto do comprador, ele
+   sente-se insultado e desiste logo — nem tenta subir a oferta. */
+const INSULT_MULTIPLIER = 1.4;
+
 /* Extrai números de texto tipo "£95M - £113M" ou "£41.5K p/s" -> [95000000, 113000000] */
 function parseMoneyRange(text) {
   const matches = [...String(text || '').matchAll(/([\d]+(?:[.,]\d+)?)\s*(M|K)?/gi)]
@@ -122,6 +150,17 @@ function estimateMarketValue(player) {
 function parseWage(text) {
   const parsed = parseMoneyRange(text);
   return parsed.length ? parsed[0] : 3000;
+}
+
+/* Quanto o comprador está disposto a pagar no máximo por este jogador
+   numa negociação — nunca acima do orçamento de transferências que
+   realmente tem disponível agora. */
+function buyerCeiling(player, buyerTeam) {
+  const referenceValue = estimateMarketValue(player);
+  const tierRatio = BUYER_CEILING_RATIO[buyerTeam.financial_tier] ?? 1.05;
+  const reputationPremium = ((buyerTeam.reputation_stars ?? 3) - 3) * 0.05;
+  const ceilingRatio = Math.max(0.5, tierRatio + reputationPremium);
+  return Math.min(buyerTeam.transfer_budget, referenceValue * ceilingRatio);
 }
 
 /* ---------- Decisão do próprio jogador ----------
@@ -458,6 +497,113 @@ router.post('/free-agent-offer', (req, res) => {
   res.status(201).json(db.prepare('SELECT * FROM transfer_offers WHERE id = ?').get(info.lastInsertRowid));
 });
 
+/* ---------- Aceita uma proposta pendente pelo valor indicado ----------
+   Partilhada por PUT /:id/respond (aceitas logo a proposta original) e
+   PUT /:id/counter (o comprador acaba por aceitar a tua contraproposta) —
+   assim as duas vias seguem sempre exatamente as mesmas regras. O jogador
+   ainda tem de querer mudar-se: se recusar, cria-se a mesma reunião de
+   sempre (ver decidePlayerConsent) em vez de o negócio cair já. */
+function acceptOfferAtAmount(offer, player, buyerTeam, sellerTeam, amount) {
+  return db.transaction(() => {
+    const consent = decidePlayerConsent(player, buyerTeam, sellerTeam);
+    const amountFmt = `£${Math.round(amount).toLocaleString('pt-PT')}`;
+
+    if (!consent.accepted) {
+      /* O estado da proposta fica 'accepted' (o acordo entre clubes
+         mantém-se pelo valor final negociado); falta só o próprio jogador
+         — ver PUT /api/transfers/meetings/:id/respond. */
+      db.prepare("UPDATE transfer_offers SET status = 'accepted', offer_amount = ?, resolved_at = datetime('now') WHERE id = ?")
+        .run(amount, offer.id);
+
+      const state = db.prepare('SELECT game_state.current_date FROM game_state WHERE id = 1').get();
+      const meetingInfo = db.prepare(`
+        INSERT INTO transfer_meetings (team_id, player_id, buyer_team_id, transfer_offer_id, offer_amount, event_date)
+        VALUES (@team_id, @player_id, @buyer_team_id, @transfer_offer_id, @offer_amount, @event_date)
+      `).run({
+        team_id: offer.seller_team_id, player_id: player.id, buyer_team_id: buyerTeam.id,
+        transfer_offer_id: offer.id, offer_amount: amount, event_date: state.current_date,
+      });
+
+      db.prepare(`
+        INSERT INTO messages (team_id, type, title, body, player_id, related_team_id, meeting_id)
+        VALUES (@team_id, 'transfer_meeting', @title, @body, @player_id, @related_team_id, @meeting_id)
+      `).run({
+        team_id: offer.seller_team_id, player_id: player.id, related_team_id: buyerTeam.id,
+        meeting_id: meetingInfo.lastInsertRowid,
+        title: `Reunião necessária: ${player.name}`,
+        body: `Aceitaste a proposta do ${buyerTeam.name} de ${amountFmt} por ${player.name}, mas ele não quer mudar-se. Podes reunir com ele antes de o negócio cair — propõe um empréstimo (volta a 1 de julho da época seguinte) ou diz-lhe que não faz parte dos teus planos, para o deixar mais recetivo a sair.`,
+      });
+
+      return { ok: true, status: 'player_hesitant', meeting_id: meetingInfo.lastInsertRowid };
+    }
+
+    db.prepare("UPDATE transfer_offers SET status = 'accepted', offer_amount = ?, resolved_at = datetime('now') WHERE id = ?")
+      .run(amount, offer.id);
+    finalizePlayerMove({ player, buyerTeam, sellerTeam, wageOffer: consent.wageOffer, amount, isLoan: false });
+
+    const title = `Transferência aceite: ${player.name}`;
+    const body = `Aceitaste a proposta do ${buyerTeam.name} de ${amountFmt} por ${player.name}. A transferência foi concluída.`;
+
+    db.prepare(`
+      INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
+      VALUES (@team_id, 'player_sold', @title, @body, @player_id, @related_team_id)
+    `).run({ team_id: offer.seller_team_id, title, body, player_id: player.id, related_team_id: buyerTeam.id });
+
+    db.logMarketNews({
+      type: 'player_sold',
+      headline: `${player.name} muda-se para o ${buyerTeam.name}`,
+      body,
+      player_name: player.name,
+      player_photo: player.photo_path,
+      from_team_name: sellerTeam?.name,
+      from_team_shield: sellerTeam?.shield_path,
+      to_team_name: buyerTeam.name,
+      to_team_shield: buyerTeam.shield_path,
+      amount,
+    });
+
+    return { ok: true, status: 'accepted' };
+  })();
+}
+
+/* ---------- Recusa definitiva de uma proposta pendente ----------
+   byBuyer=false -> foste tu que recusaste (Recusar, ou contraproposta
+                    absurda que o comprador nem tenta melhorar).
+   byBuyer=true  -> o COMPRADOR é que desiste da negociação (a tua
+                    contraproposta ficou fora do que está disposto a
+                    pagar, e já não há mais rondas ou ele fica insultado). */
+function rejectOfferMessage(offer, player, buyerTeam, sellerTeam, { byBuyer = false } = {}) {
+  db.prepare("UPDATE transfer_offers SET status = 'rejected', resolved_at = datetime('now') WHERE id = ?").run(offer.id);
+
+  /* Proposta recusada: o estado de "listado" do jogador não muda por causa
+     disto. Se já estava na lista de transferências, continua lá (outros
+     clubes podem voltar a propor); se não estava, continua sem estar. */
+  const amountFmt = `£${Math.round(offer.offer_amount).toLocaleString('pt-PT')}`;
+  const title = byBuyer ? `Negociação terminada: ${player.name}` : `Transferência recusada: ${player.name}`;
+  const body = byBuyer
+    ? `O ${buyerTeam.name} não aceitou a tua contraproposta por ${player.name} e desistiu do negócio. O jogador continua na lista de transferências.`
+    : `Recusaste a proposta do ${buyerTeam.name} de ${amountFmt} por ${player.name}. O jogador continua na lista de transferências.`;
+  const msgType = byBuyer ? 'transfer_player_refused' : 'offer_declined_by_user';
+
+  db.prepare(`
+    INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
+    VALUES (@team_id, @type, @title, @body, @player_id, @related_team_id)
+  `).run({ team_id: offer.seller_team_id, type: msgType, title, body, player_id: player.id, related_team_id: buyerTeam.id });
+
+  db.logMarketNews({
+    type: msgType,
+    headline: `${sellerTeam?.name || 'Clube'} recusa proposta por ${player.name}`,
+    body,
+    player_name: player.name,
+    player_photo: player.photo_path,
+    from_team_name: sellerTeam?.name,
+    from_team_shield: sellerTeam?.shield_path,
+    to_team_name: buyerTeam.name,
+    to_team_shield: buyerTeam.shield_path,
+    amount: null,
+  });
+}
+
 /* ---------- PUT /api/transfers/:id/respond — aceitar ou recusar uma proposta pendente ----------
    Usado quando uma equipa (IA ou humana) faz uma proposta por um jogador da equipa
    vendedora e é preciso a confirmação dessa equipa antes da transferência se concluir
@@ -473,92 +619,79 @@ router.put('/:id/respond', (req, res) => {
   const sellerTeam = offer.seller_team_id ? db.prepare('SELECT * FROM teams WHERE id = ?').get(offer.seller_team_id) : null;
   if (!player || !buyerTeam) return res.status(404).json({ error: 'Jogador ou equipa não encontrados' });
 
-  /* Mesmo que aceites vender, o jogador ainda tem de querer mudar-se — decide-se
-     agora, antes de qualquer dinheiro mudar de mãos. */
-  const consent = accept ? decidePlayerConsent(player, buyerTeam, sellerTeam) : null;
-  const playerRefused = accept && consent && !consent.accepted;
-
-  /* O jogador recusou mudar-se: em vez do negócio cair já, o treinador
-     vendedor tem direito a uma reunião com ele antes de o negócio ser dado
-     como falhado — ver PUT /api/transfers/meetings/:id/respond. O estado da
-     proposta ainda fica 'accepted' (o acordo entre clubes mantém-se; falta
-     só o próprio jogador). */
-  if (playerRefused) {
-    db.prepare("UPDATE transfer_offers SET status = 'accepted', resolved_at = datetime('now') WHERE id = ?").run(offer.id);
-
-    const state = db.prepare('SELECT game_state.current_date FROM game_state WHERE id = 1').get();
-    const meetingInfo = db.prepare(`
-      INSERT INTO transfer_meetings (team_id, player_id, buyer_team_id, transfer_offer_id, offer_amount, event_date)
-      VALUES (@team_id, @player_id, @buyer_team_id, @transfer_offer_id, @offer_amount, @event_date)
-    `).run({
-      team_id: offer.seller_team_id, player_id: player.id, buyer_team_id: buyerTeam.id,
-      transfer_offer_id: offer.id, offer_amount: offer.offer_amount, event_date: state.current_date,
-    });
-
-    const amountFmt = `£${Math.round(offer.offer_amount).toLocaleString('pt-PT')}`;
-    db.prepare(`
-      INSERT INTO messages (team_id, type, title, body, player_id, related_team_id, meeting_id)
-      VALUES (@team_id, 'transfer_meeting', @title, @body, @player_id, @related_team_id, @meeting_id)
-    `).run({
-      team_id: offer.seller_team_id, player_id: player.id, related_team_id: buyerTeam.id,
-      meeting_id: meetingInfo.lastInsertRowid,
-      title: `Reunião necessária: ${player.name}`,
-      body: `Aceitaste a proposta do ${buyerTeam.name} de ${amountFmt} por ${player.name}, mas ele não quer mudar-se. Podes reunir com ele antes de o negócio cair — propõe um empréstimo (volta a 1 de julho da época seguinte) ou diz-lhe que não faz parte dos teus planos, para o deixar mais recetivo a sair.`,
-    });
-
-    return res.json({ ok: true, status: 'player_hesitant', meeting_id: meetingInfo.lastInsertRowid });
+  if (accept) {
+    return res.json(acceptOfferAtAmount(offer, player, buyerTeam, sellerTeam, offer.offer_amount));
   }
 
-  const respond = db.transaction(() => {
-    db.prepare("UPDATE transfer_offers SET status = ?, resolved_at = datetime('now') WHERE id = ?")
-      .run(accept ? 'accepted' : 'rejected', offer.id);
+  rejectOfferMessage(offer, player, buyerTeam, sellerTeam, { byBuyer: false });
+  res.json({ ok: true, status: 'rejected' });
+});
 
-    if (accept) {
-      finalizePlayerMove({ player, buyerTeam, sellerTeam, wageOffer: consent.wageOffer, amount: offer.offer_amount, isLoan: false });
-    }
-    /* Proposta recusada por ti: o estado de "listado" do jogador não muda
-       por causa disto. Se já estava na lista de transferências, continua
-       lá (outros clubes podem voltar a propor); se não estava — porque a
-       proposta chegou sem o jogador estar à venda — continua sem estar, em
-       vez de passar a ficar listado automaticamente só por ter recusado
-       uma proposta. */
+/* ---------- PUT /api/transfers/:id/counter — contraproposta a uma oferta pendente ----------
+   Em vez de aceitares ou recusares já, pedes mais dinheiro pelo teu
+   jogador. O comprador reage de uma de três formas:
+   - dentro do que está disposto a pagar (buyerCeiling)   -> aceita já, ao
+     valor que pediste;
+   - bem acima disso (INSULT_MULTIPLIER)                  -> sente-se
+     insultado e desiste logo, sem sequer tentar subir a oferta;
+   - no meio-termo                                        -> sobe a oferta
+     dele a meio caminho entre o que já tinha em cima da mesa e o que
+     pediste (sem nunca ultrapassar o teto), fica com uma nova proposta
+     pendente e podes voltar a responder — até esgotares
+     MAX_NEGOTIATION_ROUNDS, altura em que a oferta em cima da mesa passa
+     a ser a "palavra final" do comprador (só podes Aceitar/Recusar). */
+router.put('/:id/counter', (req, res) => {
+  const offer = db.prepare('SELECT * FROM transfer_offers WHERE id = ?').get(req.params.id);
+  if (!offer) return res.status(404).json({ error: 'Proposta não encontrada' });
+  if (offer.status !== 'pending') return res.status(400).json({ error: 'Esta proposta já foi respondida' });
 
-    const amountFmt = `£${Math.round(offer.offer_amount).toLocaleString('pt-PT')}`;
-    let title, body, msgType;
-    if (accept) {
-      title = `Transferência aceite: ${player.name}`;
-      body = `Aceitaste a proposta do ${buyerTeam.name} de ${amountFmt} por ${player.name}. A transferência foi concluída.`;
-      msgType = 'player_sold';
-    } else {
-      title = `Transferência recusada: ${player.name}`;
-      body = `Recusaste a proposta do ${buyerTeam.name} de ${amountFmt} por ${player.name}. O jogador continua na lista de transferências.`;
-      msgType = 'offer_declined_by_user';
-    }
+  const counterAmount = Number(req.body.counter_amount);
+  if (!counterAmount || counterAmount <= offer.offer_amount) {
+    return res.status(400).json({ error: 'A contraproposta tem de ser um valor acima da oferta atual' });
+  }
+  if (offer.negotiation_round >= MAX_NEGOTIATION_ROUNDS) {
+    return res.status(400).json({ error: 'Já não há mais rondas de negociação disponíveis para esta proposta — aceita ou recusa a oferta atual.' });
+  }
 
-    db.prepare(`
-      INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
-      VALUES (@team_id, @type, @title, @body, @player_id, @related_team_id)
-    `).run({
-      team_id: offer.seller_team_id, type: msgType,
-      title, body, player_id: player.id, related_team_id: buyerTeam.id,
-    });
+  const player = db.prepare('SELECT * FROM players WHERE id = ?').get(offer.player_id);
+  const buyerTeam = db.prepare('SELECT * FROM teams WHERE id = ?').get(offer.buyer_team_id);
+  const sellerTeam = offer.seller_team_id ? db.prepare('SELECT * FROM teams WHERE id = ?').get(offer.seller_team_id) : null;
+  if (!player || !buyerTeam) return res.status(404).json({ error: 'Jogador ou equipa não encontrados' });
 
-    db.logMarketNews({
-      type: msgType,
-      headline: accept ? `${player.name} muda-se para o ${buyerTeam.name}` : `${sellerTeam?.name || 'Clube'} recusa proposta por ${player.name}`,
-      body,
-      player_name: player.name,
-      player_photo: player.photo_path,
-      from_team_name: sellerTeam?.name,
-      from_team_shield: sellerTeam?.shield_path,
-      to_team_name: buyerTeam.name,
-      to_team_shield: buyerTeam.shield_path,
-      amount: accept ? offer.offer_amount : null,
-    });
+  const ceiling = buyerCeiling(player, buyerTeam);
+  const nextRound = offer.negotiation_round + 1;
+
+  if (counterAmount > ceiling * INSULT_MULTIPLIER) {
+    rejectOfferMessage(offer, player, buyerTeam, sellerTeam, { byBuyer: true });
+    return res.json({ ok: true, status: 'rejected', reason: 'insulted' });
+  }
+
+  if (counterAmount <= ceiling) {
+    return res.json(acceptOfferAtAmount(offer, player, buyerTeam, sellerTeam, counterAmount));
+  }
+
+  const raisedAmount = Math.min(ceiling, Math.round((offer.offer_amount + Math.min(counterAmount, ceiling)) / 2));
+  const isFinalRound = nextRound >= MAX_NEGOTIATION_ROUNDS;
+
+  db.prepare('UPDATE transfer_offers SET offer_amount = ?, negotiation_round = ? WHERE id = ?')
+    .run(raisedAmount, nextRound, offer.id);
+
+  const raisedFmt = `£${Math.round(raisedAmount).toLocaleString('pt-PT')}`;
+  const counterFmt = `£${Math.round(counterAmount).toLocaleString('pt-PT')}`;
+  const title = `Nova oferta: ${player.name}`;
+  const body = isFinalRound
+    ? `Pediste ${counterFmt} por ${player.name}. O ${buyerTeam.name} não chega lá, mas sobe a proposta para ${raisedFmt} — é a oferta final, sem mais margem para negociar. Aceita ou recusa.`
+    : `Pediste ${counterFmt} por ${player.name}. O ${buyerTeam.name} sobe a proposta para ${raisedFmt}. Podes aceitar, recusar, ou voltar a contrapropor.`;
+
+  db.prepare(`
+    INSERT INTO messages (team_id, type, title, body, player_id, related_team_id, transfer_offer_id)
+    VALUES (@team_id, 'incoming_offer_pending', @title, @body, @player_id, @related_team_id, @transfer_offer_id)
+  `).run({
+    team_id: offer.seller_team_id, title, body, player_id: player.id,
+    related_team_id: buyerTeam.id, transfer_offer_id: offer.id,
   });
 
-  respond();
-  res.json({ ok: true, status: accept ? 'accepted' : 'rejected' });
+  res.json({ ok: true, status: 'countered', offer_amount: raisedAmount, negotiation_round: nextRound, is_final_round: isFinalRound });
 });
 
 /* ---------- PUT /api/transfers/meetings/:id/respond — reunião de transferência ----------
@@ -687,6 +820,7 @@ router.get('/messages', (req, res) => {
       t.status        AS offer_status,
       t.offer_amount  AS offer_amount,
       t.buyer_team_id AS offer_buyer_team_id,
+      t.negotiation_round AS offer_negotiation_round,
       pi.kind         AS incident_kind,
       pi.status       AS incident_status,
       pi.resolution   AS incident_resolution,

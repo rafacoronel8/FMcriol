@@ -1076,6 +1076,36 @@ body{
   padding:10px 14px;font-size:13.5px;color:var(--text-1);
 }
 .news-modal-amount b{color:var(--gold);}
+
+/* ---- Painel genérico de decisão (contrapropostas, afastar jogador, listar para
+   transferência, etc.) — substitui os prompts nativos do browser ---- */
+.decision-modal{max-width:420px;padding:28px 26px 26px;}
+.decision-modal-message{font-size:13.5px;color:var(--text-1);line-height:1.5;margin:0 0 16px;}
+.decision-modal-field{display:flex;flex-direction:column;gap:6px;margin-bottom:6px;}
+.decision-modal-label{
+  font-size:11px;font-weight:800;letter-spacing:.4px;
+  color:var(--text-2);text-transform:uppercase;
+}
+.decision-modal-input{
+  background:var(--bg-2);
+  border:1px solid var(--line);
+  color:var(--text-0);
+  border-radius:var(--radius-s);
+  padding:10px 12px;
+  font-size:14.5px;
+  font-family:inherit;
+}
+.decision-modal-input:focus{border-color:var(--accent);outline:none;}
+.decision-modal-hint{font-size:11.5px;color:var(--text-2);margin:2px 0 0;}
+.decision-modal-error{
+  font-size:12.5px;color:var(--red);
+  margin:10px 0 0;
+  background:rgba(180,50,60,.1);
+  border:1px solid #4a1f26;
+  border-radius:var(--radius-s);
+  padding:8px 10px;
+}
+.decision-modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;}
 .news-modal-body{
   font-size:14.5px;
   line-height:1.7;
@@ -1798,43 +1828,177 @@ body{
 /* ==========================================================
    Palestra de Balneário (pré-jogo / pós-jogo)
    ========================================================== */
-.team-talk-modal{max-width:520px;}
+.team-talk-modal{
+  max-width:560px;
+  overflow:visible;
+  background:
+    radial-gradient(600px 240px at 15% -10%, rgba(124,92,255,.16), transparent 60%),
+    linear-gradient(180deg, var(--bg-2), var(--bg-1));
+}
+
+/* ---- Cabeçalho: ícone + kicker + título ---- */
+.team-talk-top{display:flex;align-items:flex-start;gap:14px;margin-bottom:4px;}
+.team-talk-icon{
+  width:56px;height:56px;flex-shrink:0;
+  border-radius:16px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:28px;
+  background:radial-gradient(circle at 30% 25%, rgba(124,92,255,.4), rgba(124,92,255,.08));
+  border:1px solid rgba(124,92,255,.4);
+  box-shadow:0 8px 20px -8px rgba(124,92,255,.5);
+}
+.team-talk-top-text{flex:1;min-width:0;padding-top:2px;}
+.team-talk-kicker{
+  display:inline-flex;align-items:center;gap:6px;
+  font-size:10.5px;font-weight:800;letter-spacing:1.1px;
+  text-transform:uppercase;color:var(--accent);
+  background:rgba(124,92,255,.14);
+  padding:4px 11px;border-radius:20px;
+  margin-bottom:8px;
+}
+.team-talk-headline{margin:0;font-size:20px;line-height:1.3;}
+
+/* Variantes de resultado pós-jogo: tingem o ícone e o kicker */
+.team-talk-modal.result-win .team-talk-icon{
+  background:radial-gradient(circle at 30% 25%, rgba(242,193,78,.45), rgba(242,193,78,.08));
+  border-color:rgba(242,193,78,.5);
+  box-shadow:0 8px 20px -8px rgba(242,193,78,.55);
+}
+.team-talk-modal.result-win .team-talk-kicker{background:rgba(242,193,78,.16);color:var(--gold);}
+.team-talk-modal.result-loss .team-talk-icon{
+  background:radial-gradient(circle at 30% 25%, rgba(226,73,91,.4), rgba(226,73,91,.08));
+  border-color:rgba(226,73,91,.45);
+  box-shadow:0 8px 20px -8px rgba(226,73,91,.5);
+}
+.team-talk-modal.result-loss .team-talk-kicker{background:rgba(226,73,91,.16);color:var(--red);}
+.team-talk-modal.result-draw .team-talk-icon{
+  background:radial-gradient(circle at 30% 25%, rgba(170,182,201,.35), rgba(170,182,201,.08));
+  border-color:rgba(170,182,201,.4);
+}
+.team-talk-modal.result-draw .team-talk-kicker{background:rgba(170,182,201,.16);color:var(--text-1);}
+
+/* ---- Escalação ---- */
 .team-talk-lineup{
-  margin:14px 0;
-  padding:12px 14px;
+  margin:18px 0 4px;
+  padding:14px 16px;
   background:var(--bg-2);
   border:1px solid var(--line);
   border-radius:var(--radius-m);
   text-align:left;
 }
-.team-talk-lineup-title{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);margin-bottom:6px;}
-.team-talk-lineup-names{font-size:13px;color:var(--text-0);line-height:1.6;margin-bottom:8px;}
-.team-talk-prompt{font-size:13px;color:var(--text-1);margin:14px 0 10px;text-align:left;}
-.team-talk-options{display:flex;flex-direction:column;gap:8px;}
+.team-talk-lineup-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;}
+.team-talk-lineup-title{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--text-2);font-weight:800;}
+.team-talk-lineup-names{font-size:13px;color:var(--text-0);line-height:1.7;}
+
+/* ---- Pergunta ---- */
+.team-talk-prompt{font-size:13.5px;font-weight:700;color:var(--text-0);margin:20px 0 12px;text-align:left;}
+
+/* ---- Cartões de opção de tom ---- */
+.team-talk-options{display:flex;flex-direction:column;gap:10px;}
 .team-talk-option{
+  display:flex;align-items:center;gap:14px;
   text-align:left;
-  padding:10px 14px;
+  width:100%;
+  padding:12px 14px;
   background:var(--bg-2);
   border:1px solid var(--line);
+  border-left:3px solid var(--line);
   border-radius:var(--radius-m);
   cursor:pointer;
-  transition:border-color .12s ease, background .12s ease;
+  font-family:inherit;
+  transition:border-color .14s ease, background .14s ease, transform .1s ease, box-shadow .14s ease;
 }
-.team-talk-option:hover{border-color:var(--accent);}
-.team-talk-option.selected{border-color:var(--accent);background:rgba(124,92,255,.12);}
+.team-talk-option:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:0 6px 16px -10px rgba(0,0,0,.6);}
+.team-talk-option:active{transform:translateY(0);}
+.team-talk-option.selected{background:rgba(124,92,255,.12);border-color:var(--accent);}
+
+.team-talk-option-icon{
+  width:40px;height:40px;flex-shrink:0;
+  border-radius:11px;
+  background:var(--bg-3);
+  display:flex;align-items:center;justify-content:center;
+  font-size:19px;
+}
+.team-talk-option-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
 .team-talk-option-label{font-size:13.5px;font-weight:700;color:var(--text-0);}
-.team-talk-option-desc{font-size:11.5px;color:var(--text-2);margin-top:2px;}
+.team-talk-option-desc{font-size:11.5px;color:var(--text-2);line-height:1.4;}
+.team-talk-option-radio{
+  width:18px;height:18px;flex-shrink:0;
+  border-radius:50%;
+  border:2px solid var(--line);
+  position:relative;
+  transition:border-color .14s ease;
+}
+.team-talk-option.selected .team-talk-option-radio{border-color:var(--accent);}
+.team-talk-option.selected .team-talk-option-radio::after{
+  content:"";position:absolute;inset:3px;border-radius:50%;background:var(--accent);
+}
+
+/* Tons: cada opção ganha um acento de cor conforme a heurística do texto */
+.team-talk-option[data-tone="calm"]{border-left-color:var(--accent);}
+.team-talk-option[data-tone="calm"].selected{background:rgba(124,92,255,.12);}
+.team-talk-option[data-tone="positive"]{border-left-color:var(--green);}
+.team-talk-option[data-tone="positive"].selected{border-color:var(--green);background:rgba(62,207,110,.12);}
+.team-talk-option[data-tone="positive"].selected .team-talk-option-radio{border-color:var(--green);}
+.team-talk-option[data-tone="positive"].selected .team-talk-option-radio::after{background:var(--green);}
+.team-talk-option[data-tone="intense"]{border-left-color:var(--amber);}
+.team-talk-option[data-tone="intense"].selected{border-color:var(--amber);background:rgba(232,163,61,.12);}
+.team-talk-option[data-tone="intense"].selected .team-talk-option-radio{border-color:var(--amber);}
+.team-talk-option[data-tone="intense"].selected .team-talk-option-radio::after{background:var(--amber);}
+.team-talk-option[data-tone="harsh"]{border-left-color:var(--red);}
+.team-talk-option[data-tone="harsh"].selected{border-color:var(--red);background:rgba(226,73,91,.12);}
+.team-talk-option[data-tone="harsh"].selected .team-talk-option-radio{border-color:var(--red);}
+.team-talk-option[data-tone="harsh"].selected .team-talk-option-radio::after{background:var(--red);}
+.team-talk-option[data-tone="light"]{border-left-color:var(--accent-2);}
+.team-talk-option[data-tone="light"].selected{border-color:var(--accent-2);background:rgba(155,61,255,.12);}
+.team-talk-option[data-tone="light"].selected .team-talk-option-radio{border-color:var(--accent-2);}
+.team-talk-option[data-tone="light"].selected .team-talk-option-radio::after{background:var(--accent-2);}
+
+.team-talk-options.locked .team-talk-option{cursor:default;}
+.team-talk-options.locked .team-talk-option:hover{transform:none;box-shadow:none;}
+.team-talk-options.locked .team-talk-option:not(.selected){opacity:.45;}
+
+/* ---- Resultado da palestra ---- */
 .team-talk-result{
-  margin-top:14px;
-  padding:12px 14px;
+  margin-top:16px;
+  padding:14px 16px;
   background:var(--bg-2);
   border:1px solid var(--line);
   border-radius:var(--radius-m);
   font-size:13px;
   color:var(--text-1);
   text-align:left;
+  animation:news-in .18s ease;
 }
-.team-talk-buttons{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;}
+.team-talk-result-mood{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+.team-talk-mood-chip{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:5px 11px;border-radius:20px;
+  font-size:12px;font-weight:800;
+}
+.team-talk-mood-chip.mood-up{background:rgba(62,207,110,.14);color:var(--green);}
+.team-talk-mood-chip.mood-down{background:rgba(226,73,91,.14);color:var(--red);}
+.team-talk-mood-chip.mood-neutral{background:var(--bg-3);color:var(--text-2);}
+.team-talk-result-text{margin:0;line-height:1.55;}
+
+/* ---- Botões ---- */
+.team-talk-buttons{display:flex;justify-content:flex-end;gap:10px;margin-top:22px;}
+.btn-advance.ghost{
+  background:var(--bg-3);
+  color:var(--text-0);
+  border:1px solid var(--line);
+}
+.btn-advance.ghost:hover{border-color:var(--accent);background:var(--bg-2);}
+
+/* ---- Estado de carregamento (skeleton) ---- */
+.team-talk-skeleton{display:flex;flex-direction:column;gap:10px;}
+.team-talk-skeleton-row{
+  height:58px;border-radius:var(--radius-m);
+  background:linear-gradient(100deg, var(--bg-2) 30%, var(--bg-3) 50%, var(--bg-2) 70%);
+  background-size:220% 100%;
+  animation:team-talk-shimmer 1.3s ease-in-out infinite;
+}
+@keyframes team-talk-shimmer{0%{background-position:120% 0;}100%{background-position:-20% 0;}}
 
 /* ==========================================================
    Minha Equipa — tabela ao estilo FM (foto, nome, posição,
