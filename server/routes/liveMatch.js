@@ -7,6 +7,7 @@
    ========================================================== */
 const express = require('express');
 const db = require('../db/database');
+const { buildPostMatchReactions } = require('./matchReactions');
 
 const router = express.Router();
 
@@ -72,6 +73,61 @@ function playerQualityFactor(player) {
   return Math.max(0.5, Math.min(2.2, avg / 10));
 }
 
+/* ---------- Postura tática (mentalidade) ----------
+   Cada equipa escolhe uma postura no início do jogo (por omissão
+   'equilibrado') e pode mudá-la a qualquer momento (ver POST
+   /:friendlyId/mentality) — tal como já acontecia com a formação.
+   ATTACK_MULT pesa o ataque da própria equipa; DEFEND_MULT pesa a
+   solidez defensiva contra o ataque adversário. 'contra_ataque' tem
+   ainda um bónus extra (ver simulateMentalityLambda) que só dispara
+   contra um adversário em postura 'atacante', e que é tanto maior
+   quanto mais rápido for o plantel em campo — exatamente como pedido:
+   sair rápido em contra-ataque funciona melhor com jogadores velozes. */
+const MENTALITIES = ['equilibrado', 'atacante', 'contra_ataque', 'defensiva'];
+const MENTALITY_LABELS = {
+  equilibrado: 'Equilibrado',
+  atacante: 'Atacante',
+  contra_ataque: 'Contra-Ataque',
+  defensiva: 'Defensiva',
+};
+const MENTALITY_DESCRIPTIONS = {
+  equilibrado: 'Abordagem normal, sem exagerar no ataque nem na defesa.',
+  atacante: 'Mais jogadores lançados no ataque — mais golos, mas a defesa fica mais aberta a contra-ataques.',
+  contra_ataque: 'Espera pelo erro do adversário e sai rápido — funciona muito melhor com jogadores velozes em campo, principalmente contra equipas em postura atacante.',
+  defensiva: 'Fecha-se atrás da bola — muito difícil de sofrer golos, mas cria pouco perigo lá à frente.',
+};
+const MENTALITY_ATTACK_MULT = { equilibrado: 1, atacante: 1.4, contra_ataque: 0.85, defensiva: 0.6 };
+const MENTALITY_DEFEND_MULT = { equilibrado: 1, atacante: 0.65, contra_ataque: 1.05, defensiva: 1.5 };
+
+/* Fator de ritmo do jogador (0.5-2.2, mesma escala de playerQualityFactor),
+   com base em Velocidade + Aceleração (physical_json) — usado para o bónus
+   de contra-ataque e não para a qualidade geral, que já existe à parte. */
+function playerPaceFactor(player) {
+  let list;
+  try { list = JSON.parse(player.physical_json || '[]'); } catch { list = []; }
+  const wanted = new Set(['Velocidade', 'Aceleração']);
+  let sum = 0;
+  let count = 0;
+  if (Array.isArray(list)) {
+    list.forEach(([name, value]) => {
+      if (wanted.has(name)) {
+        const v = Number(value);
+        if (Number.isFinite(v)) { sum += v; count += 1; }
+      }
+    });
+  }
+  const avg = count ? sum / count : 10;
+  return Math.max(0.5, Math.min(2.2, avg / 10));
+}
+
+/* Ritmo médio da equipa em campo AGORA (exclui o guarda-redes) — recalculado
+   sempre que é preciso, para refletir substituições feitas a meio do jogo. */
+function teamPaceFactor(state) {
+  const outfield = state.on_pitch.filter((p) => p.category !== 'GR' && Number.isFinite(p.pace));
+  if (!outfield.length) return 1;
+  return outfield.reduce((sum, p) => sum + p.pace, 0) / outfield.length;
+}
+
 function pickWeighted(candidates, weightMap) {
   const pool = candidates.filter((p) => (weightMap[p.category] || 0) > 0);
   if (!pool.length) return null;
@@ -100,19 +156,28 @@ function pickWeightedWithFocus(candidates, weightMap, focusRole) {
 }
 
 /* ---------- Golos esperados por um resultado plausível ----------
-   Mesma curva usada em routes/game.js para os amigáveis simulados
-   automaticamente (Poisson simplificado com base na reputação). */
-function simulateGoalsCount(attackStrength, defendStrength) {
-  const lambda = Math.max(0.35, 1.15 + (attackStrength - defendStrength) * 0.3);
+   Mesma curva base usada em routes/game.js para os amigáveis simulados
+   automaticamente (Poisson simplificado com base na reputação), agora
+   ajustada pela postura tática de cada lado (ver MENTALITY_ATTACK_MULT /
+   MENTALITY_DEFEND_MULT acima) e, no caso do contra-ataque, pelo ritmo do
+   plantel em campo. */
+function mentalityLambda(attackRep, defendRep, attackMentality, defendMentality, attackPace) {
+  const attackMult = MENTALITY_ATTACK_MULT[attackMentality] ?? 1;
+  const defendMult = MENTALITY_DEFEND_MULT[defendMentality] ?? 1;
+  let lambda = Math.max(0.35, 1.15 + (attackRep * attackMult - defendRep * defendMult) * 0.3);
+
+  if (attackMentality === 'contra_ataque' && defendMentality === 'atacante') {
+    lambda += 0.4 * attackPace;
+  }
+  return lambda;
+}
+
+function rollGoalsFromLambda(lambda) {
   let goals = 0;
   for (let i = 0; i < 8; i += 1) {
     if (Math.random() < lambda / (i + 1.7)) goals += 1;
   }
   return Math.min(goals, 7);
-}
-
-function randomMinute() {
-  return 1 + Math.floor(Math.random() * MATCH_LENGTH);
 }
 
 /* ---------- Palestras de balneário (pré-jogo / pós-jogo) ----------
@@ -254,7 +319,7 @@ function buildTeamRoster(teamId) {
   const onPitch = chosen.slice(0, 11).map((p) => ({
     id: p.id, name: p.name, category: p.category, position_code: p.position_code,
     jersey_number: p.jersey_number || '', slot_index: p.slot_index,
-    quality: playerQualityFactor(p), yellow: false, goals: 0, assists: 0,
+    quality: playerQualityFactor(p), pace: playerPaceFactor(p), yellow: false, goals: 0, assists: 0,
   }));
 
   let benchIds = [];
@@ -267,7 +332,7 @@ function buildTeamRoster(teamId) {
     .filter((p) => p && !onPitchIds.has(p.id))
     .map((p) => ({
       id: p.id, name: p.name, category: p.category, position_code: p.position_code,
-      jersey_number: p.jersey_number || '', quality: playerQualityFactor(p),
+      jersey_number: p.jersey_number || '', quality: playerQualityFactor(p), pace: playerPaceFactor(p),
     }));
 
   if (!bench.length) {
@@ -276,7 +341,7 @@ function buildTeamRoster(teamId) {
       .slice(0, 7)
       .map((p) => ({
         id: p.id, name: p.name, category: p.category, position_code: p.position_code,
-        jersey_number: p.jersey_number || '', quality: playerQualityFactor(p),
+        jersey_number: p.jersey_number || '', quality: playerQualityFactor(p), pace: playerPaceFactor(p),
       }));
   }
 
@@ -289,6 +354,7 @@ function buildTeamRoster(teamId) {
     reputation: team.reputation_stars,
     is_user: !!team.is_user_controlled,
     formation,
+    mentality: 'equilibrado',
     on_pitch: onPitch,
     bench,
     subs_remaining: MAX_SUBS,
@@ -296,28 +362,100 @@ function buildTeamRoster(teamId) {
   };
 }
 
-/* ---------- Calendário de acontecimentos sorteado no início do jogo ----------
-   Golos e cartões são sorteados de antemão (quantos e a que minuto), mas só
-   são revelados ao utilizador à medida que o relógio avança — como o jogo é
-   "ao vivo", o resultado final não existe antes do apito final. */
-function buildSchedule(homeState, awayState) {
-  const homeGoals = simulateGoalsCount(homeState.reputation + 0.25, awayState.reputation);
-  const awayGoals = simulateGoalsCount(awayState.reputation, homeState.reputation + 0.25);
+/* Quantas "chances" (lances de perigo sem golo) uma equipa cria, consoante
+   a sua postura — o ataque cria mais oportunidades, a defensiva cria menos
+   (mas também sofre menos, ver MENTALITY_DEFEND_MULT). */
+const CHANCE_BASE_COUNT = 4;
+const CHANCE_MENTALITY_BONUS = { equilibrado: 0, atacante: 3, contra_ataque: 1, defensiva: -2 };
+
+/* ---------- Calendário de acontecimentos sorteado no início do jogo (ou a
+   partir do minuto em que a postura tática muda a meio do jogo) ----------
+   Golos, cartões e lances de perigo são sorteados de antemão (quantos e a
+   que minuto), mas só são revelados ao utilizador à medida que o relógio
+   avança — como o jogo é "ao vivo", o resultado final não existe antes do
+   apito final. `fromMinute` permite gerar só a parte do calendário que
+   ainda falta (usado quando uma equipa muda de postura a meio do jogo —
+   ver POST /:friendlyId/mentality — para não recomeçar o jogo do zero, só
+   ajustar o que ainda está por vir). */
+function buildSchedule(homeState, awayState, fromMinute = 0) {
+  const remainingFraction = Math.max(0, (MATCH_LENGTH - fromMinute) / MATCH_LENGTH);
+  const homePace = teamPaceFactor(homeState);
+  const awayPace = teamPaceFactor(awayState);
+
+  const homeLambda = mentalityLambda(homeState.reputation + 0.25, awayState.reputation, homeState.mentality, awayState.mentality, homePace) * remainingFraction;
+  const awayLambda = mentalityLambda(awayState.reputation, homeState.reputation + 0.25, awayState.mentality, homeState.mentality, awayPace) * remainingFraction;
+  const homeGoals = rollGoalsFromLambda(homeLambda);
+  const awayGoals = rollGoalsFromLambda(awayLambda);
+
+  const minuteInRange = () => fromMinute + 1 + Math.floor(Math.random() * Math.max(1, MATCH_LENGTH - fromMinute));
 
   const events = [];
-  for (let i = 0; i < homeGoals; i += 1) events.push({ minute: randomMinute(), type: 'goal', side: 'home' });
-  for (let i = 0; i < awayGoals; i += 1) events.push({ minute: randomMinute(), type: 'goal', side: 'away' });
+  for (let i = 0; i < homeGoals; i += 1) events.push({ minute: minuteInRange(), type: 'goal', side: 'home' });
+  for (let i = 0; i < awayGoals; i += 1) events.push({ minute: minuteInRange(), type: 'goal', side: 'away' });
 
   ['home', 'away'].forEach((side) => {
     let yellows = 0;
-    for (let i = 0; i < 5; i += 1) { if (Math.random() < 0.32) yellows += 1; }
-    for (let i = 0; i < yellows; i += 1) events.push({ minute: randomMinute(), type: 'yellow', side });
-    if (Math.random() < 0.08) events.push({ minute: randomMinute(), type: 'red', side });
+    for (let i = 0; i < 5; i += 1) { if (Math.random() < 0.32 * remainingFraction) yellows += 1; }
+    for (let i = 0; i < yellows; i += 1) events.push({ minute: minuteInRange(), type: 'yellow', side });
+    if (Math.random() < 0.08 * remainingFraction) events.push({ minute: minuteInRange(), type: 'red', side });
+
+    /* ---------- Lances de perigo (sem golo) ---------- */
+    const attackMentality = (side === 'home' ? homeState : awayState).mentality || 'equilibrado';
+    const defendMentality = (side === 'home' ? awayState : homeState).mentality || 'equilibrado';
+    const base = CHANCE_BASE_COUNT + (CHANCE_MENTALITY_BONUS[attackMentality] ?? 0) - (defendMentality === 'defensiva' ? 2 : 0);
+    const count = Math.max(0, Math.round(base * remainingFraction)) + Math.floor(Math.random() * 2);
+    for (let i = 0; i < count; i += 1) events.push({ minute: minuteInRange(), type: 'chance', side, mentality: attackMentality });
   });
 
   events.sort((a, b) => a.minute - b.minute);
   return events;
 }
+
+/* ---------- Descrições dos lances (golos e chances) ----------
+   Um pequeno leque de frases por situação, com um prefixo opcional que
+   identifica o estilo do lance (contra-ataque veloz, pressão constante da
+   postura atacante, jogada paciente da postura defensiva) — é isto que dá
+   "textura" ao comentário em vez de repetir sempre a mesma frase. */
+const MENTALITY_PREFIXES = {
+  contra_ataque: ['Contra-ataque relâmpago! ', 'Transição rapidíssima: ', 'Saem em contra-ataque a alta velocidade: '],
+  atacante: ['Mais uma pressão insistente lá à frente: ', 'Depois de tanto insistir no ataque, ', ''],
+  defensiva: ['Jogada paciente, construída com calma: ', 'Raro lance de perigo, mas eficaz: ', ''],
+  equilibrado: [''],
+};
+function mentalityPrefix(mentality) {
+  const pool = MENTALITY_PREFIXES[mentality] || MENTALITY_PREFIXES.equilibrado;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+const GOAL_TEMPLATES_ASSISTED = [
+  (a) => `⚽ Golo do ${a.team}! ${a.scorer} marca, assistido por ${a.assister}.`,
+  (a) => `⚽ ${a.scorer} não perdoa e festeja pelo ${a.team}, após o passe de ${a.assister}.`,
+  (a) => `⚽ Belíssima jogada do ${a.team}: ${a.assister} serve ${a.scorer}, que só teve de encostar.`,
+];
+const GOAL_TEMPLATES_SOLO = [
+  (a) => `⚽ Golo do ${a.team}! ${a.scorer} marca.`,
+  (a) => `⚽ ${a.scorer} resolve sozinho e coloca o ${a.team} a festejar!`,
+  (a) => `⚽ Belo remate de ${a.scorer} — o ${a.team} chega ao golo!`,
+];
+
+const CHANCE_OUTCOME_TEMPLATES = {
+  saved: [
+    (a) => `🧤 Grande defesa de ${a.keeper} a negar o golo a ${a.attacker} (${a.team}).`,
+    (a) => `🧤 ${a.keeper} evita o pior e defende o remate perigoso de ${a.attacker} (${a.team}).`,
+  ],
+  off_target: [
+    (a) => `🎯 ${a.attacker} (${a.team}) desperdiça boa oportunidade, atira para fora.`,
+    (a) => `🎯 Remate de ${a.attacker} (${a.team}) sai muito por cima da baliza.`,
+  ],
+  blocked: [
+    (a) => `🛡️ A defesa do ${a.defTeam} corta em cima da linha e evita o golo de ${a.attacker}.`,
+    (a) => `🛡️ Bloqueio decisivo da defesa do ${a.defTeam} ao remate de ${a.attacker}.`,
+  ],
+  woodwork: [
+    (a) => `🥅 Na trave! ${a.attacker} (${a.team}) acerta na madeira, a bola não entra por centímetros.`,
+    (a) => `🥅 O poste nega o golo a ${a.attacker} (${a.team})!`,
+  ],
+};
 
 /* ---------- Resolve um único acontecimento agendado, mutando o estado ---------- */
 function resolveEvent(ev, homeState, awayState, scoreRef) {
@@ -326,13 +464,14 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
 
   if (ev.type === 'goal') {
     const outfield = state.on_pitch.filter((p) => p.category !== 'GR');
+    const prefix = mentalityPrefix(state.mentality);
 
     /* Plantel muito curto (menos de 6 em campo) — nem todo golo tem de
        ficar atribuído a alguém; conta na mesma para o marcador, mas sem
        nome (ver mesma ideia em routes/game.js e routes/competitionStats.js). */
     if (outfield.length < 6 && Math.random() < 0.35) {
       scoreRef[ev.side] += 1;
-      return { minute: ev.minute, kind: 'goal', text: `⚽ Golo do ${teamLabel}! A confusão na área não deixou ver quem marcou.` };
+      return { minute: ev.minute, kind: 'goal', side: ev.side, text: `${prefix}⚽ Golo do ${teamLabel}! A confusão na área não deixou ver quem marcou.` };
     }
 
     const scorer = pickWeightedWithFocus(outfield, SCORE_WEIGHT, 'Goleador');
@@ -347,10 +486,47 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
       if (assister) assister.assists += 1;
     }
 
-    const text = assister
-      ? `⚽ Golo do ${teamLabel}! ${scorer.name} marca, assistido por ${assister.name}.`
-      : `⚽ Golo do ${teamLabel}! ${scorer.name} marca.`;
-    return { minute: ev.minute, kind: 'goal', text };
+    const templates = assister ? GOAL_TEMPLATES_ASSISTED : GOAL_TEMPLATES_SOLO;
+    const template = templates[Math.floor(Math.random() * templates.length)];
+    const text = prefix + template({ team: teamLabel, scorer: scorer.name, assister: assister ? assister.name : null });
+    /* player_id / assister_id / side vão no evento (além do texto) para o
+       frontend poder animar o lance no campo — ver playLiveBallAnimation
+       em public/dashboard.js — associando o golo ao boneco certo. */
+    return {
+      minute: ev.minute, kind: 'goal', side: ev.side, text,
+      player_id: scorer.id, assister_id: assister ? assister.id : null,
+    };
+  }
+
+  if (ev.type === 'chance') {
+    const defendState = ev.side === 'home' ? awayState : homeState;
+    const outfield = state.on_pitch.filter((p) => p.category !== 'GR');
+    if (!outfield.length) return null;
+
+    const attacker = pickWeightedWithFocus(outfield, SCORE_WEIGHT, 'Goleador') || outfield[Math.floor(Math.random() * outfield.length)];
+    const keeper = defendState.on_pitch.find((p) => p.category === 'GR');
+
+    const roll = Math.random();
+    let outcomeKey;
+    if (keeper && roll < 0.45) outcomeKey = 'saved';
+    else if (roll < 0.7) outcomeKey = 'off_target';
+    else if (roll < 0.9) outcomeKey = 'blocked';
+    else outcomeKey = 'woodwork';
+
+    const templates = CHANCE_OUTCOME_TEMPLATES[outcomeKey];
+    const template = templates[Math.floor(Math.random() * templates.length)];
+    const prefix = mentalityPrefix(ev.mentality || state.mentality);
+    const text = prefix + template({
+      attacker: attacker.name, team: teamLabel, defTeam: defendState.team_name,
+      keeper: keeper ? keeper.name : 'o guarda-redes',
+    });
+    /* Mesma ideia do golo: player_id (quem remata) + keeper_id (quem
+       defende, quando aplicável) + outcome, para a animação do lance no
+       campo saber que bonecos mexer e onde a bola deve parar. */
+    return {
+      minute: ev.minute, kind: 'chance', side: ev.side, text,
+      player_id: attacker.id, keeper_id: keeper ? keeper.id : null, outcome: outcomeKey,
+    };
   }
 
   if (ev.type === 'yellow') {
@@ -482,15 +658,39 @@ function finalizeMatch(friendly, homeState, awayState, finalScore) {
     const cupTail = friendly.is_cup
       ? (result === 'Vitória' ? ' Seguem em frente na competição.' : ' Estão eliminados da Taça São Vicente.')
       : '';
+
+    const goalsFor = isHome ? finalScore.home : finalScore.away;
+    const goalsAgainst = isHome ? finalScore.away : finalScore.home;
+    const opponentState = isHome ? awayState : homeState;
+    const competitionPhrase = friendly.is_cup ? 'na Taça São Vicente' : (friendly.is_league ? 'no Campeonato' : 'nos amigáveis');
+
+    /* Mesma lógica dos jogos simulados automaticamente (ver
+       routes/game.js:simulateSingleFriendly) — nota dos adeptos, reação
+       da direção e Jogador do Jogo, agora com base nas estatísticas reais
+       do jogo que acabou de ser assistido ao vivo. */
+    const { extraJson, potm } = buildPostMatchReactions({
+      friendlyId: friendly.id, teamId: state.team_id, teamName: state.team_name, opponentName,
+      goalsFor, goalsAgainst, isHome, teamReputation: state.reputation, opponentReputation: opponentState.reputation,
+      competitionPhrase,
+    });
+
     db.prepare(`
-      INSERT INTO messages (team_id, type, title, body)
-      VALUES (@team_id, @type, @title, @body)
+      INSERT INTO messages (team_id, type, title, body, extra_json)
+      VALUES (@team_id, @type, @title, @body, @extra_json)
     `).run({
       team_id: state.team_id,
       type: friendly.is_cup ? 'cup_played' : (friendly.is_league ? 'league_played' : 'friendly_played'),
       title: `${result === 'Vitória' ? '🏆' : '📉'} ${label}: ${result.toLowerCase()} contra o ${opponentName}${penaltiesNote}`,
       body: `Resultado final: ${scoreText}${penaltiesNote}.${cupTail}`,
+      extra_json: extraJson,
     });
+
+    if (potm) {
+      db.prepare(`
+        INSERT INTO messages (team_id, type, title, body, player_id)
+        VALUES (@team_id, 'player_of_match', @title, @body, @player_id)
+      `).run({ team_id: state.team_id, title: potm.title, body: potm.body, player_id: potm.player_id });
+    }
   });
 }
 
@@ -507,6 +707,7 @@ function teamStateForClient(state) {
     team_shield: state.team_shield || null,
     is_user: state.is_user,
     formation: state.formation,
+    mentality: state.mentality || 'equilibrado',
     subs_remaining: state.subs_remaining,
     on_pitch: state.on_pitch.map((p) => ({
       id: p.id, name: p.name, yellow: !!p.yellow, category: p.category,
@@ -680,7 +881,7 @@ router.post('/:friendlyId/substitution', (req, res) => {
   const [playerIn] = state.bench.splice(inIdx, 1);
   state.on_pitch.push({
     id: playerIn.id, name: playerIn.name, category: playerIn.category, jersey_number: playerIn.jersey_number || '',
-    quality: playerIn.quality, yellow: false, goals: 0, assists: 0, slot_index: playerOut.slot_index,
+    quality: playerIn.quality, pace: playerIn.pace, yellow: false, goals: 0, assists: 0, slot_index: playerOut.slot_index,
   });
   state.subs_remaining -= 1;
   state.subbedOut = state.subbedOut || [];
@@ -726,6 +927,52 @@ router.post('/:friendlyId/tactic', (req, res) => {
   persistRow(row.friendly_id, {
     minute: row.current_minute, homeScore: row.home_score, awayScore: row.away_score,
     homeState, awayState, schedule: JSON.parse(row.schedule_json || '[]'), events, status: row.status,
+  });
+
+  const updatedRow = loadLiveRow(row.friendly_id);
+  res.json(rowToPayload(updatedRow, [event]));
+});
+
+/* ---------- GET /api/live-matches/meta/mentalities — catálogo de posturas ----------
+   Lista fixa (label + descrição) para o frontend construir o seletor sem
+   duplicar os textos aqui. */
+router.get('/meta/mentalities', (req, res) => {
+  res.json(MENTALITIES.map((key) => ({ key, label: MENTALITY_LABELS[key], description: MENTALITY_DESCRIPTIONS[key] })));
+});
+
+/* ---------- POST /api/live-matches/:friendlyId/mentality — muda a postura tática a meio do jogo ----------
+   Atacante / Contra-Ataque / Defensiva / Equilibrado (ver MENTALITIES acima).
+   Só o que ainda falta do jogo é reconstruído (golos, cartões e lances de
+   perigo a partir do minuto atual) — o que já aconteceu fica exatamente
+   como estava, tal como acontece com a mudança de formação. */
+router.post('/:friendlyId/mentality', (req, res) => {
+  const row = loadLiveRow(req.params.friendlyId);
+  if (!row) return res.status(404).json({ error: 'Este jogo ainda não começou a ser assistido.' });
+  if (row.status === 'finished') return res.status(400).json({ error: 'O jogo já terminou.' });
+
+  const { team_id, mentality } = req.body;
+  if (!MENTALITIES.includes(mentality)) return res.status(400).json({ error: 'Postura tática inválida.' });
+
+  const homeState = JSON.parse(row.home_state_json);
+  const awayState = JSON.parse(row.away_state_json);
+  const side = Number(homeState.team_id) === Number(team_id) ? 'home' : (Number(awayState.team_id) === Number(team_id) ? 'away' : null);
+  if (!side) return res.status(400).json({ error: 'Equipa inválida para este jogo.' });
+
+  const state = side === 'home' ? homeState : awayState;
+  if (state.mentality === mentality) return res.json(rowToPayload(row));
+  state.mentality = mentality;
+
+  const schedule = JSON.parse(row.schedule_json || '[]');
+  const pastSchedule = schedule.filter((ev) => ev.minute <= row.current_minute);
+  const futureSchedule = buildSchedule(homeState, awayState, row.current_minute);
+  const newSchedule = [...pastSchedule, ...futureSchedule];
+
+  const event = { minute: row.current_minute, kind: 'mentality_change', text: `🧠 ${state.team_name} muda para postura ${MENTALITY_LABELS[mentality]}.` };
+  const events = [...JSON.parse(row.events_json || '[]'), event];
+
+  persistRow(row.friendly_id, {
+    minute: row.current_minute, homeScore: row.home_score, awayScore: row.away_score,
+    homeState, awayState, schedule: newSchedule, events, status: row.status,
   });
 
   const updatedRow = loadLiveRow(row.friendly_id);

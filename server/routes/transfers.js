@@ -679,6 +679,7 @@ router.get('/messages', (req, res) => {
       m.*,
       p.name        AS player_name,
       p.photo_path  AS player_photo,
+      p.season_stats_json AS player_season_stats_json,
       myTeam.name         AS my_team_name,
       myTeam.shield_path  AS my_team_shield,
       relTeam.name        AS related_team_name,

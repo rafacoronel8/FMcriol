@@ -343,6 +343,17 @@ function starsText(value){
   return '★'.repeat(Math.max(0, Math.min(5, n))) + '☆'.repeat(Math.max(0, 5 - n));
 }
 
+/* Cor da média de classificação no plantel — mesma leitura rápida (verde
+   boa média, amarelo média, vermelho fraca) que já existe no perfil do
+   jogador para a mesma coluna "Média". */
+function ratingClass(mediaValue){
+  const n = parseFloat(mediaValue);
+  if(!Number.isFinite(n)) return '';
+  if(n >= 7) return 'squad-rating-good';
+  if(n >= 6) return 'squad-rating-ok';
+  return 'squad-rating-bad';
+}
+
 /* Idade a partir da data de nascimento, usando a data do calendário do
    jogo (currentGameDate) — mesma ideia de calcAge em script_perfilJogador.js. */
 function calcAgeFromBirth(birthDateStr){
@@ -356,12 +367,47 @@ function calcAgeFromBirth(birthDateStr){
   return age;
 }
 
+/* Soma as estatísticas REAIS do jogador em todas as competições em que já
+   jogou esta época (Campeonato, Taça, Amigáveis — ver COMPETITION_ROW_NAMES
+   em db/database.js e applySeasonStat, que é quem realmente escreve estas
+   linhas depois de cada jogo). Antes, esta função procurava uma linha
+   chamada "Geral (Clube)" que nunca chega a ser criada pelo jogo (só existe
+   nos dados de demonstração do perfil), por isso o plantel mostrava sempre
+   0 jogos/golos/assistências mesmo depois de a equipa ter jogado a época
+   toda. Agora soma tudo, tal como aparece somado no perfil de cada
+   jogador. */
 function squadGeneralStats(seasonStatsJson){
   try{
     const list = JSON.parse(seasonStatsJson || '[]');
-    return list.find((r) => r.competition === 'Geral (Clube)') || { j: 0, g: 0, a: 0, media: '-' };
+    if(!Array.isArray(list) || !list.length) return { j: 0, g: 0, a: 0, am: 0, verm: 0, tk: 0, pp: '-', media: '-' };
+
+    let j = 0, g = 0, a = 0, am = 0, verm = 0, tk = 0;
+    let mediaWeightedTotal = 0, mediaWeight = 0;
+    let ppWeightedTotal = 0, ppWeight = 0;
+
+    list.forEach((r) => {
+      const rowJ = Number(r.j) || 0;
+      j += rowJ;
+      g += Number(r.g) || 0;
+      a += Number(r.a) || 0;
+      am += Number(r.am) || 0;
+      verm += Number(r.verm) || 0;
+      tk += Number(r.tk) || 0;
+
+      const media = parseFloat(r.media);
+      if(Number.isFinite(media) && rowJ){ mediaWeightedTotal += media * rowJ; mediaWeight += rowJ; }
+
+      const pp = parseFloat(r.pp);
+      if(Number.isFinite(pp) && rowJ){ ppWeightedTotal += pp * rowJ; ppWeight += rowJ; }
+    });
+
+    return {
+      j, g, a, am, verm, tk,
+      media: mediaWeight ? (mediaWeightedTotal / mediaWeight).toFixed(2) : '-',
+      pp: ppWeight ? `${(ppWeightedTotal / ppWeight).toFixed(1)}%` : '-',
+    };
   }catch(err){
-    return { j: 0, g: 0, a: 0, media: '-' };
+    return { j: 0, g: 0, a: 0, am: 0, verm: 0, tk: 0, pp: '-', media: '-' };
   }
 }
 
@@ -400,7 +446,11 @@ async function loadSquad(){
           <td>${stats.j ?? 0}</td>
           <td>${stats.g ?? 0}</td>
           <td>${stats.a ?? 0}</td>
-          <td>${stats.media ?? '-'}</td>
+          <td>${stats.am ?? 0}</td>
+          <td>${stats.verm ?? 0}</td>
+          <td>${stats.tk ?? 0}</td>
+          <td>${stats.pp ?? '-'}</td>
+          <td class="${(stats.media && stats.media !== '-') ? ratingClass(stats.media) : ''}">${stats.media ?? '-'}</td>
           <td>${p.market_value_text || '—'}</td>
           <td>${p.wage_text || '—'}</td>
         </tr>`;
@@ -690,6 +740,7 @@ const MESSAGE_ICONS = {
   loan_agreed: '🔄',
   loan_returned: '↩️',
   match_day: '⚽',
+  player_of_match: '⭐',
 };
 
 function truncateText(text, n){
@@ -703,6 +754,56 @@ function fmtMessageTimestamp(createdAt){
   const [y, m, d] = (datePart || '').split('-');
   const hm = (timePart || '').slice(0, 5);
   return d ? `${hm} · ${d}/${m}` : hm;
+}
+
+/* ---------- Medidores (nota dos adeptos / reação da direção) ----------
+   messages.extra_json guarda { gauges: [{ key, label, icon, value, max,
+   description }, ...] } — ver routes/matchReactions.js. Cada medidor
+   aparece como uma barra 0-10 colorida consoante o valor, com a
+   descrição por baixo. */
+function renderMessageGauges(m){
+  if(!m.extra_json) return '';
+  let extra;
+  try{ extra = JSON.parse(m.extra_json); }catch(err){ return ''; }
+  if(!extra || !Array.isArray(extra.gauges) || !extra.gauges.length) return '';
+
+  return `<div class="msg-gauges">${extra.gauges.map((g) => {
+    const max = g.max || 10;
+    const pct = Math.max(0, Math.min(100, (Number(g.value) / max) * 100));
+    const colorClass = pct >= 70 ? 'gauge-good' : (pct >= 45 ? 'gauge-mid' : 'gauge-bad');
+    return `
+      <div class="msg-gauge">
+        <div class="msg-gauge-head">
+          <span class="msg-gauge-label">${g.icon || ''} ${g.label}</span>
+          <span class="msg-gauge-value">${Number(g.value).toFixed(1)}/${max}</span>
+        </div>
+        <div class="msg-gauge-bar"><div class="msg-gauge-fill ${colorClass}" style="width:${pct}%"></div></div>
+        <p class="msg-gauge-desc">${g.description || ''}</p>
+      </div>`;
+  }).join('')}</div>`;
+}
+
+/* ---------- Caixa do Jogador do Jogo (foto + estatísticas da época) ----------
+   Reaproveita squadGeneralStats (já usada na tabela do plantel) para
+   somar as estatísticas do jogador em todas as competições a partir de
+   messages.player_season_stats_json — ver routes/transfers.js. */
+function renderPotmStatsBox(m){
+  if(m.type !== 'player_of_match' || !m.player_name) return '';
+  const stats = squadGeneralStats(m.player_season_stats_json);
+  return `
+    <div class="msg-potm-box">
+      <div class="msg-potm-photo">${m.player_photo ? `<img src="${m.player_photo}" alt="">` : '🧑'}</div>
+      <div class="msg-potm-info">
+        <div class="msg-potm-name">${m.player_name}</div>
+        <div class="msg-potm-label">Estatísticas da Época</div>
+        <div class="msg-potm-stats">
+          <div class="msg-potm-stat"><b>${stats.j}</b><span>Jogos</span></div>
+          <div class="msg-potm-stat"><b>${stats.g}</b><span>Golos</span></div>
+          <div class="msg-potm-stat"><b>${stats.a}</b><span>Assist.</span></div>
+          <div class="msg-potm-stat"><b>${stats.media}</b><span>Média</span></div>
+        </div>
+      </div>
+    </div>`;
 }
 
 function messageNeedsResponse(m){
@@ -853,7 +954,9 @@ function renderMessageDetail(m){
     </div>
     ${banner}
     ${highlight}
+    ${renderPotmStatsBox(m)}
     <div class="inbox-detail-body">${m.body}</div>
+    ${renderMessageGauges(m)}
     ${actions}
   `;
 
@@ -2374,7 +2477,9 @@ let liveState = null;
 let liveMySide = null;   // 'home' | 'away' | null (jogo entre duas equipas geridas pelo jogo)
 let liveAutoTimer = null;
 let liveBusy = false;    // evita pedidos sobrepostos (duplo clique / autoplay + clique manual)
-let liveSubOutId = null; // jogador em campo selecionado para sair, à espera de um clique no banco
+let liveSubModalOutId = null; // jogador escolhido para sair, dentro da janela de substituições
+let liveAnimQueue = [];  // fila dos golos/lances por animar no campo (ver playLiveBallAnimation)
+let liveAnimPlaying = false;
 
 function shieldHtml(team){
   return team.team_shield
@@ -2386,11 +2491,16 @@ async function openLiveMatch(friendlyId){
   liveFriendlyId = friendlyId;
   liveState = null;
   liveBusy = false;
-  liveSubOutId = null;
+  liveSubModalOutId = null;
+  liveAnimQueue = [];
+  liveAnimPlaying = false;
   postTalkPromptShownFor = null;
   el('liveMatchOverlay').classList.remove('hidden');
+  el('liveSubModalOverlay').classList.add('hidden');
   el('liveFeed').innerHTML = '<p class="placeholder-text">A carregar…</p>';
   el('livePitchTokens').innerHTML = '';
+  el('livePitchBall').style.opacity = '0';
+  el('liveGoalFlash').classList.remove('show');
   el('liveScoreNumbers').textContent = '0 - 0';
   el('liveMinute').textContent = "0'";
   el('liveProgressFill').style.width = '0%';
@@ -2415,10 +2525,13 @@ async function openLiveMatch(friendlyId){
 
 function closeLiveMatch(){
   el('liveMatchOverlay').classList.add('hidden');
+  el('liveSubModalOverlay').classList.add('hidden');
   stopLiveAuto();
   liveFriendlyId = null;
   liveState = null;
-  liveSubOutId = null;
+  liveSubModalOutId = null;
+  liveAnimQueue = [];
+  liveAnimPlaying = false;
 }
 el('liveMatchClose').addEventListener('click', closeLiveMatch);
 el('liveMatchOverlay').addEventListener('click', (e) => {
@@ -2473,13 +2586,13 @@ function slotCoords(formation, slotIndex, mirrored){
 function liveTokenHtml(p, x, y, teamState){
   const isMySelectable = teamState.is_user && liveState && liveState.status !== 'finished';
   const sideClass = teamState.is_user ? 'side-user' : 'side-opponent';
-  const selectedClass = liveSubOutId === p.id ? ' selected' : '';
   const badges = [];
   if(p.goals) badges.push(`<span class="live-token-badge">⚽${p.goals > 1 ? `×${p.goals}` : ''}</span>`);
   if(p.assists) badges.push(`<span class="live-token-badge">🅰️${p.assists > 1 ? `×${p.assists}` : ''}</span>`);
+  const swayDelay = (Math.random() * 2.6).toFixed(2); // dessincroniza o "balanço" de cada jogador — não parecem estátuas
   return `
-    <div class="live-token ${sideClass}${isMySelectable ? ' selectable' : ''}${selectedClass}"
-         style="left:${x}%;top:${y}%;" data-player-id="${p.id}">
+    <div class="live-token ${sideClass}${isMySelectable ? ' selectable' : ''}"
+         style="left:${x}%;top:${y}%;--sway-delay:${swayDelay}s;" data-player-id="${p.id}">
       <div class="live-token-circle">${p.jersey_number || '•'}
         ${badges.length ? `<span class="live-token-badges">${badges.join('')}</span>` : ''}
         ${p.yellow ? '<span class="live-token-yellow"></span>' : ''}
@@ -2504,12 +2617,193 @@ function renderLivePitch(data){
   });
   container.innerHTML = tokens.join('');
 
+  /* Clicar num boneco em campo (só os teus) abre a janela dedicada de
+     substituições já com esse jogador escolhido para sair — ver
+     openSubModal. */
   container.querySelectorAll('.live-token.selectable').forEach((tokenEl) => {
-    tokenEl.addEventListener('click', () => selectSubOut(Number(tokenEl.dataset.playerId)));
+    tokenEl.addEventListener('click', () => openSubModal(Number(tokenEl.dataset.playerId)));
   });
 }
 
+/* ---------- Animação dos golos e lances de perigo no campo ----------
+   Usa os campos player_id / side / outcome / keeper_id que o servidor
+   agora inclui em cada evento de golo/lance (ver resolveEvent em
+   routes/liveMatch.js) para saber que boneco mexe a bola e para onde ela
+   vai: a baliza (golo), o guarda-redes (defesa) ou para fora da área
+   (remate ao lado / trave). */
+function findLiveTokenPosition(playerId, side, data){
+  if(!playerId || !data || !data[side]) return null;
+  const teamState = data[side];
+  const idx = teamState.on_pitch.findIndex((p) => p.id === playerId);
+  if(idx === -1) return null;
+  const p = teamState.on_pitch[idx];
+  return slotCoords(teamState.formation, p.slot_index ?? idx, side === 'away');
+}
+
+function liveGoalMouthFor(side){
+  // 'home' ataca a baliza de cima (equipa fora, espelhada); 'away' ataca a de baixo.
+  // y fica dentro da própria baliza desenhada no campo (0%-3.4%), para a
+  // bola parecer mesmo entrar na baliza e não só chegar perto da linha.
+  return side === 'home' ? { x: 50, y: 1.6 } : { x: 50, y: 98.4 };
+}
+
+/* ---------- Jogadas de equipa organizadas (ataque vs. defesa) ----------
+   Nos golos e lances de perigo, os 10 jogadores de campo de cada equipa
+   movem-se como um bloco organizado, não só quem remata:
+
+   - Equipa a atacar: amplitude e profundidade — os avançados correm para
+     as costas da defesa (perto do alvo do lance), os restantes abrem um
+     pouco mais o campo nas laterais para esticar a marcação adversária,
+     todos empurrando em direção à baliza contrária (mais os avançados,
+     menos os defesas — ver CATEGORY_ATTACK_PUSH).
+   - Equipa a defender: bloco compacto — todos recuam em direção à própria
+     baliza (mais quem está mais avançado, que tem mais terreno para
+     cobrir) e fecham ligeiramente para o centro, para proteger a zona
+     central e a grande área (ver CATEGORY_DEFEND_DROP).
+
+   São movimentos temporários (voltam à posição da formação a seguir),
+   só para dar a sensação de bloco organizado no momento do lance — não
+   uma IA tática completa. */
+const CATEGORY_ATTACK_PUSH = { DEF: 4, MED: 8, MO: 13, PL: 17 };
+const CATEGORY_DEFEND_DROP = { DEF: 3, MED: 6, MO: 9, PL: 11 };
+
+function moveTokenTemporarily(playerId, board, targetPct, holdMs){
+  const tokenEl = board.querySelector(`.live-token[data-player-id="${playerId}"]`);
+  if(!tokenEl) return;
+  const originLeft = tokenEl.style.left;
+  const originTop = tokenEl.style.top;
+  tokenEl.style.transition = 'left .9s ease, top .9s ease';
+  tokenEl.style.left = `${targetPct.x}%`;
+  tokenEl.style.top = `${targetPct.y}%`;
+  setTimeout(() => {
+    tokenEl.style.left = originLeft;
+    tokenEl.style.top = originTop;
+  }, holdMs);
+}
+
+function playOrganizedMovement(ev, data, origin, target, defendSide){
+  const board = el('livePitchTokens');
+  if(!board) return;
+
+  const attackState = data[ev.side];
+  const defendState = data[defendSide];
+  const attackDir = ev.side === 'home' ? -1 : 1; // sentido do ataque, para a baliza adversária
+
+  attackState.on_pitch.filter((p) => p.category !== 'GR').forEach((p) => {
+    const pos = findLiveTokenPosition(p.id, ev.side, data);
+    if(!pos) return;
+    const push = CATEGORY_ATTACK_PUSH[p.category] ?? 8;
+    let targetX;
+    if(p.category === 'PL'){
+      // avançados: correm para as costas da defesa, perto do alvo do lance
+      targetX = pos.x + (target.x - pos.x) * 0.3;
+    }else{
+      // restantes: mantêm a amplitude, abrindo mais um pouco o campo
+      targetX = pos.x + (pos.x >= 50 ? 3 : -3);
+    }
+    const targetY = pos.y + attackDir * push;
+    moveTokenTemporarily(p.id, board, {
+      x: Math.max(6, Math.min(94, targetX)),
+      y: Math.max(3, Math.min(97, targetY)),
+    }, 1500);
+  });
+
+  defendState.on_pitch.filter((p) => p.category !== 'GR').forEach((p) => {
+    const pos = findLiveTokenPosition(p.id, defendSide, data);
+    if(!pos) return;
+    const drop = CATEGORY_DEFEND_DROP[p.category] ?? 6;
+    const dropDir = -attackDir; // recua para a própria baliza
+    const targetY = pos.y + dropDir * drop;
+    const targetX = pos.x + (50 - pos.x) * 0.18; // fecha ligeiramente para o centro, protegendo a grande área
+    moveTokenTemporarily(p.id, board, {
+      x: Math.max(6, Math.min(94, targetX)),
+      y: Math.max(3, Math.min(97, targetY)),
+    }, 1500);
+  });
+}
+
+function playLiveBallAnimation(ev, data){
+  const ball = el('livePitchBall');
+  const board = el('livePitchTokens');
+  if(!ball || !board) return;
+
+  const origin = findLiveTokenPosition(ev.player_id, ev.side, data);
+  if(!origin) return; // jogador já não está em campo (ex: substituído a seguir) — sem animação
+
+  let target = liveGoalMouthFor(ev.side);
+  const defendSide = ev.side === 'home' ? 'away' : 'home';
+
+  if(ev.kind === 'chance'){
+    if(ev.outcome === 'saved' && ev.keeper_id){
+      const keeperPos = findLiveTokenPosition(ev.keeper_id, defendSide, data);
+      if(keeperPos) target = keeperPos;
+    }else if(ev.outcome === 'blocked'){
+      target = { x: Math.max(10, Math.min(90, target.x + (Math.random() * 24 - 12))), y: ev.side === 'home' ? 16 : 84 };
+    }else{
+      target = { x: Math.max(5, Math.min(95, target.x + (Math.random() * 44 - 22))), y: ev.side === 'home' ? -2 : 102 };
+    }
+  }
+
+  playOrganizedMovement(ev, data, origin, target, defendSide);
+
+  ball.style.transition = 'none';
+  ball.style.left = `${origin.x}%`;
+  ball.style.top = `${origin.y}%`;
+  ball.style.opacity = '1';
+  void ball.offsetWidth; // força reflow antes de ligar a transição
+  ball.style.transition = 'left .9s cubic-bezier(.3,.7,.4,1), top .9s cubic-bezier(.3,.7,.4,1)';
+  ball.style.left = `${target.x}%`;
+  ball.style.top = `${target.y}%`;
+
+  const attackerToken = board.querySelector(`.live-token[data-player-id="${ev.player_id}"]`);
+  if(attackerToken){
+    attackerToken.classList.remove('kick-pulse');
+    void attackerToken.offsetWidth;
+    attackerToken.classList.add('kick-pulse');
+  }
+
+  if(ev.kind === 'chance' && ev.outcome === 'saved' && ev.keeper_id){
+    setTimeout(() => {
+      const keeperToken = board.querySelector(`.live-token[data-player-id="${ev.keeper_id}"]`);
+      if(keeperToken){
+        keeperToken.classList.remove('save-pulse');
+        void keeperToken.offsetWidth;
+        keeperToken.classList.add('save-pulse');
+      }
+    }, 550);
+  }
+
+  if(ev.kind === 'goal'){
+    setTimeout(() => {
+      const flash = el('liveGoalFlash');
+      flash.classList.remove('show');
+      void flash.offsetWidth;
+      flash.classList.add('show');
+    }, 550);
+  }
+
+  setTimeout(() => { ball.style.opacity = '0'; }, 1450);
+}
+
+
+function queueLiveAnimations(newEvents, data){
+  (newEvents || []).forEach((ev) => {
+    if((ev.kind === 'goal' || ev.kind === 'chance') && ev.player_id) liveAnimQueue.push({ ev, data });
+  });
+  playNextLiveAnimation();
+}
+
+function playNextLiveAnimation(){
+  if(liveAnimPlaying || !liveAnimQueue.length) return;
+  liveAnimPlaying = true;
+  const { ev, data } = liveAnimQueue.shift();
+  playLiveBallAnimation(ev, data);
+  setTimeout(() => { liveAnimPlaying = false; playNextLiveAnimation(); }, 1800);
+}
+
 function applyLiveState(data, newEvents){
+
+
   const prevScoreText = liveState ? `${liveState.home_score} - ${liveState.away_score}` : null;
   liveState = data;
   liveMySide = data.home.is_user ? 'home' : (data.away.is_user ? 'away' : null);
@@ -2537,12 +2831,15 @@ function applyLiveState(data, newEvents){
   badge.lastChild.textContent = data.status === 'finished' ? 'FIM DE JOGO' : 'AO VIVO';
 
   if(newEvents && newEvents.length) renderLiveFeedItems(newEvents);
+  queueLiveAnimations(newEvents, data); // golos e lances de perigo ganham vida no campo
   renderLiveSummary(data);
   renderLivePitch(data);
 
   const myState = liveMySide ? data[liveMySide] : null;
   renderLiveSubPanel(myState);
   renderLiveTacticPanel(myState);
+  renderLiveMentalityPanel(myState);
+  if(!el('liveSubModalOverlay').classList.contains('hidden')) renderSubModalLists(myState); // mantém a janela de subs sincronizada se ficar aberta
 
   const playBtn = el('livePlayBtn');
   const autoBtn = el('liveAutoBtn');
@@ -2785,25 +3082,16 @@ el('liveAutoBtn').addEventListener('click', () => {
   startLiveAuto();
 });
 
-/* ---------- Substituições: clica num jogador em campo (fica marcado a
-   vermelho), depois num do banco — a troca acontece de imediato. ---------- */
-function selectSubOut(playerId){
-  const myState = liveMySide ? liveState[liveMySide] : null;
-  if(!myState || liveState.status === 'finished') return;
-  if(!myState.on_pitch.some((p) => p.id === playerId)) return;
-  liveSubOutId = liveSubOutId === playerId ? null : playerId;
-  renderLivePitch(liveState);
-  renderLiveSubPanel(myState);
-}
-
+/* ---------- Substituições: painel principal só mostra o estado ----------
+   O clique abre sempre a janela dedicada (ver openSubModal) — em campo
+   (com o jogador já pré-selecionado para sair) ou pelo botão do painel. */
 function renderLiveSubPanel(myState){
   const panel = el('liveSubPanel');
   const hint = el('liveSubHint');
-  const strip = el('liveBenchStrip');
+  const openBtn = el('liveOpenSubModalBtn');
 
   if(!myState || liveState.status === 'finished'){
     panel.classList.add('disabled');
-    strip.innerHTML = '';
     return;
   }
   panel.classList.remove('disabled');
@@ -2811,37 +3099,92 @@ function renderLiveSubPanel(myState){
 
   if(myState.subs_remaining <= 0){
     hint.textContent = 'Já não tens substituições disponíveis.';
+    openBtn.disabled = true;
   }else if(!myState.bench.length){
     hint.textContent = 'O banco está vazio.';
-  }else if(liveSubOutId){
-    const outPlayer = myState.on_pitch.find((p) => p.id === liveSubOutId);
-    hint.textContent = outPlayer ? `${outPlayer.name} vai sair — clica em quem entra.` : 'Clica num jogador em campo, depois num do banco.';
+    openBtn.disabled = true;
   }else{
-    hint.textContent = 'Clica num jogador em campo, depois num do banco.';
+    hint.textContent = 'Abre a janela de substituições para trocar um jogador.';
+    openBtn.disabled = false;
+  }
+}
+el('liveOpenSubModalBtn').addEventListener('click', () => openSubModal(null));
+
+/* ---------- Janela dedicada de substituições ----------
+   Abre por cima do jogo ao vivo: escolhe primeiro quem sai (em campo),
+   depois quem entra (banco) — a troca acontece de imediato e a janela
+   fecha-se sozinha, voltando a mostrar os bonecos já atualizados no
+   campo (ver applyLiveState → renderLivePitch). */
+function openSubModal(preselectOutId){
+  const myState = liveMySide ? liveState[liveMySide] : null;
+  if(!myState || liveState.status === 'finished') return;
+  liveSubModalOutId = (preselectOutId && myState.on_pitch.some((p) => p.id === preselectOutId)) ? preselectOutId : null;
+  el('liveSubModalResult').classList.add('hidden');
+  renderSubModalLists(myState);
+  el('liveSubModalOverlay').classList.remove('hidden');
+}
+
+function closeSubModal(){
+  el('liveSubModalOverlay').classList.add('hidden');
+  liveSubModalOutId = null;
+}
+el('liveSubModalClose').addEventListener('click', closeSubModal);
+el('liveSubModalOverlay').addEventListener('click', (e) => {
+  if(e.target === el('liveSubModalOverlay')) closeSubModal();
+});
+
+function renderSubModalLists(myState){
+  const hint = el('liveSubModalHint');
+  const onPitchList = el('liveSubModalOnPitch');
+  const benchList = el('liveSubModalBench');
+  if(!myState){ return; }
+
+  const noSubsLeft = myState.subs_remaining <= 0;
+
+  if(noSubsLeft){
+    hint.textContent = 'Já não tens substituições disponíveis.';
+  }else if(!myState.bench.length){
+    hint.textContent = 'O banco está vazio.';
+  }else if(liveSubModalOutId){
+    const outPlayer = myState.on_pitch.find((p) => p.id === liveSubModalOutId);
+    hint.textContent = outPlayer ? `${outPlayer.name} vai sair — escolhe quem entra no banco.` : 'Escolhe primeiro quem sai do campo.';
+  }else{
+    hint.textContent = 'Escolhe primeiro quem sai do campo.';
   }
 
-  if(!myState.bench.length){
-    strip.innerHTML = '<p class="live-bench-empty">Banco vazio.</p>';
-    return;
-  }
-
-  const disabled = myState.subs_remaining <= 0;
-  strip.innerHTML = myState.bench.map((p) => `
-    <div class="live-bench-chip${disabled ? ' disabled' : ''}" data-player-id="${p.id}">
-      <div class="live-token-circle">${p.jersey_number || '•'}</div>
-      <span class="live-bench-chip-name">${p.name.split(' ').slice(-1)[0]}</span>
+  onPitchList.innerHTML = myState.on_pitch.map((p) => `
+    <div class="live-sub-modal-row${liveSubModalOutId === p.id ? ' selected' : ''}${noSubsLeft ? ' disabled' : ''}" data-player-id="${p.id}">
+      <span class="live-token-circle">${p.jersey_number || '•'}</span><span>${p.name}</span>
     </div>`).join('');
+  onPitchList.querySelectorAll('.live-sub-modal-row').forEach((row) => {
+    if(noSubsLeft) return;
+    row.addEventListener('click', () => {
+      const id = Number(row.dataset.playerId);
+      liveSubModalOutId = liveSubModalOutId === id ? null : id;
+      renderSubModalLists(myState);
+    });
+  });
 
-  strip.querySelectorAll('.live-bench-chip').forEach((chip) => {
-    chip.addEventListener('click', () => completeSubstitution(Number(chip.dataset.playerId)));
+  const benchDisabled = noSubsLeft || !liveSubModalOutId;
+  benchList.innerHTML = myState.bench.length
+    ? myState.bench.map((p) => `
+        <div class="live-sub-modal-row${benchDisabled ? ' disabled' : ''}" data-player-id="${p.id}">
+          <span class="live-token-circle">${p.jersey_number || '•'}</span><span>${p.name}</span>
+        </div>`).join('')
+    : '<p class="live-bench-empty">Banco vazio.</p>';
+  benchList.querySelectorAll('.live-sub-modal-row').forEach((row) => {
+    row.addEventListener('click', () => {
+      if(benchDisabled) return;
+      completeSubstitution(Number(row.dataset.playerId));
+    });
   });
 }
 
 async function completeSubstitution(inId){
   const myState = liveMySide ? liveState[liveMySide] : null;
-  const resultBox = el('liveSubResult');
+  const resultBox = el('liveSubModalResult');
   if(!myState) return;
-  if(!liveSubOutId){
+  if(!liveSubModalOutId){
     resultBox.textContent = 'Escolhe primeiro quem sai, clicando num jogador em campo.';
     resultBox.classList.remove('hidden');
     return;
@@ -2851,13 +3194,13 @@ async function completeSubstitution(inId){
     const res = await fetch(`/api/live-matches/${liveFriendlyId}/substitution`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ team_id: myState.team_id, player_out_id: liveSubOutId, player_in_id: inId }),
+      body: JSON.stringify({ team_id: myState.team_id, player_out_id: liveSubModalOutId, player_in_id: inId }),
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Não foi possível fazer a substituição');
-    liveSubOutId = null;
     resultBox.classList.add('hidden');
-    applyLiveState(data, data.new_events || []);
+    closeSubModal();
+    applyLiveState(data, data.new_events || []); // fecha a janela e mostra já os bonecos atualizados no jogo
   }catch(err){
     resultBox.textContent = err.message;
     resultBox.classList.remove('hidden');
@@ -2876,6 +3219,56 @@ function renderLiveTacticPanel(myState){
     btn.classList.toggle('active', btn.dataset.formation === myState.formation);
   });
 }
+
+/* ---------- Postura tática (mentalidade) a meio do jogo ----------
+   Atacante: mais golos, mas defesa mais aberta a contra-ataques.
+   Contra-Ataque: espera e sai rápido — funciona muito melhor com jogadores
+   velozes em campo, principalmente contra um adversário em postura
+   Atacante. Defensiva: muito difícil de sofrer golos, mas cria pouco
+   perigo lá à frente. */
+const MENTALITY_DESCRIPTIONS = {
+  equilibrado: 'Abordagem normal, sem exagerar no ataque nem na defesa.',
+  atacante: 'Mais jogadores lançados no ataque — mais golos, mas a defesa fica mais aberta a contra-ataques.',
+  contra_ataque: 'Espera pelo erro do adversário e sai rápido — funciona muito melhor com jogadores velozes em campo, principalmente contra equipas em postura atacante.',
+  defensiva: 'Fecha-se atrás da bola — muito difícil de sofrer golos, mas cria pouco perigo lá à frente.',
+};
+
+function renderLiveMentalityPanel(myState){
+  const panel = el('liveMentalityPanel');
+  if(!myState || liveState.status === 'finished'){
+    panel.classList.add('disabled');
+    return;
+  }
+  panel.classList.remove('disabled');
+  const current = myState.mentality || 'equilibrado';
+  panel.querySelectorAll('.mentality-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.mentality === current);
+  });
+  el('liveMentalityDesc').textContent = MENTALITY_DESCRIPTIONS[current] || '';
+}
+
+el('liveMentalityPicker').querySelectorAll('.mentality-btn').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    const myState = liveMySide ? liveState[liveMySide] : null;
+    const resultBox = el('liveMentalityResult');
+    if(!myState || btn.dataset.mentality === (myState.mentality || 'equilibrado')) return;
+
+    try{
+      const res = await fetch(`/api/live-matches/${liveFriendlyId}/mentality`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team_id: myState.team_id, mentality: btn.dataset.mentality }),
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Não foi possível mudar a postura tática');
+      resultBox.classList.add('hidden');
+      applyLiveState(data, data.new_events || []);
+    }catch(err){
+      resultBox.textContent = err.message;
+      resultBox.classList.remove('hidden');
+    }
+  });
+});
 
 el('liveFormationPicker').querySelectorAll('.formation-btn').forEach((btn) => {
   btn.addEventListener('click', async () => {

@@ -313,6 +313,16 @@ const messageCols = db.prepare("PRAGMA table_info(messages)").all().map((c) => c
 if (!messageCols.includes('related_team_id')) db.exec('ALTER TABLE messages ADD COLUMN related_team_id INTEGER');
 if (!messageCols.includes('transfer_offer_id')) db.exec('ALTER TABLE messages ADD COLUMN transfer_offer_id INTEGER');
 
+/* ---------- Migração segura: reações pós-jogo estruturadas ----------
+   extra_json guarda os "medidores" da notícia de resultado (nota dos
+   adeptos + reação da direção, com valor 0-10 e descrição) — ver
+   routes/matchReactions.js, usado por routes/game.js e
+   routes/liveMatch.js. O tipo de mensagem 'player_of_match' (Jogador do
+   Jogo) reaproveita as colunas já existentes: player_id (para a foto e
+   as estatísticas da época, via JOIN em routes/transfers.js) e
+   title/body — não precisa de nenhuma coluna nova. */
+if (!messageCols.includes('extra_json')) db.exec('ALTER TABLE messages ADD COLUMN extra_json TEXT');
+
 /* ---------- Personalidade: normaliza para um conjunto fixo de 5 níveis ----------
    O campo já existia como texto livre (o que já estava escrito no perfil de cada
    jogador); agora passa a ser escolhido num menu fixo, para os eventos de
@@ -479,13 +489,15 @@ if (!messageCols.includes('friendly_id')) db.exec('ALTER TABLE messages ADD COLU
           incident_id        INTEGER REFERENCES player_incidents(id),
           question_id        INTEGER REFERENCES manager_questions(id),
           meeting_id         INTEGER REFERENCES transfer_meetings(id),
-          friendly_id        INTEGER REFERENCES club_friendlies(id)
+          friendly_id        INTEGER REFERENCES club_friendlies(id),
+          extra_json         TEXT
         );
       `);
+      const hasExtraJsonAlready = db.prepare("PRAGMA table_info(messages)").all().some((c) => c.name === 'extra_json');
       db.exec(`
         INSERT INTO messages_fixed
-          (id, team_id, type, title, body, player_id, is_read, created_at, related_team_id, transfer_offer_id, incident_id, question_id, meeting_id, friendly_id)
-        SELECT id, team_id, type, title, body, player_id, is_read, created_at, related_team_id, transfer_offer_id, incident_id, question_id, meeting_id, friendly_id
+          (id, team_id, type, title, body, player_id, is_read, created_at, related_team_id, transfer_offer_id, incident_id, question_id, meeting_id, friendly_id${hasExtraJsonAlready ? ', extra_json' : ''})
+        SELECT id, team_id, type, title, body, player_id, is_read, created_at, related_team_id, transfer_offer_id, incident_id, question_id, meeting_id, friendly_id${hasExtraJsonAlready ? ', extra_json' : ''}
         FROM messages
       `);
       db.exec('DROP TABLE messages');

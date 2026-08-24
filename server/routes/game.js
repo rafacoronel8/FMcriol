@@ -10,6 +10,7 @@ const league = require('./league');
 const cup = require('./cup');
 const transfers = require('./transfers');
 const morale = require('./morale');
+const { buildPostMatchReactions } = require('./matchReactions');
 
 const router = express.Router();
 
@@ -1229,15 +1230,40 @@ function simulateSingleFriendly(f) {
     const cupTail = f.is_cup
       ? (result === 'Vitória' ? ' Seguem em frente na competição.' : ' Estão eliminados da Taça São Vicente.')
       : '';
+
+    const teamName = isHome ? f.home_name : f.away_name;
+    const goalsFor = isHome ? homeGoals : awayGoals;
+    const goalsAgainst = isHome ? awayGoals : homeGoals;
+    const teamReputation = isHome ? f.home_reputation : f.away_reputation;
+    const opponentReputation = isHome ? f.away_reputation : f.home_reputation;
+    const competitionPhrase = f.is_cup ? 'na Taça São Vicente' : (f.is_league ? 'no Campeonato' : 'nos amigáveis');
+
+    /* Nota dos adeptos + reação da direção (medidores) e Jogador do Jogo
+       (com foto + estatísticas da época) — ver routes/matchReactions.js,
+       partilhado com routes/liveMatch.js para os jogos vistos ao vivo
+       produzirem exatamente a mesma coisa. */
+    const { extraJson, potm } = buildPostMatchReactions({
+      friendlyId: f.id, teamId, teamName, opponentName, goalsFor, goalsAgainst, isHome,
+      teamReputation, opponentReputation, competitionPhrase,
+    });
+
     db.prepare(`
-      INSERT INTO messages (team_id, type, title, body)
-      VALUES (@team_id, @type, @title, @body)
+      INSERT INTO messages (team_id, type, title, body, extra_json)
+      VALUES (@team_id, @type, @title, @body, @extra_json)
     `).run({
       team_id: teamId,
       type: f.is_cup ? 'cup_played' : (f.is_league ? 'league_played' : 'friendly_played'),
       title: `${result === 'Vitória' ? '🏆' : '📉'} ${label}: ${result.toLowerCase()} contra o ${opponentName}${penaltiesNote}`,
       body: `Resultado final: ${scoreText}${penaltiesNote}.${cupTail}`,
+      extra_json: extraJson,
     });
+
+    if (potm) {
+      db.prepare(`
+        INSERT INTO messages (team_id, type, title, body, player_id)
+        VALUES (@team_id, 'player_of_match', @title, @body, @player_id)
+      `).run({ team_id: teamId, title: potm.title, body: potm.body, player_id: potm.player_id });
+    }
   });
 
   f.__homeGoals = homeGoals;

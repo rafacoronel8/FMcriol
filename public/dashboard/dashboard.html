@@ -194,6 +194,10 @@
               <th title="Jogos">J</th>
               <th title="Golos">G</th>
               <th title="Assistências">A</th>
+              <th title="Cartões Amarelos">Am</th>
+              <th title="Cartões Vermelhos">Verm</th>
+              <th title="Cortes">Cortes</th>
+              <th title="Percentagem de Passe">% Passe</th>
               <th title="Média de Classificação">Média</th>
               <th>VM</th>
               <th>Salário</th>
@@ -466,11 +470,15 @@
         <div class="live-pitch-board" id="livePitchBoard">
           <div class="live-pitch-box live-pitch-box-top"></div>
           <div class="live-pitch-box live-pitch-box-bottom"></div>
+          <div class="live-pitch-goal live-pitch-goal-top"></div>
+          <div class="live-pitch-goal live-pitch-goal-bottom"></div>
           <div class="live-pitch-halfway"></div>
           <div class="live-pitch-center-circle"></div>
           <div class="live-pitch-team-label live-pitch-team-label-top" id="livePitchAwayLabel"></div>
           <div class="live-pitch-team-label live-pitch-team-label-bottom" id="livePitchHomeLabel"></div>
           <div class="live-pitch-tokens" id="livePitchTokens"><!-- gerado via JS --></div>
+          <div class="live-pitch-ball" id="livePitchBall"></div>
+          <div class="live-goal-flash" id="liveGoalFlash">⚽ GOLO!</div>
         </div>
         <p class="live-pitch-hint" id="livePitchHint">O jogo simula-se sozinho, minuto a minuto. A equipa a roxo és tu — clica num jogador em campo para o substituir.</p>
       </div>
@@ -484,8 +492,7 @@
         <div class="live-panel" id="liveSubPanel">
           <div class="card-title no-margin">Substituições <span id="liveSubsRemaining" class="squad-count-badge">5</span></div>
           <p class="live-sub-hint" id="liveSubHint">Clica num jogador em campo, depois num do banco.</p>
-          <div class="live-bench-strip" id="liveBenchStrip"><!-- gerado via JS --></div>
-          <p id="liveSubResult" class="activity-result hidden"></p>
+          <button type="button" id="liveOpenSubModalBtn" class="btn-advance small live-secondary">🔁 Fazer Substituição</button>
         </div>
 
         <div class="live-panel" id="liveTacticPanel">
@@ -499,12 +506,45 @@
           <p id="liveTacticResult" class="activity-result hidden"></p>
         </div>
 
+        <div class="live-panel" id="liveMentalityPanel">
+          <div class="card-title no-margin">Postura Tática</div>
+          <div class="mentality-picker" id="liveMentalityPicker">
+            <button type="button" class="mentality-btn" data-mentality="equilibrado">Equilibrado</button>
+            <button type="button" class="mentality-btn" data-mentality="atacante">Atacante</button>
+            <button type="button" class="mentality-btn" data-mentality="contra_ataque">Contra-Ataque</button>
+            <button type="button" class="mentality-btn" data-mentality="defensiva">Defensiva</button>
+          </div>
+          <p class="mentality-desc" id="liveMentalityDesc"></p>
+          <p id="liveMentalityResult" class="activity-result hidden"></p>
+        </div>
+
         <div class="live-panel live-summary-panel hidden" id="liveSummaryPanel">
           <div class="card-title no-margin">Resultado Final</div>
           <div id="liveSummaryBody" class="live-summary-body"></div>
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ===== Janela dedicada de Substituições (aberta por cima do jogo ao vivo) ===== -->
+<div id="liveSubModalOverlay" class="news-modal-overlay hidden" style="z-index:260;">
+  <div class="news-modal live-sub-modal">
+    <button class="news-modal-close" id="liveSubModalClose" aria-label="Fechar">×</button>
+    <div class="card-title no-margin">Fazer Substituição</div>
+    <p class="live-sub-hint" id="liveSubModalHint">Escolhe primeiro quem sai do campo.</p>
+
+    <div class="live-sub-modal-section">
+      <div class="live-sub-modal-label">Em Campo</div>
+      <div class="live-sub-modal-list" id="liveSubModalOnPitch"><!-- gerado via JS --></div>
+    </div>
+
+    <div class="live-sub-modal-section">
+      <div class="live-sub-modal-label">Banco</div>
+      <div class="live-sub-modal-list" id="liveSubModalBench"><!-- gerado via JS --></div>
+    </div>
+
+    <p id="liveSubModalResult" class="activity-result hidden"></p>
   </div>
 </div>
 
