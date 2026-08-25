@@ -55,6 +55,20 @@ const PLAYING_TIME_FLAVOUR = [
   'mostrou-se visivelmente frustrado com a falta de minutos em campo',
 ];
 
+/* Soma os jogos disputados em TODAS as competições (Campeonato, Taça,
+   Amigáveis — ver COMPETITION_ROW_NAMES em db/database.js). Antes disto,
+   procurava-se uma linha chamada "Geral (Clube)" que o jogo nunca chega a
+   criar (só existe nos dados de demonstração do perfil), por isso todos os
+   jogadores apareciam sempre com 0 jogos aqui — mesmo já tendo jogado a
+   época toda — e podiam vir pedir tempo de jogo sem razão nenhuma. Mesmo
+   cálculo usado no plantel (ver squadGeneralStats em public/dashboard.js). */
+function totalGamesPlayed(seasonStatsJson) {
+  let statsList = [];
+  try { statsList = JSON.parse(seasonStatsJson || '[]'); } catch { statsList = []; }
+  if (!Array.isArray(statsList)) return 0;
+  return statsList.reduce((sum, r) => sum + (Number(r.j) || 0), 0);
+}
+
 function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
 
 /* ---------- Perguntas ao treinador ----------
@@ -259,10 +273,7 @@ function runMoraleTick(nextDateStr) {
     players
       .filter((p) => !hasPendingIncident.has(p.id) && !p.stood_down_until)
       .forEach((p) => {
-        let statsList = [];
-        try { statsList = JSON.parse(p.season_stats_json || '[]'); } catch { statsList = []; }
-        const general = statsList.find((r) => r.competition === 'Geral (Clube)') || { j: 0 };
-        const gamesPlayed = Number(general.j) || 0;
+        const gamesPlayed = totalGamesPlayed(p.season_stats_json);
         if (gamesPlayed > 1) return;
 
         let chance = 0.01;

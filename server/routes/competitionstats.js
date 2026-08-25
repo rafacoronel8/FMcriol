@@ -25,6 +25,38 @@ const ASSIST_WEIGHT = { DEF: 10, MED: 30, MO: 35, PL: 20, GR: 0 };
 const CARD_WEIGHT = { DEF: 30, MED: 30, MO: 20, PL: 15, GR: 5 };
 const TACKLE_BASE = { GR: 0, DEF: 3.2, MED: 2.4, MO: 1.1, PL: 0.6 };
 
+/* ---------- Dribles e passes por jogo ----------
+   Dribles puxam por Técnica + Velocidade + Aceleração (quem tem mais
+   destas três dribla mais) e por posição — extremos/avançados tentam mais
+   dribles por natureza do jogo, mesmo a igual técnica, do que um central.
+   Passes puxam pelo atributo Passe (technical_json nos jogadores de campo,
+   goalkeeping_json no guarda-redes) e pela posição — guarda-redes, centrais
+   e médios tocam mais vezes na bola numa fase de construção normal do que
+   um extremo ou avançado, que jogam mais isolados perto da área. */
+const DRIBBLE_BASE = { GR: 0.1, DEF: 0.6, MED: 1.6, MO: 3.2, PL: 2.6 };
+const PASS_BASE = { GR: 16, DEF: 42, MED: 52, MO: 32, PL: 24 };
+
+function extractAttr(jsonText, name) {
+  let list;
+  try { list = JSON.parse(jsonText || '[]'); } catch { list = []; }
+  if (!Array.isArray(list)) return null;
+  const found = list.find(([n]) => n === name);
+  return found ? Number(found[1]) : null;
+}
+
+function playerDribbleFactor(player) {
+  const technique = extractAttr(player.technical_json, 'Técnica') ?? 10;
+  const pace = extractAttr(player.physical_json, 'Velocidade') ?? 10;
+  const accel = extractAttr(player.physical_json, 'Aceleração') ?? 10;
+  const avg = (technique + pace + accel) / 3;
+  return Math.max(0.4, Math.min(2.5, avg / 10));
+}
+
+function playerPassFactor(player) {
+  const passing = extractAttr(player.technical_json, 'Passe') ?? extractAttr(player.goalkeeping_json, 'Passe') ?? 10;
+  return Math.max(0.4, Math.min(2.2, passing / 10));
+}
+
 function playerQualityFactor(player) {
   const fields = player.category === 'GR'
     ? ['goalkeeping_json', 'mental_json', 'physical_json']
@@ -119,9 +151,9 @@ function simulateCompetitionMatchStats(competition, homeTeamId, awayTeamId, home
 
   const insertStat = db.prepare(`
     INSERT INTO friendly_player_stats
-      (friendly_id, competition, team_id, player_id, player_name, position_tag, goals, assists, rating, yellow_cards, red_card, tackles, pass_pct)
+      (friendly_id, competition, team_id, player_id, player_name, position_tag, goals, assists, rating, yellow_cards, red_card, tackles, pass_pct, dribbles, passes)
     VALUES
-      (NULL, @competition, @team_id, @player_id, @player_name, @position_tag, @goals, @assists, @rating, @yellow_cards, @red_card, @tackles, @pass_pct)
+      (NULL, @competition, @team_id, @player_id, @player_name, @position_tag, @goals, @assists, @rating, @yellow_cards, @red_card, @tackles, @pass_pct, @dribbles, @passes)
   `);
 
   sides.forEach(({ teamId, goalsFor, goalsAgainst }) => {
@@ -183,16 +215,18 @@ function simulateCompetitionMatchStats(competition, homeTeamId, awayTeamId, home
 
       const tackles = Math.max(0, Math.round((TACKLE_BASE[player.category] || 0) * player.quality + (Math.random() * 2 - 1)));
       const passPct = Math.max(40, Math.min(98, Math.round(62 + player.quality * 10 + (Math.random() * 16 - 8))));
+      const dribbles = Math.max(0, Math.round((DRIBBLE_BASE[player.category] || 1) * playerDribbleFactor(player) + (Math.random() * 2 - 1)));
+      const passes = Math.max(0, Math.round((PASS_BASE[player.category] || 20) * playerPassFactor(player) + (Math.random() * 10 - 5)));
 
       insertStat.run({
         competition, team_id: teamId, player_id: player.id,
         player_name: player.name, position_tag: player.position_tag || '',
         goals, assists, rating: Number(rating.toFixed(2)),
-        yellow_cards: yellow, red_card: red, tackles, pass_pct: passPct,
+        yellow_cards: yellow, red_card: red, tackles, pass_pct: passPct, dribbles, passes,
       });
 
       db.applySeasonStat(player.id, rowName, {
-        goals, assists, yellow, red, tackles, passPct, rating: Number(rating.toFixed(2)),
+        goals, assists, yellow, red, tackles, dribbles, passes, passPct, rating: Number(rating.toFixed(2)),
       });
     });
   });

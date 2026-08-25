@@ -424,6 +424,8 @@ function renderSeasonStats(){
       <td contenteditable="${isAdmin}" data-key="am">${r.am ?? 0}</td>
       <td contenteditable="${isAdmin}" data-key="verm">${r.verm ?? 0}</td>
       <td contenteditable="${isAdmin}" data-key="tk">${r.tk ?? 0}</td>
+      <td contenteditable="${isAdmin}" data-key="dr">${r.dr ?? 0}</td>
+      <td contenteditable="${isAdmin}" data-key="ps">${r.ps ?? 0}</td>
       <td contenteditable="${isAdmin}" data-key="pp">${r.pp ?? '-'}</td>
       <td contenteditable="${isAdmin}" data-key="media" class="rating">${r.media ?? '-'}</td>
       <td>${isAdmin ? '<button class="row-remove" title="Remover linha">×</button>' : ''}</td>
@@ -438,6 +440,8 @@ function renderSeasonStats(){
     });
     body.appendChild(tr);
   });
+
+  renderPerformanceRadar();
 }
 
 function saveSeasonStats(){
@@ -454,6 +458,7 @@ function saveSeasonStats(){
   });
   player.season_stats_json = rows;
   queueSave({ season_stats_json: rows });
+  renderPerformanceRadar();
 }
 
 if(!isAdmin) el('addStatRowBtn').classList.add('hidden');
@@ -461,10 +466,112 @@ el('addStatRowBtn').addEventListener('click', () => {
   if(!isAdmin) return;
   if(!player) player = { season_stats_json: [] };
   if(!player.season_stats_json) player.season_stats_json = [];
-  player.season_stats_json.push({ competition: 'Nova Competição', j:0, g:0, a:0, xg:0, pen:0, mdp:0, am:0, verm:0, tk:0, pp:'-', media:'-' });
+  player.season_stats_json.push({ competition: 'Nova Competição', j:0, g:0, a:0, xg:0, pen:0, mdp:0, am:0, verm:0, tk:0, dr:0, ps:0, pp:'-', media:'-' });
   renderSeasonStats();
   saveSeasonStats();
 });
+
+/* ---------- 8b. Radar de Desempenho (aba "Desempenho") ----------
+   Junta todas as linhas de season_stats_json (uma por competição) e tira
+   a média por jogo em cada uma das seis dimensões — "média de todos os
+   jogos" da época, como pedido, e não só da última competição. Os "cap"
+   definem o que conta como 100% em cada eixo do radar (um valor bom/muito
+   bom para essa estatística), para o gráfico ficar legível em vez de os
+   pontos ficarem todos encostados ao centro ou ao limite. */
+const RADAR_AXES = [
+  { key: 'goals', label: 'Golos/Jogo', icon: '⚽', cap: 1.2, decimals: 2 },
+  { key: 'assists', label: 'Assist./Jogo', icon: '🎯', cap: 0.8, decimals: 2 },
+  { key: 'tackles', label: 'Cortes/Jogo', icon: '🛡️', cap: 5, decimals: 1 },
+  { key: 'dribbles', label: 'Dribles/Jogo', icon: '⚡', cap: 4, decimals: 1 },
+  { key: 'passes', label: 'Passes/Jogo', icon: '🔀', cap: 70, decimals: 0 },
+  { key: 'passAccuracy', label: '% Passe', icon: '📊', cap: 100, decimals: 0 },
+];
+
+function computePerformanceAverages(seasonStatsJson){
+  const rows = Array.isArray(seasonStatsJson) ? seasonStatsJson : [];
+  let totalGames = 0, goals = 0, assists = 0, tackles = 0, dribbles = 0, passes = 0;
+  let ppWeightedSum = 0, ppWeight = 0;
+
+  rows.forEach((r) => {
+    const j = Number(r.j) || 0;
+    totalGames += j;
+    goals += Number(r.g) || 0;
+    assists += Number(r.a) || 0;
+    tackles += Number(r.tk) || 0;
+    dribbles += Number(r.dr) || 0;
+    passes += Number(r.ps) || 0;
+    const pp = parseFloat(r.pp);
+    if(Number.isFinite(pp) && j){ ppWeightedSum += pp * j; ppWeight += j; }
+  });
+
+  const perGame = (total) => (totalGames ? total / totalGames : 0);
+  return {
+    totalGames,
+    goals: perGame(goals),
+    assists: perGame(assists),
+    tackles: perGame(tackles),
+    dribbles: perGame(dribbles),
+    passes: perGame(passes),
+    passAccuracy: ppWeight ? ppWeightedSum / ppWeight : 0,
+  };
+}
+
+function renderPerformanceRadar(){
+  const wrap = el('performanceRadarWrap');
+  const legend = el('performanceLegend');
+  if(!wrap || !legend) return;
+
+  const avg = computePerformanceAverages(player && player.season_stats_json);
+  const n = RADAR_AXES.length;
+  const cx = 160, cy = 160, r = 118;
+  const angleFor = (i) => (Math.PI * 2 * i) / n - Math.PI / 2;
+  const pointFor = (i, frac) => {
+    const a = angleFor(i);
+    return [cx + Math.cos(a) * r * frac, cy + Math.sin(a) * r * frac];
+  };
+
+  const rings = [0.25, 0.5, 0.75, 1].map((frac) => {
+    const pts = RADAR_AXES.map((_, i) => pointFor(i, frac).join(',')).join(' ');
+    return `<polygon points="${pts}" class="radar-ring" />`;
+  }).join('');
+
+  const axesLines = RADAR_AXES.map((_, i) => {
+    const [x, y] = pointFor(i, 1);
+    return `<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" class="radar-axis" />`;
+  }).join('');
+
+  const values = RADAR_AXES.map((axis) => Math.max(0.02, Math.min(1, (avg[axis.key] || 0) / axis.cap)));
+  const polyPoints = values.map((v, i) => pointFor(i, v).join(',')).join(' ');
+  const dots = values.map((v, i) => {
+    const [x, y] = pointFor(i, v);
+    const axis = RADAR_AXES[i];
+    return `<circle cx="${x}" cy="${y}" r="4.5" class="radar-dot"><title>${axis.label}: ${(avg[axis.key] || 0).toFixed(axis.decimals)}</title></circle>`;
+  }).join('');
+
+  const labels = RADAR_AXES.map((axis, i) => {
+    const [x, y] = pointFor(i, 1.24);
+    const anchor = Math.abs(x - cx) < 6 ? 'middle' : (x > cx ? 'start' : 'end');
+    return `<text x="${x}" y="${y}" class="radar-label" text-anchor="${anchor}">${axis.icon} ${axis.label}</text>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <svg viewBox="0 0 320 320" class="radar-svg">
+      ${rings}
+      ${axesLines}
+      <polygon points="${polyPoints}" class="radar-shape" />
+      ${dots}
+      ${labels}
+    </svg>
+    <p class="radar-note">${avg.totalGames} jogo${avg.totalGames === 1 ? '' : 's'} disputado${avg.totalGames === 1 ? '' : 's'} esta época, em todas as competições.</p>
+  `;
+
+  legend.innerHTML = RADAR_AXES.map((axis) => `
+    <div class="perf-legend-row">
+      <span class="perf-legend-icon">${axis.icon}</span>
+      <span class="perf-legend-label">${axis.label}</span>
+      <span class="perf-legend-value">${(avg[axis.key] || 0).toFixed(axis.decimals)}</span>
+    </div>`).join('');
+}
 
 /* ---------- 9. Gravação automática (autosave) ---------- */
 let saveQueue = {};
@@ -791,16 +898,21 @@ const AWARD_LABELS = {
   cup_best_assist: 'Melhor Assistente da Taça',
   cup_best_defender: 'Melhor Defesa da Taça',
 };
+/* Prémios da Taça São Vicente usam o mesmo ícone-base do prémio equivalente
+   do Campeonato (para se perceber logo do que se trata), sem o empilhar
+   com um segundo emoji de troféu — a distinção visual passa a ser feita
+   pelo estilo do badge em si (fita dourada + moldura), ver renderBadges. */
 const AWARD_ICONS = {
   best_player: '👑',
   top_scorer: '⚽',
   best_defender: '🛡️',
   best_assist: '🎯',
   best_goalkeeper: '🧤',
-  cup_top_scorer: '🏆⚽',
-  cup_best_assist: '🏆🎯',
-  cup_best_defender: '🏆🛡️',
+  cup_top_scorer: '⚽',
+  cup_best_assist: '🎯',
+  cup_best_defender: '🛡️',
 };
+const CUP_AWARD_KEYS = new Set(['cup_top_scorer', 'cup_best_assist', 'cup_best_defender']);
 
 function fmtAwardDate(isoDate){
   if(!isoDate) return '';
@@ -815,14 +927,18 @@ function renderBadges(awards, targetId = 'badgesList'){
     box.innerHTML = '<p class="placeholder-text">Sem prémios ganhos ainda.</p>';
     return;
   }
-  box.innerHTML = awards.map((a) => `
-    <div class="badge-item">
-      <div class="badge-icon">${AWARD_ICONS[a.award_key] || '🏅'}</div>
+  box.innerHTML = awards.map((a) => {
+    const isCup = CUP_AWARD_KEYS.has(a.award_key);
+    return `
+    <div class="badge-item${isCup ? ' badge-item-cup' : ''}">
+      ${isCup ? '<span class="badge-cup-ribbon">🏆 Taça São Vicente</span>' : ''}
+      <div class="badge-icon${isCup ? ' badge-icon-cup' : ''}">${AWARD_ICONS[a.award_key] || '🏅'}</div>
       <div class="badge-info">
         <span class="badge-label">${AWARD_LABELS[a.award_key] || a.award_key}</span>
         <span class="badge-meta">${a.season_label} · ${fmtAwardDate(a.won_date)}</span>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 /* ---------- Aba Carreira: histórico ano a ano + títulos coletivos ----------
@@ -1020,13 +1136,22 @@ function fmtMoneyNegotiate(v){
   return '£' + Number(v || 0).toLocaleString('pt-PT');
 }
 
-/* Lê um número aproximado de um texto de salário tipo "£41.5K p/s" ou "£3.000 p/s". */
+/* Lê um número aproximado de um texto de salário tipo "£41.5K p/s" ou "£3.000 p/s".
+   Só se trata como casa decimal o que vem antes de um sufixo K/M — sem
+   sufixo, o texto é sempre um valor inteiro já por extenso (ex: "3.000" ou
+   "3 000" = três mil), e o "." ou espaço é separador de milhar, não vírgula
+   decimal. Antes disto, "£3.000 p/s" lia-se como "3" (quase zero), fazendo
+   esta dica de negociação mostrar salários muito abaixo do real. */
 function parseWageText(text){
-  const match = String(text || '').match(/[\d]+(?:[.,]\d+)?/);
-  if(!match) return 0;
-  const num = parseFloat(match[0].replace(',', '.'));
-  const isThousands = /K/i.test(text || '');
-  const value = isThousands ? num * 1000 : num;
+  const str = String(text || '');
+  const suffixMatch = str.match(/([\d]+(?:[.,]\d+)?)\s*(K|M)/i);
+  if(suffixMatch){
+    const num = parseFloat(suffixMatch[1].replace(',', '.'));
+    const mult = /M/i.test(suffixMatch[2]) ? 1_000_000 : 1_000;
+    return Number.isFinite(num) && num > 0 ? num * mult : 0;
+  }
+  const digitsOnly = str.replace(/[^\d]/g, '');
+  const value = digitsOnly ? parseInt(digitsOnly, 10) : 0;
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
@@ -1300,8 +1425,8 @@ if(playerId){
     ],
     roles_nopossession_json: [],
     season_stats_json: [
-      { competition: 'Não Competitivo', j:2, g:1, a:0, xg:0.2, pen:0, mdp:0, am:0, verm:0, media:'7.55' },
-      { competition: 'Geral (Clube)', j:0, g:0, a:0, xg:0.0, pen:0, mdp:0, am:0, verm:0, media:'-' },
+      { competition: 'Não Competitivo', j:2, g:1, a:0, xg:0.2, pen:0, mdp:0, am:0, verm:0, tk:3, dr:5, ps:62, pp:'81', media:'7.55' },
+      { competition: 'Geral (Clube)', j:0, g:0, a:0, xg:0.0, pen:0, mdp:0, am:0, verm:0, tk:0, dr:0, ps:0, pp:'-', media:'-' },
     ],
   };
   renderRoles();

@@ -30,18 +30,49 @@ const TIER_ACCEPT_RATIO = {
   'Muito Pobre': 0.40,
 };
 
-/* Extrai números de texto tipo "£95M - £113M" ou "£41.5K p/s" -> [95000000, 113000000] */
+/* Extrai números de texto tipo "£95M - £113M", "£1.2M" ou "£120.000"/"£120 000"
+   (número inteiro já formatado por toLocaleString('pt-PT'), sem sufixo) ->
+   valores em libras (ex: [95000000, 113000000] / [1200000] / [120000]).
+
+   IMPORTANTE: só se trata como CASA DECIMAL o que vem antes de um sufixo
+   M/K (ex: "1.2M" = 1,2 milhões). Um número SEM sufixo é sempre um valor
+   inteiro já por extenso, e o "." ou espaço que apareça nele é separador de
+   milhar, não vírgula decimal — nunca se deve fazer parseFloat direto a
+   isso. Antes disto, "£120.000" (cento e vinte mil) e "£120 000" (mesma
+   coisa, formatação com espaço) eram lidos como ~120 (tratando o separador
+   de milhar como ponto decimal ou partindo o número a meio no espaço),
+   fazendo o valor de referência de um jogador cair para uma fração do que
+   devia ser — ou, no sentido inverso, um valor de mercado escrito à mão em
+   milhões (ex: "£95M", jeito comum de pensar em futebol) ficava fora de
+   alcance de QUALQUER orçamento do jogo (que anda na casa dos milhares —
+   ver BASE_TRANSFER_BUDGET em routes/game.js), fazendo qualquer proposta
+   ser sempre recusada, seja qual for o valor oferecido. */
 function parseMoneyRange(text) {
-  const matches = [...String(text || '').matchAll(/([\d]+(?:[.,]\d+)?)\s*(M|K)?/gi)]
-    .map((m) => {
-      const num = parseFloat(m[1].replace(',', '.'));
-      if (Number.isNaN(num) || num <= 0) return null;
-      const suffix = (m[2] || '').toUpperCase();
-      const mult = suffix === 'K' ? 1_000 : suffix === 'M' ? 1_000_000 : 1;
-      return num * mult;
-    })
-    .filter((n) => n !== null);
-  return matches;
+  const raw = String(text || '');
+  const tokenRegex = /([\d][\d.,\s]*)\s*(M|K)?/gi;
+  const results = [];
+
+  for (const m of raw.matchAll(tokenRegex)) {
+    const numText = m[1].trim();
+    if (!numText) continue;
+    const suffix = (m[2] || '').toUpperCase();
+
+    let value;
+    if (suffix) {
+      // Com sufixo M/K: o que vier antes pode ter uma casa decimal (ex: "1,2M").
+      const cleaned = numText.replace(/\s/g, '').replace(',', '.');
+      value = parseFloat(cleaned);
+    } else {
+      // Sem sufixo: número inteiro já por extenso — remove tudo o que não for dígito.
+      const digitsOnly = numText.replace(/[^\d]/g, '');
+      value = digitsOnly ? parseInt(digitsOnly, 10) : NaN;
+    }
+
+    if (Number.isFinite(value) && value > 0) {
+      results.push(suffix === 'K' ? value * 1_000 : suffix === 'M' ? value * 1_000_000 : value);
+    }
+  }
+  return results;
 }
 
 /* Data de fim de contrato tem de se basear no calendário do JOGO, nunca na
@@ -106,10 +137,24 @@ function ageFromBirthDate(birthDate) {
    incluindo o mais rico. Como o valor de referência entra na razão que
    decide se uma proposta é aceite (offerRatio = offerAmount / referenceValue)
    e o offerAmount nunca pode passar do teu orçamento, praticamente nenhuma
-   proposta conseguia alguma vez atingir o acceptRatio necessário. */
+   proposta conseguia alguma vez atingir o acceptRatio necessário.
+
+   SEGURANÇA ADICIONAL: mesmo com o parseMoneyRange corrigido, o campo
+   market_value_text é texto editável à mão no perfil (ver contenteditable
+   em perfilJogador.html), por isso continua a ser possível escrever ali um
+   valor num registo completamente diferente do resto do jogo (ex: "£95M",
+   ao jeito do futebol real). Sem limite, isso tornava a proposta impossível
+   de aceitar para sempre, seja qual for o valor oferecido — dá-se por isso
+   um teto (MARKET_VALUE_CEILING) alinhado com o orçamento mais alto
+   possível no jogo, para nenhum jogador ficar "impossível" de comprar. */
+const MARKET_VALUE_CEILING = 2_500_000;
+
 function estimateMarketValue(player) {
   const parsed = parseMoneyRange(player.market_value_text);
-  if (parsed.length) return parsed.reduce((a, b) => a + b, 0) / parsed.length;
+  if (parsed.length) {
+    const avg = parsed.reduce((a, b) => a + b, 0) / parsed.length;
+    if (avg > 0) return Math.min(avg, MARKET_VALUE_CEILING);
+  }
 
   const ability = player.current_ability_stars ?? 2.5;
   const potential = player.potential_ability_stars ?? ability;

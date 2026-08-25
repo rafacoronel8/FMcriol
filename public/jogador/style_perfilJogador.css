@@ -278,11 +278,13 @@ body{
 .tab:hover:not(.active){color:var(--text-1);}
 
 /* ============ MAIN GRID ============ */
+.tab-panel{padding-top:22px;}
 .main-grid{
   display:grid;
   grid-template-columns:1.15fr 1fr 1fr 1fr;
-  gap:16px;
+  gap:18px;
   align-items:start;
+  margin-bottom:24px;
 }
 
 .card{
@@ -290,7 +292,9 @@ body{
   border:1px solid var(--line);
   border-radius:var(--radius-l);
   padding:18px;
+  transition:border-color .15s ease;
 }
+.card:hover{border-color:#39496a;}
 
 .card-title{
   font-size:13px;
@@ -508,7 +512,8 @@ body{
 .bottom-grid{
   display:grid;
   grid-template-columns:repeat(5, 1fr) 1.6fr 1fr;
-  gap:14px;
+  gap:16px;
+  margin-bottom:24px;
 }
 
 .mini-card{
@@ -516,7 +521,9 @@ body{
   border:1px solid var(--line);
   border-radius:var(--radius-l);
   padding:16px;
+  transition:border-color .15s ease;
 }
+.mini-card:hover{border-color:#39496a;}
 .mini-title{
   font-size:11px;
   font-weight:700;
@@ -625,10 +632,48 @@ body{
 .negotiate-result.ok{color:var(--green);}
 .negotiate-result.err{color:var(--red);}
 
+/* ============ DESEMPENHO (radar de médias por jogo) ============ */
+.performance-grid{
+  display:grid;
+  grid-template-columns:1.3fr 1fr;
+  gap:20px;
+  align-items:start;
+}
+.radar-intro{font-size:12.5px;color:var(--text-2);margin:-6px 0 14px;}
+.radar-wrap{display:flex;flex-direction:column;align-items:center;}
+.radar-svg{width:100%;max-width:420px;height:auto;display:block;}
+.radar-ring{fill:none;stroke:var(--line);stroke-width:1;}
+.radar-axis{stroke:var(--line);stroke-width:1;}
+.radar-shape{
+  fill:rgba(124,92,255,.28);
+  stroke:var(--accent);
+  stroke-width:2;
+  stroke-linejoin:round;
+}
+.radar-dot{fill:var(--accent-2);stroke:var(--bg-1);stroke-width:1.5;}
+.radar-label{font-size:10.5px;fill:var(--text-1);font-weight:600;}
+.radar-note{font-size:11.5px;color:var(--text-2);margin-top:10px;text-align:center;}
+
+.performance-legend-card{align-self:stretch;}
+.performance-legend{display:flex;flex-direction:column;gap:10px;}
+.perf-legend-row{
+  display:flex;align-items:center;gap:10px;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-m);
+  padding:10px 12px;
+}
+.perf-legend-icon{font-size:16px;width:24px;text-align:center;flex-shrink:0;}
+.perf-legend-label{flex:1;font-size:12.5px;color:var(--text-1);font-weight:600;}
+.perf-legend-value{font-size:14px;color:var(--text-0);font-weight:800;}
+
+@media (max-width:900px){
+  .performance-grid{grid-template-columns:1fr;}
+}
+
 /* ============ BADGES / PRÉMIOS ============ */
-.badges-card{margin-top:20px;}
+.badges-card{margin-top:4px;}
 .badges-list{display:flex;flex-wrap:wrap;gap:12px;}
 .badge-item{
+  position:relative;
   display:flex;align-items:center;gap:10px;
   background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-m);
   padding:10px 14px;min-width:220px;
@@ -641,6 +686,31 @@ body{
 .badge-info{display:flex;flex-direction:column;gap:2px;}
 .badge-label{font-size:13px;font-weight:700;color:var(--text-0);}
 .badge-meta{font-size:11px;color:var(--text-2);}
+
+/* ---------- Prémios individuais da Taça São Vicente ----------
+   Moldura dourada + fita a identificar a competição, para se distinguirem
+   à primeira vista dos prémios do Campeonato sem depender de emoji
+   empilhados (que nem sempre renderizam bem). */
+.badge-item-cup{
+  padding-top:20px;
+  background:linear-gradient(160deg, rgba(242,193,78,.14), var(--bg-2));
+  border:1px solid #6b5323;
+  box-shadow:0 0 0 1px rgba(242,193,78,.15) inset;
+}
+.badge-cup-ribbon{
+  position:absolute;top:-9px;left:12px;
+  background:linear-gradient(160deg, var(--gold), #a5751f);
+  color:#3a2c0e;
+  font-size:9.5px;font-weight:800;letter-spacing:.3px;
+  padding:3px 9px;border-radius:999px;
+  box-shadow:0 2px 6px rgba(0,0,0,.35);
+  white-space:nowrap;
+}
+.badge-icon-cup{
+  background:radial-gradient(circle at 35% 30%, #fff6da, var(--gold) 60%, #a5751f);
+  box-shadow:0 0 0 3px rgba(242,193,78,.25);
+}
+.badge-item-cup .badge-label{color:var(--gold);}
 
 /* ============ CARREIRA (histórico por época + títulos) ============ */
 .career-history-card{margin-bottom:20px;}

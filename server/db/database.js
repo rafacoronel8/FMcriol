@@ -809,6 +809,21 @@ for (const [colName, colDef] of FRIENDLY_STAT_COLUMNS) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_friendly_player_stats_competition ON friendly_player_stats(competition, player_id)');
 }
 
+/* Dribles e passes por jogo — migração segura à parte, tal como
+   yellow_cards/red_card acima (FRIENDLY_STAT_COLUMNS), para não obrigar a
+   reconstruir a tabela outra vez. Usados no radar de Desempenho do perfil
+   do jogador (dr/ps em season_stats_json — ver applySeasonStat abaixo). */
+const FRIENDLY_STAT_COLUMNS_V2 = [
+  ['dribbles', 'INTEGER DEFAULT 0'],
+  ['passes', 'INTEGER DEFAULT 0'],
+];
+const existingFriendlyStatColsV2 = db.prepare("PRAGMA table_info(friendly_player_stats)").all().map((c) => c.name);
+for (const [colName, colDef] of FRIENDLY_STAT_COLUMNS_V2) {
+  if (!existingFriendlyStatColsV2.includes(colName)) {
+    db.exec(`ALTER TABLE friendly_player_stats ADD COLUMN ${colName} ${colDef}`);
+  }
+}
+
 const COMPETITION_ROW_NAMES = {
   friendly: 'Amigáveis (Não Oficial)',
   league: 'Campeonato',
@@ -823,7 +838,7 @@ db.COMPETITION_ROW_NAMES = COMPETITION_ROW_NAMES;
    pela Taça (routes/league.js, routes/cup.js), incluindo jogos inteiramente
    entre equipas geridas pelo jogo, sem nenhum amigável por trás. */
 function applySeasonStat(playerId, competitionRowName, stats) {
-  const { goals = 0, assists = 0, yellow = 0, red = 0, tackles = 0, passPct = null, rating = null } = stats || {};
+  const { goals = 0, assists = 0, yellow = 0, red = 0, tackles = 0, dribbles = 0, passes = 0, passPct = null, rating = null } = stats || {};
   const player = db.prepare('SELECT season_stats_json FROM players WHERE id = ?').get(playerId);
   if (!player) return;
 
@@ -833,7 +848,7 @@ function applySeasonStat(playerId, competitionRowName, stats) {
 
   let row = rows.find((r) => r.competition === competitionRowName);
   if (!row) {
-    row = { competition: competitionRowName, j: 0, g: 0, a: 0, xg: 0, pen: 0, mdp: 0, am: 0, verm: 0, tk: 0, pp: '-', media: '-' };
+    row = { competition: competitionRowName, j: 0, g: 0, a: 0, xg: 0, pen: 0, mdp: 0, am: 0, verm: 0, tk: 0, dr: 0, ps: 0, pp: '-', media: '-' };
     rows.push(row);
   }
 
@@ -849,6 +864,8 @@ function applySeasonStat(playerId, competitionRowName, stats) {
   row.am = (Number(row.am) || 0) + yellow;
   row.verm = (Number(row.verm) || 0) + red;
   row.tk = (Number(row.tk) || 0) + tackles;
+  row.dr = (Number(row.dr) || 0) + dribbles;
+  row.ps = (Number(row.ps) || 0) + passes;
   if (rating != null) row.media = ((prevMediaTotal + rating) / row.j).toFixed(2);
   if (passPct != null) row.pp = ((prevPPTotal + passPct) / row.j).toFixed(1);
 

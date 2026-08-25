@@ -53,6 +53,31 @@ const ASSIST_WEIGHT = { DEF: 10, MED: 30, MO: 35, PL: 20, GR: 0 };
 const CARD_WEIGHT = { DEF: 30, MED: 30, MO: 20, PL: 15, GR: 5 };
 const TACKLE_BASE = { GR: 0, DEF: 3.2, MED: 2.4, MO: 1.1, PL: 0.6 };
 
+/* Dribles e passes por jogo — mesma lógica e comentário em
+   routes/competitionStats.js e routes/game.js, repetida aqui porque esta
+   rota também não partilha módulo com as outras duas (só as reações
+   pós-jogo passaram a ser partilhadas, ver routes/matchReactions.js). */
+const DRIBBLE_BASE = { GR: 0.1, DEF: 0.6, MED: 1.6, MO: 3.2, PL: 2.6 };
+const PASS_BASE = { GR: 16, DEF: 42, MED: 52, MO: 32, PL: 24 };
+
+function extractAttr(jsonText, name) {
+  let list;
+  try { list = JSON.parse(jsonText || '[]'); } catch { list = []; }
+  if (!Array.isArray(list)) return null;
+  const found = list.find(([n]) => n === name);
+  return found ? Number(found[1]) : null;
+}
+function playerDribbleFactor(player) {
+  const technique = extractAttr(player.technical_json, 'Técnica') ?? 10;
+  const pace = extractAttr(player.physical_json, 'Velocidade') ?? 10;
+  const accel = extractAttr(player.physical_json, 'Aceleração') ?? 10;
+  return Math.max(0.4, Math.min(2.5, (technique + pace + accel) / 3 / 10));
+}
+function playerPassFactor(player) {
+  const passing = extractAttr(player.technical_json, 'Passe') ?? extractAttr(player.goalkeeping_json, 'Passe') ?? 10;
+  return Math.max(0.4, Math.min(2.2, passing / 10));
+}
+
 function playerQualityFactor(player) {
   const fields = player.category === 'GR'
     ? ['goalkeeping_json', 'mental_json', 'physical_json']
@@ -199,28 +224,28 @@ function shiftTalkHappiness(text, delta) {
 /* Palestra de PRÉ-JOGO — o mesmo leque de opções serve para qualquer jogo,
    porque ainda não há resultado. */
 const TEAM_TALK_PRE = [
-  { key: 'calma', label: 'Calma e Confiança', description: 'Discurso tranquilo, focado em manter todos confiantes.', effect: { up: 0.5, down: 0.05 } },
-  { key: 'motivadora', label: 'Discurso Motivador', description: 'Palavras fortes para levantar o grupo — mais impacto, mas mais risco.', effect: { up: 0.65, down: 0.15 } },
-  { key: 'exigente', label: 'Exigir Mais', description: 'Pedes mais nível a todos — pode incomodar os mais sensíveis.', effect: { up: 0.35, down: 0.35 } },
-  { key: 'tatica', label: 'Foco Tático', description: 'Sem grandes emoções, só instruções — efeito reduzido dos dois lados.', effect: { up: 0.15, down: 0.05 } },
+  { key: 'calma', icon: '🧘', label: 'Calma e Confiança', description: 'Discurso tranquilo, focado em manter todos confiantes.', effect: { up: 0.5, down: 0.05 } },
+  { key: 'motivadora', icon: '🔥', label: 'Discurso Motivador', description: 'Palavras fortes para levantar o grupo — mais impacto, mas mais risco.', effect: { up: 0.65, down: 0.15 } },
+  { key: 'exigente', icon: '📢', label: 'Exigir Mais', description: 'Pedes mais nível a todos — pode incomodar os mais sensíveis.', effect: { up: 0.35, down: 0.35 } },
+  { key: 'tatica', icon: '📋', label: 'Foco Tático', description: 'Sem grandes emoções, só instruções — efeito reduzido dos dois lados.', effect: { up: 0.15, down: 0.05 } },
 ];
 
 /* Palestra de PÓS-JOGO — as opções mudam consoante o resultado. */
 const TEAM_TALK_POST = {
   win: [
-    { key: 'elogiar', label: 'Elogiar a Equipa', description: 'Reconheces o esforço de todos.', effect: { up: 0.6, down: 0.05 } },
-    { key: 'moderado', label: 'Parabéns Comedidos', description: 'Contente, mas sem exageros.', effect: { up: 0.35, down: 0.05 } },
-    { key: 'exigir_mais', label: 'Avisar Para Não Baixar o Nível', description: 'Festejas pouco e já pedes mais para o próximo jogo — alguns podem sentir-se pouco reconhecidos.', effect: { up: 0.25, down: 0.25 } },
+    { key: 'elogiar', icon: '🎉', label: 'Elogiar a Equipa', description: 'Reconheces o esforço de todos.', effect: { up: 0.6, down: 0.05 } },
+    { key: 'moderado', icon: '🙂', label: 'Parabéns Comedidos', description: 'Contente, mas sem exageros.', effect: { up: 0.35, down: 0.05 } },
+    { key: 'exigir_mais', icon: '⚠️', label: 'Avisar Para Não Baixar o Nível', description: 'Festejas pouco e já pedes mais para o próximo jogo — alguns podem sentir-se pouco reconhecidos.', effect: { up: 0.25, down: 0.25 } },
   ],
   draw: [
-    { key: 'compreensivo', label: 'Compreensão e Confiança', description: 'Mostras que confias no grupo apesar do empate.', effect: { up: 0.5, down: 0.1 } },
-    { key: 'motivar', label: 'Motivar Para o Próximo Jogo', description: 'Vira a página rapidamente.', effect: { up: 0.4, down: 0.1 } },
-    { key: 'criticar', label: 'Criticar a Falta de Ambição', description: 'Mostras descontentamento com o resultado.', effect: { up: 0.15, down: 0.4 } },
+    { key: 'compreensivo', icon: '🤝', label: 'Compreensão e Confiança', description: 'Mostras que confias no grupo apesar do empate.', effect: { up: 0.5, down: 0.1 } },
+    { key: 'motivar', icon: '🔄', label: 'Motivar Para o Próximo Jogo', description: 'Vira a página rapidamente.', effect: { up: 0.4, down: 0.1 } },
+    { key: 'criticar', icon: '😠', label: 'Criticar a Falta de Ambição', description: 'Mostras descontentamento com o resultado.', effect: { up: 0.15, down: 0.4 } },
   ],
   loss: [
-    { key: 'apoiar', label: 'Apoiar o Grupo', description: 'Não culpas ninguém, foca-te em recuperar juntos.', effect: { up: 0.45, down: 0.1 } },
-    { key: 'motivar', label: 'Focar na Recuperação', description: 'Discurso equilibrado, olhando já para o próximo jogo.', effect: { up: 0.3, down: 0.2 } },
-    { key: 'criticar', label: 'Criticar Duramente', description: 'Não escondes o descontentamento com a exibição — arriscado.', effect: { up: 0.1, down: 0.55 } },
+    { key: 'apoiar', icon: '🤗', label: 'Apoiar o Grupo', description: 'Não culpas ninguém, foca-te em recuperar juntos.', effect: { up: 0.45, down: 0.1 } },
+    { key: 'motivar', icon: '🔄', label: 'Focar na Recuperação', description: 'Discurso equilibrado, olhando já para o próximo jogo.', effect: { up: 0.3, down: 0.2 } },
+    { key: 'criticar', icon: '💢', label: 'Criticar Duramente', description: 'Não escondes o descontentamento com a exibição — arriscado.', effect: { up: 0.1, down: 0.55 } },
   ],
 };
 
@@ -235,24 +260,42 @@ function matchResultFor(homeScore, awayScore, isHome) {
 /* Aplica o efeito escolhido a todo o plantel do clube do utilizador — cada
    jogador tem uma hipótese independente de subir, descer, ou não mudar de
    nível de moral (happiness), tal como em applyQuestionEffect
-   (routes/morale.js). */
+   (routes/morale.js). Devolve também até 3 nomes de cada lado, só para dar
+   um exemplo concreto no resultado da palestra em vez de só um número. */
 function applyTeamTalkEffect(teamId, effect) {
-  const players = db.prepare('SELECT id, happiness FROM players WHERE team_id = ?').all(teamId);
+  const players = db.prepare('SELECT id, name, happiness FROM players WHERE team_id = ?').all(teamId);
   const update = db.prepare("UPDATE players SET happiness = ?, updated_at = datetime('now') WHERE id = ?");
   let up = 0; let down = 0;
+  const upNames = []; const downNames = [];
 
   players.forEach((p) => {
     const roll = Math.random();
     if (roll < effect.up) {
       update.run(shiftTalkHappiness(p.happiness, 1), p.id);
       up += 1;
+      if (upNames.length < 3) upNames.push(p.name);
     } else if (roll < effect.up + effect.down) {
       update.run(shiftTalkHappiness(p.happiness, -1), p.id);
       down += 1;
+      if (downNames.length < 3) downNames.push(p.name);
     }
   });
 
-  return { up, down, total: players.length };
+  return { up, down, total: players.length, upNames, downNames };
+}
+
+/* ---------- Estado atual do balneário (para a palestra saber o ponto de partida) ----------
+   Contagem simples pelos 3 níveis de moral existentes — dá ao treinador
+   contexto sobre se o grupo já anda contente ou se precisa mesmo de um
+   empurrão antes de escolher o tom da palestra. */
+function squadMoodBreakdown(teamId) {
+  const rows = db.prepare('SELECT happiness FROM players WHERE team_id = ?').all(teamId);
+  const counts = { Contente: 0, Descontente: 0, Insatisfeito: 0 };
+  rows.forEach((r) => {
+    const key = TALK_HAPPINESS_LADDER.includes(r.happiness) ? r.happiness : 'Contente';
+    counts[key] += 1;
+  });
+  return { total: rows.length, counts };
 }
 
 /* ---------- Monta o plantel de uma equipa para este jogo ao vivo ----------
@@ -582,9 +625,9 @@ function finalizeMatch(friendly, homeState, awayState, finalScore) {
 
   const insertStat = db.prepare(`
     INSERT INTO friendly_player_stats
-      (friendly_id, competition, team_id, player_id, player_name, position_tag, goals, assists, rating, yellow_cards, red_card, tackles, pass_pct)
+      (friendly_id, competition, team_id, player_id, player_name, position_tag, goals, assists, rating, yellow_cards, red_card, tackles, pass_pct, dribbles, passes)
     VALUES
-      (@friendly_id, @competition, @team_id, @player_id, @player_name, @position_tag, @goals, @assists, @rating, @yellow_cards, @red_card, @tackles, @pass_pct)
+      (@friendly_id, @competition, @team_id, @player_id, @player_name, @position_tag, @goals, @assists, @rating, @yellow_cards, @red_card, @tackles, @pass_pct, @dribbles, @passes)
   `);
 
   [
@@ -592,7 +635,7 @@ function finalizeMatch(friendly, homeState, awayState, finalScore) {
     { state: awayState, goalsFor: finalScore.away, goalsAgainst: finalScore.home },
   ].forEach(({ state, goalsFor, goalsAgainst }) => {
     const resultBonus = goalsFor > goalsAgainst ? 0.3 : goalsFor < goalsAgainst ? -0.2 : 0.1;
-    const roster = db.prepare('SELECT id, name, position_tag FROM players WHERE team_id = ?').all(state.team_id);
+    const roster = db.prepare('SELECT id, name, position_tag, technical_json, physical_json, goalkeeping_json FROM players WHERE team_id = ?').all(state.team_id);
     const rosterById = new Map(roster.map((p) => [p.id, p]));
 
     const everyone = new Map();
@@ -615,19 +658,21 @@ function finalizeMatch(friendly, homeState, awayState, finalScore) {
       const quality = p.quality || 1;
       const tackles = Math.max(0, Math.round((TACKLE_BASE[p.category] || 0) * quality + (Math.random() * 2 - 1)));
       const passPct = Math.max(40, Math.min(98, Math.round(62 + quality * 10 + (Math.random() * 16 - 8))));
+      const dribbles = Math.max(0, Math.round((DRIBBLE_BASE[p.category] || 1) * playerDribbleFactor(info) + (Math.random() * 2 - 1)));
+      const passes = Math.max(0, Math.round((PASS_BASE[p.category] || 20) * playerPassFactor(info) + (Math.random() * 10 - 5)));
 
       insertStat.run({
         friendly_id: friendly.id, competition, team_id: state.team_id, player_id: p.id,
         player_name: info.name, position_tag: info.position_tag || '',
         goals: p.goals, assists: p.assists, rating: Number(rating.toFixed(2)),
-        yellow_cards: yellowCount, red_card: redCard, tackles, pass_pct: passPct,
+        yellow_cards: yellowCount, red_card: redCard, tackles, pass_pct: passPct, dribbles, passes,
       });
 
       /* Reflete o jogo no perfil do jogador — linha certa consoante a
          competição (Amigáveis / Campeonato / Taça), ver db/database.js. */
       db.applySeasonStat(p.id, rowName, {
         goals: p.goals, assists: p.assists, yellow: yellowCount, red: redCard,
-        tackles, passPct, rating: Number(rating.toFixed(2)),
+        tackles, dribbles, passes, passPct, rating: Number(rating.toFixed(2)),
       });
     });
   });
@@ -1009,22 +1054,40 @@ function finishStaleLiveMatches(todayDateStr) {
    clube do utilizador) — assim o frontend nunca precisa de duplicar estes
    textos nem de adivinhar o resultado por conta própria. */
 router.get('/:friendlyId/team-talk-options', (req, res) => {
-  const friendly = db.prepare('SELECT * FROM club_friendlies WHERE id = ?').get(req.params.friendlyId);
+  const friendly = db.prepare(`
+    SELECT cf.*,
+           h.name AS home_name, h.shield_path AS home_shield, h.reputation_stars AS home_reputation,
+           a.name AS away_name, a.shield_path AS away_shield, a.reputation_stars AS away_reputation
+    FROM club_friendlies cf
+    JOIN teams h ON h.id = cf.home_team_id
+    JOIN teams a ON a.id = cf.away_team_id
+    WHERE cf.id = ?
+  `).get(req.params.friendlyId);
   if (!friendly) return res.status(404).json({ error: 'Jogo não encontrado' });
 
   const userTeam = db.prepare('SELECT id FROM teams WHERE is_user_controlled = 1').get();
   const isHomeUser = userTeam && friendly.home_team_id === userTeam.id;
 
-  const strip = (list) => list.map(({ key, label, description }) => ({ key, label, description }));
+  const strip = (list) => list.map(({ key, icon, label, description }) => ({ key, icon, label, description }));
   const post = friendly.status === 'played'
     ? strip(TEAM_TALK_POST[matchResultFor(friendly.home_score, friendly.away_score, isHomeUser)] || [])
     : [];
+
+  const myTeam = { name: isHomeUser ? friendly.home_name : friendly.away_name, shield: isHomeUser ? friendly.home_shield : friendly.away_shield, reputation: isHomeUser ? friendly.home_reputation : friendly.away_reputation };
+  const opponent = { name: isHomeUser ? friendly.away_name : friendly.home_name, shield: isHomeUser ? friendly.away_shield : friendly.home_shield, reputation: isHomeUser ? friendly.away_reputation : friendly.home_reputation };
+  const competitionLabel = friendly.is_cup ? 'Taça São Vicente' : (friendly.is_league ? 'Campeonato' : 'Amigável');
 
   res.json({
     pre: strip(TEAM_TALK_PRE),
     pre_talk_given: !!friendly.pre_talk_given,
     post,
     post_talk_given: !!friendly.post_talk_given,
+    match_date: friendly.match_date,
+    competition_label: competitionLabel,
+    is_home: isHomeUser,
+    my_team: myTeam,
+    opponent,
+    mood: userTeam ? squadMoodBreakdown(userTeam.id) : null,
   });
 });
 
