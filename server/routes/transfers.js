@@ -30,7 +30,6 @@ const TIER_ACCEPT_RATIO = {
   'Muito Pobre': 0.40,
 };
 
-<<<<<<< HEAD
 /* Extrai números de texto tipo "£95M - £113M", "£1.2M" ou "£120.000"/"£120 000"
    (número inteiro já formatado por toLocaleString('pt-PT'), sem sufixo) ->
    valores em libras (ex: [95000000, 113000000] / [1200000] / [120000]).
@@ -48,37 +47,6 @@ const TIER_ACCEPT_RATIO = {
    alcance de QUALQUER orçamento do jogo (que anda na casa dos milhares —
    ver BASE_TRANSFER_BUDGET em routes/game.js), fazendo qualquer proposta
    ser sempre recusada, seja qual for o valor oferecido. */
-=======
-/* ---------- Negociação de propostas recebidas ----------
-   Quando UM CLUBE ADVERSÁRIO propõe por um jogador teu (mensagem
-   'incoming_offer_pending'), em vez de só Aceitar/Recusar podes
-   contrapropor um valor mais alto — ver PUT /:id/counter mais abaixo.
-
-   BUYER_CEILING_RATIO é o equivalente, do lado do COMPRADOR, ao
-   TIER_ACCEPT_RATIO de cima (que é do lado do vendedor): até quanto,
-   acima do valor de referência do jogador, o clube comprador está
-   disposto a esticar-se para fechar o negócio quando lhe pedes mais
-   dinheiro. Clubes ricos/reputados aguentam contrapropostas bem acima
-   do valor de mercado; clubes pobres desistem depressa. */
-const BUYER_CEILING_RATIO = {
-  'Muito Rico': 1.35,
-  'Rico': 1.20,
-  'Medio': 1.05,
-  'Pobre': 0.90,
-  'Muito Pobre': 0.75,
-};
-
-/* Nunca mais do que isto de trocas de valores por proposta — ao fim
-   destas rondas o comprador aceita a última oferta que puser em cima da
-   mesa ou desiste, nunca fica a negociar para sempre. */
-const MAX_NEGOTIATION_ROUNDS = 3;
-
-/* Se pedires bem mais do que isto acima do teto do comprador, ele
-   sente-se insultado e desiste logo — nem tenta subir a oferta. */
-const INSULT_MULTIPLIER = 1.4;
-
-/* Extrai números de texto tipo "£95M - £113M" ou "£41.5K p/s" -> [95000000, 113000000] */
->>>>>>> 651b50da3bd3b1fbdb30acdbaaeb751c116f315c
 function parseMoneyRange(text) {
   const raw = String(text || '');
   const tokenRegex = /([\d][\d.,\s]*)\s*(M|K)?/gi;
