@@ -1177,7 +1177,11 @@ CREATE TABLE IF NOT EXISTS player_awards (
   team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
   award_key     TEXT NOT NULL CHECK (award_key IN (
                   'best_player','top_scorer','best_defender','best_assist','best_goalkeeper',
-                  'cup_top_scorer','cup_best_assist','cup_best_defender'
+                  'cup_top_scorer','cup_best_assist','cup_best_defender',
+                  'best_xi_gr',
+                  'best_xi_def_1','best_xi_def_2','best_xi_def_3','best_xi_def_4',
+                  'best_xi_med_1','best_xi_med_2','best_xi_med_3',
+                  'best_xi_ata_1','best_xi_ata_2','best_xi_ata_3'
                 )),
   season_label  TEXT NOT NULL,
   won_date      TEXT NOT NULL,
@@ -1197,7 +1201,7 @@ CREATE INDEX IF NOT EXISTS idx_player_awards_player ON player_awards(player_id);
      grande junto a "player_incidents_old" para a explicação completa do
      porquê de isto ter de ser atómico. */
   const schemaRow = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'player_awards'").get();
-  if (schemaRow && !schemaRow.sql.includes('cup_top_scorer')) {
+  if (schemaRow && (!schemaRow.sql.includes('cup_top_scorer') || !schemaRow.sql.includes('best_xi_gr'))) {
     db.transaction(() => {
       db.exec('DROP TABLE IF EXISTS player_awards_old');
       db.exec('ALTER TABLE player_awards RENAME TO player_awards_old');
@@ -1208,7 +1212,11 @@ CREATE INDEX IF NOT EXISTS idx_player_awards_player ON player_awards(player_id);
           team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
           award_key     TEXT NOT NULL CHECK (award_key IN (
                           'best_player','top_scorer','best_defender','best_assist','best_goalkeeper',
-                          'cup_top_scorer','cup_best_assist','cup_best_defender'
+                          'cup_top_scorer','cup_best_assist','cup_best_defender',
+                          'best_xi_gr',
+                          'best_xi_def_1','best_xi_def_2','best_xi_def_3','best_xi_def_4',
+                          'best_xi_med_1','best_xi_med_2','best_xi_med_3',
+                          'best_xi_ata_1','best_xi_ata_2','best_xi_ata_3'
                         )),
           season_label  TEXT NOT NULL,
           won_date      TEXT NOT NULL,

@@ -284,4 +284,3 @@ function runCupTick(nextDateStr) {
 }
 
 module.exports.runCupTick = runCupTick;
-module.exports.awardCupPrizeMoneyForFriendly = awardCupPrizeMoneyForFriendly;

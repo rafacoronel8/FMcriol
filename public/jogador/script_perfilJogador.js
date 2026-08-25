@@ -784,8 +784,22 @@ function fillFromPlayer(p){
   document.title = `${p.name} — FMcriol`;
 
   el('playerName').textContent = p.name || '';
-  const captainBadge = p.is_captain ? ' 🎖️ (Capitão)' : (p.is_vice_captain ? ' 🎖️ (Sub-capitão)' : '');
-  if (captainBadge) el('playerName').textContent += captainBadge;
+  const captainBadgeEl = el('captainBadge');
+  if(captainBadgeEl){
+    if(p.is_captain){
+      captainBadgeEl.textContent = 'C';
+      captainBadgeEl.title = 'Capitão';
+      captainBadgeEl.classList.remove('hidden', 'captain-badge-vice');
+    } else if(p.is_vice_captain){
+      captainBadgeEl.textContent = 'C';
+      captainBadgeEl.title = 'Sub-capitão';
+      captainBadgeEl.classList.remove('hidden');
+      captainBadgeEl.classList.add('captain-badge-vice');
+    } else {
+      captainBadgeEl.classList.add('hidden');
+      captainBadgeEl.classList.remove('captain-badge-vice');
+    }
+  }
   el('jerseyNumber').textContent = p.jersey_number || '00';
   el('positionTag').textContent = p.position_tag || '';
   el('nationCode').textContent = p.nationality_code || '';
@@ -899,6 +913,17 @@ const AWARD_LABELS = {
   cup_top_scorer: 'Melhor Marcador da Taça',
   cup_best_assist: 'Melhor Assistente da Taça',
   cup_best_defender: 'Melhor Defesa da Taça',
+  best_xi_gr: 'Onze do Ano · Guarda-Redes',
+  best_xi_def_1: 'Onze do Ano · Defesa',
+  best_xi_def_2: 'Onze do Ano · Defesa',
+  best_xi_def_3: 'Onze do Ano · Defesa',
+  best_xi_def_4: 'Onze do Ano · Defesa',
+  best_xi_med_1: 'Onze do Ano · Médio',
+  best_xi_med_2: 'Onze do Ano · Médio',
+  best_xi_med_3: 'Onze do Ano · Médio',
+  best_xi_ata_1: 'Onze do Ano · Avançado',
+  best_xi_ata_2: 'Onze do Ano · Avançado',
+  best_xi_ata_3: 'Onze do Ano · Avançado',
 };
 /* Prémios da Taça São Vicente usam o mesmo ícone-base do prémio equivalente
    do Campeonato (para se perceber logo do que se trata), sem o empilhar
@@ -913,6 +938,17 @@ const AWARD_ICONS = {
   cup_top_scorer: '⚽',
   cup_best_assist: '🎯',
   cup_best_defender: '🛡️',
+  best_xi_gr: '🧤',
+  best_xi_def_1: '🛡️',
+  best_xi_def_2: '🛡️',
+  best_xi_def_3: '🛡️',
+  best_xi_def_4: '🛡️',
+  best_xi_med_1: '🎽',
+  best_xi_med_2: '🎽',
+  best_xi_med_3: '🎽',
+  best_xi_ata_1: '⭐',
+  best_xi_ata_2: '⭐',
+  best_xi_ata_3: '⭐',
 };
 const CUP_AWARD_KEYS = new Set(['cup_top_scorer', 'cup_best_assist', 'cup_best_defender']);
 

@@ -118,6 +118,19 @@ body{
   border-radius:5px;
   outline:none;
 }
+.captain-badge{
+  width:22px;height:22px;border-radius:50%;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(160deg, var(--gold), #a5751f);
+  color:#3a2c0e;
+  font-size:12px;font-weight:800;line-height:1;
+  box-shadow:0 0 0 2px rgba(242,193,78,.25);
+}
+.captain-badge.captain-badge-vice{
+  background:linear-gradient(160deg, var(--text-1), var(--text-2));
+  color:var(--bg-1);
+  box-shadow:0 0 0 2px rgba(170,182,201,.2);
+}
 
 .tag-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .tag-row.secondary{color:var(--text-1);font-size:13px;}
@@ -680,17 +693,19 @@ body{
 }
 .badge-icon{
   width:38px;height:38px;border-radius:50%;flex-shrink:0;
-  background:linear-gradient(160deg, var(--gold), #a5751f);
-  display:flex;align-items:center;justify-content:center;font-size:18px;
+  background:radial-gradient(circle at 35% 30%, #fff6da, var(--gold) 60%, #a5751f);
+  box-shadow:0 0 0 3px rgba(242,193,78,.25);
+  display:flex;align-items:center;justify-content:center;
+  font-size:18px;line-height:1;text-align:center;
 }
 .badge-info{display:flex;flex-direction:column;gap:2px;}
 .badge-label{font-size:13px;font-weight:700;color:var(--text-0);}
 .badge-meta{font-size:11px;color:var(--text-2);}
 
 /* ---------- Prémios individuais da Taça São Vicente ----------
-   Moldura dourada + fita a identificar a competição, para se distinguirem
-   à primeira vista dos prémios do Campeonato sem depender de emoji
-   empilhados (que nem sempre renderizam bem). */
+   Fita a identificar a competição, para se distinguirem à primeira vista
+   dos prémios do Campeonato — o ícone em si usa o mesmo estilo dourado
+   circular de todos os outros prémios/troféus. */
 .badge-item-cup{
   padding-top:20px;
   background:linear-gradient(160deg, rgba(242,193,78,.14), var(--bg-2));
@@ -705,10 +720,6 @@ body{
   padding:3px 9px;border-radius:999px;
   box-shadow:0 2px 6px rgba(0,0,0,.35);
   white-space:nowrap;
-}
-.badge-icon-cup{
-  background:radial-gradient(circle at 35% 30%, #fff6da, var(--gold) 60%, #a5751f);
-  box-shadow:0 0 0 3px rgba(242,193,78,.25);
 }
 .badge-item-cup .badge-label{color:var(--gold);}
 
@@ -732,8 +743,10 @@ body{
 }
 .trophy-icon{
   width:38px;height:38px;border-radius:50%;flex-shrink:0;
-  background:linear-gradient(160deg, var(--accent), var(--accent-2));
-  display:flex;align-items:center;justify-content:center;font-size:18px;
+  background:radial-gradient(circle at 35% 30%, #fff6da, var(--gold) 60%, #a5751f);
+  box-shadow:0 0 0 3px rgba(242,193,78,.25);
+  display:flex;align-items:center;justify-content:center;
+  font-size:18px;line-height:1;text-align:center;
 }
 .trophy-info{display:flex;flex-direction:column;gap:2px;}
 .trophy-label{font-size:13px;font-weight:700;color:var(--text-0);}
