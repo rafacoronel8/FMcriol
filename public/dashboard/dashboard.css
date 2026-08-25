@@ -1094,6 +1094,9 @@ body{
   padding:10px 12px;
   font-size:14.5px;
   font-family:inherit;
+  text-align:center;
+  min-width:0;
+  flex:1;
 }
 .decision-modal-input:focus{border-color:var(--accent);outline:none;}
 .decision-modal-hint{font-size:11.5px;color:var(--text-2);margin:2px 0 0;}
@@ -1106,6 +1109,25 @@ body{
   padding:8px 10px;
 }
 .decision-modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;}
+
+/* Stepper +/- que ajusta o valor do campo em incrementos fixos (ex: contraproposta) */
+.decision-modal-stepper{display:flex;align-items:stretch;gap:8px;}
+.decision-modal-step-btn{
+  flex-shrink:0;
+  width:44px;
+  background:var(--bg-3);
+  border:1px solid var(--line);
+  color:var(--text-0);
+  border-radius:var(--radius-s);
+  font-size:18px;
+  font-weight:700;
+  font-family:inherit;
+  cursor:pointer;
+  transition:border-color .14s ease, background .14s ease;
+}
+.decision-modal-step-btn:hover{border-color:var(--accent);background:var(--bg-2);}
+.decision-modal-step-btn:active{transform:translateY(1px);}
+.decision-modal-stepper.hidden-steppers .decision-modal-step-btn{display:none;}
 .news-modal-body{
   font-size:14.5px;
   line-height:1.7;
@@ -1748,6 +1770,52 @@ body{
 @media (max-width:600px){
   .ceremony-modal{padding:28px 18px 26px;}
   .ceremony-dot{width:48px;height:48px;font-size:18px;}
+}
+
+/* ============ GALA DO 11 DA ÉPOCA ============ */
+.gala-modal{max-width:460px;}
+.gala-pitch-board{
+  max-width:340px;
+  margin:6px auto 18px;
+}
+.gala-caption{
+  min-height:16px;
+  transition:opacity .2s ease;
+}
+.gala-skip-btn{margin:0 auto;display:block;}
+.gala-slot{
+  position:absolute;
+  width:19%;
+  transform:translate(-50%, -50%) scale(.5);
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:2px;
+  opacity:0;
+  transition:opacity .35s ease, transform .35s cubic-bezier(.2,1.4,.4,1);
+}
+.gala-slot.gala-slot-in{
+  opacity:1;
+  transform:translate(-50%, -50%) scale(1);
+}
+.gala-slot .slot-circle{
+  width:52px;height:52px;
+  border:2px solid var(--gold);
+  background:var(--bg-2);
+}
+.gala-slot-name{
+  font-size:9.5px;
+  font-weight:700;
+  color:#fff;
+  text-shadow:0 1px 2px rgba(0,0,0,.7);
+  max-width:78px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.gala-slot-team{
+  font-size:8px;
+  color:var(--gold);
+  max-width:78px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 
 /* ==========================================================

@@ -334,6 +334,7 @@ router.get('/', (req, res) => {
            p.club_status, p.fitness_status, p.fitness_note, p.current_ability_stars, p.form_text,
            p.market_value_text, p.wage_text, p.personality, p.stood_down_until, p.stood_down_reason,
            p.focus_role, p.loan_from_team_id, p.loan_return_date, p.birth_date, p.season_stats_json,
+           p.is_captain, p.is_vice_captain,
            t.name AS team_name,
            loanFrom.name AS loan_from_team_name
     FROM players p
@@ -524,4 +525,66 @@ router.delete('/:id', (req, res) => {
   res.status(204).end();
 });
 
+/* ---------- Capitão e sub-capitão ----------
+   Reavaliado no início de cada época para TODAS as equipas (ver
+   runSeasonRolloverIfDue em routes/league.js, chamado com force=true) e
+   também quando um clube é reivindicado pela primeira vez (ver POST
+   /api/game/claim-team, force=false — só mexe se faltar capitão ou
+   sub-capitão), para nenhum plantel ficar sem braçadeira definida.
+
+   Escolhe sempre o jogador com mais Liderança do plantel como capitão e o
+   segundo melhor como sub-capitão — mas só é um BOM capitão se a Liderança
+   for mesmo alta (ver describeCaptaincyAnnouncement e db.getCaptainFactor
+   em db/database.js, que é o que dá o efeito real dentro de campo). Com
+   pouca liderança disponível no plantel inteiro, o capitão escolhido
+   acaba por ser uma escolha fraca — e até prejudicial — mas não deixa de
+   ser escolhido: toda a equipa precisa de um capitão. */
+function leadershipValue(player) {
+  let mental = [];
+  try { mental = JSON.parse(player.mental_json || '[]'); } catch { mental = []; }
+  const entry = mental.find(([name]) => name === 'Liderança');
+  return entry ? Number(entry[1]) || 0 : 0;
+}
+
+function assignCaptaincy(teamId, { force = false } = {}) {
+  const squad = db.prepare('SELECT id, name, mental_json, is_captain, is_vice_captain FROM players WHERE team_id = ?').all(teamId);
+  if (!squad.length) return null;
+
+  if (!force) {
+    const currentCaptain = squad.find((p) => p.is_captain);
+    const currentVice = squad.find((p) => p.is_vice_captain);
+    if (currentCaptain && currentVice) return null; // já está tudo definido, não mexe
+  }
+
+  const ranked = squad
+    .map((p) => ({ ...p, leadership: leadershipValue(p) }))
+    .sort((a, b) => b.leadership - a.leadership);
+  const captain = ranked[0];
+  const vice = ranked[1] || null;
+
+  db.prepare('UPDATE players SET is_captain = 0, is_vice_captain = 0 WHERE team_id = ?').run(teamId);
+  db.prepare('UPDATE players SET is_captain = 1 WHERE id = ?').run(captain.id);
+  if (vice) db.prepare('UPDATE players SET is_vice_captain = 1 WHERE id = ?').run(vice.id);
+
+  return { captain, vice };
+}
+
+/* Texto usado tanto pela reivindicação de clube (game.js) como pelo
+   início de época (league.js) — mantém a mesma mensagem nos dois sítios. */
+function describeCaptaincyAnnouncement(captain, vice, seasonLabel) {
+  const quality = captain.leadership >= 14
+    ? 'um verdadeiro líder dentro e fora de campo'
+    : captain.leadership >= 10
+      ? 'uma escolha equilibrada, sem ser propriamente um líder nato'
+      : 'a opção possível — a Liderança não é o ponto forte deste plantel, e isso pode pesar nos jogos mais difíceis';
+  const viceText = vice ? ` ${vice.name} fica como sub-capitão.` : '';
+  return {
+    title: `🎖️ ${captain.name} é o capitão da equipa`,
+    body: `${captain.name} veste a braçadeira de capitão${seasonLabel ? ` para a época ${seasonLabel}` : ''} — ${quality}.${viceText}`,
+  };
+}
+
 module.exports = router;
+module.exports.assignCaptaincy = assignCaptaincy;
+module.exports.describeCaptaincyAnnouncement = describeCaptaincyAnnouncement;
+module.exports.leadershipValue = leadershipValue;

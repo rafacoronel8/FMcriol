@@ -10,6 +10,7 @@ const league = require('./league');
 const cup = require('./cup');
 const transfers = require('./transfers');
 const morale = require('./morale');
+const players = require('./players');
 const { buildPostMatchReactions } = require('./matchReactions');
 
 const router = express.Router();
@@ -152,6 +153,7 @@ router.post('/reset', (req, res) => {
     db.prepare('DELETE FROM player_incidents').run();
     db.prepare('DELETE FROM manager_questions').run();
     db.prepare("UPDATE players SET stood_down_until = NULL, stood_down_reason = NULL").run();
+    db.prepare("UPDATE players SET is_captain = 0, is_vice_captain = 0, announced_milestones_json = '[]'").run();
     db.prepare("UPDATE game_state SET manager_name = NULL, welcome_sent = 0, current_season_start = '2026-08-01' WHERE id = 1").run();
 
     /* Palmarés, prémios individuais e o histórico de carreira (estatísticas
@@ -281,6 +283,19 @@ router.post('/claim-team', (req, res) => {
         body: `Bem-vindo ao ${team.name}. ${pick(WELCOME_FLAVOUR)}`,
       });
       db.prepare('UPDATE game_state SET welcome_sent = 1 WHERE id = 1').run();
+    }
+
+    /* Capitão e sub-capitão — só mexe se este plantel ainda não tiver
+       nenhum dos dois definidos (ver assignCaptaincy em routes/players.js);
+       claim-team corre sempre que o dashboard carrega, não faz sentido
+       reavaliar a cada vez. */
+    const capResult = players.assignCaptaincy(team_id);
+    if (capResult && capResult.captain) {
+      const { title, body } = players.describeCaptaincyAnnouncement(capResult.captain, capResult.vice);
+      db.prepare(`
+        INSERT INTO messages (team_id, type, title, body, player_id)
+        VALUES (@team_id, 'captain_announced', @title, @body, @player_id)
+      `).run({ team_id: team.id, player_id: capResult.captain.id, title, body });
     }
   });
   claim();
@@ -1212,8 +1227,10 @@ function runFriendliesTick(nextDateStr) {
    nomes/reputações das equipas feitos por JOIN (ver query acima e a rota
    /simulate-now mais abaixo). */
 function simulateSingleFriendly(f) {
-  const homeGoals = simulateFriendlyGoals(f.home_reputation + 0.25, f.away_reputation);
-  const awayGoals = simulateFriendlyGoals(f.away_reputation, f.home_reputation + 0.25);
+  const homeCapFactor = db.getCaptainFactor(f.home_team_id);
+  const awayCapFactor = db.getCaptainFactor(f.away_team_id);
+  const homeGoals = simulateFriendlyGoals(f.home_reputation + homeCapFactor + 0.25, f.away_reputation + awayCapFactor);
+  const awayGoals = simulateFriendlyGoals(f.away_reputation + awayCapFactor, f.home_reputation + homeCapFactor + 0.25);
 
   db.prepare(`
     UPDATE club_friendlies SET status = 'played', home_score = ?, away_score = ?, resolved_at = datetime('now')

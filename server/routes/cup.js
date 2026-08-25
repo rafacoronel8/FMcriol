@@ -209,6 +209,12 @@ function teamHasPatrao(teamId) {
   return Boolean(db.prepare("SELECT 1 FROM players WHERE team_id = ? AND focus_role = 'Patrão' LIMIT 1").get(teamId));
 }
 
+/* ---------- Prémios em dinheiro da Taça São Vicente ----------
+   A lógica em si vive em db/database.js (db.awardCupPrizeMoney) porque
+   também é chamada de dentro de db.syncCupFixtureFromFriendly — o sítio
+   único por onde passam TODOS os jogos do utilizador na Taça, sejam
+   simulados (routes/game.js) ou assistidos ao vivo (routes/liveMatch.js).
+   Pôr o prémio só aqui deixaria de fora quem visse o jogo ao vivo. */
 function runCupTick(nextDateStr) {
   const due = db.prepare(`
     SELECT cf.*,
@@ -240,8 +246,12 @@ function runCupTick(nextDateStr) {
 
     const homeDefBonus = teamHasPatrao(f.home_team_id) ? 0.3 : 0;
     const awayDefBonus = teamHasPatrao(f.away_team_id) ? 0.3 : 0;
-    const homeGoals = simulateCupGoals(f.home_reputation + 0.15, f.away_reputation + awayDefBonus);
-    const awayGoals = simulateCupGoals(f.away_reputation, f.home_reputation + 0.15 + homeDefBonus);
+    const homeCapFactor = db.getCaptainFactor(f.home_team_id);
+    const awayCapFactor = db.getCaptainFactor(f.away_team_id);
+    const homeRep = f.home_reputation + homeCapFactor;
+    const awayRep = f.away_reputation + awayCapFactor;
+    const homeGoals = simulateCupGoals(homeRep + 0.15, awayRep + awayDefBonus);
+    const awayGoals = simulateCupGoals(awayRep, homeRep + 0.15 + homeDefBonus);
 
     let winnerId;
     let decidedByPenalties = 0;
@@ -262,6 +272,8 @@ function runCupTick(nextDateStr) {
     /* Mesma ideia do Campeonato — ver routes/competitionStats.js. */
     simulateCompetitionMatchStats('cup', f.home_team_id, f.away_team_id, homeGoals, awayGoals);
 
+    db.awardCupPrizeMoney({ winner_team_id: winnerId, round_name: f.round_name, is_bye: 0 });
+
     results.push({
       round: f.round, home_team: f.home_name, away_team: f.away_name,
       home_score: homeGoals, away_score: awayGoals, decided_by_penalties: decidedByPenalties,
@@ -272,3 +284,4 @@ function runCupTick(nextDateStr) {
 }
 
 module.exports.runCupTick = runCupTick;
+module.exports.awardCupPrizeMoneyForFriendly = awardCupPrizeMoneyForFriendly;

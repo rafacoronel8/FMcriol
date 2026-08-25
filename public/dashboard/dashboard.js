@@ -697,7 +697,7 @@ async function loadMessages(notify = false){
     // por ler), abre a cerimónia de prémios em vez de esperar que o
     // utilizador vá procurar a mensagem na caixa de entrada.
     const rolloverMsg = messages.find((m) => m.type === 'season_rollover' && !m.is_read);
-    if(rolloverMsg) maybeOpenAwardsCeremony(rolloverMsg.id);
+    if(rolloverMsg) handleSeasonRolloverPopups(rolloverMsg.id);
   }catch(err){
     // mantém o estado anterior se a caixa de entrada não carregar
   }
@@ -740,6 +740,7 @@ const MESSAGE_ICONS = {
   season_rollover: '📅',
   trophy_won: '🏆',
   award_won: '🏅',
+  transfer_budget_bonus: '💰',
   transfer_meeting: '🗣️',
   loan_agreed: '🔄',
   loan_returned: '↩️',
@@ -1048,7 +1049,9 @@ async function respondToOffer(offerId, accept, actionsBox){
    Usado sempre que é preciso pedir um valor ao treinador antes de continuar
    uma ação — contrapropostas, dias de afastamento, preço de lista de
    transferências, etc. — com um painel próprio da interface em vez do
-   prompt() nativo do browser. Devolve uma Promise que resolve com o texto
+   prompt() nativo do browser. Quando `step` é passado, mostra também os
+   botões +/- que ajustam o campo nesse incremento fixo (ex: contraproposta
+   em saltos de £2.000). Devolve uma Promise que resolve com o texto
    introduzido, ou null se o treinador cancelar (Cancelar, X, clique fora,
    ou tecla Esc). */
 function openDecisionModal({
@@ -1061,6 +1064,8 @@ function openDecisionModal({
   confirmLabel = 'OK',
   cancelLabel = 'Cancelar',
   inputMode = '',
+  step = null,
+  min = 0,
 } = {}){
   return new Promise((resolve) => {
     const overlay = el('decisionModalOverlay');
@@ -1071,6 +1076,9 @@ function openDecisionModal({
     const confirmBtn = el('decisionModalConfirm');
     const cancelBtn = el('decisionModalCancel');
     const closeBtn = el('decisionModalClose');
+    const stepperEl = el('decisionModalStepper');
+    const stepDownBtn = el('decisionModalStepDown');
+    const stepUpBtn = el('decisionModalStepUp');
 
     el('decisionModalTitle').textContent = title;
     el('decisionModalMessage').textContent = message;
@@ -1085,9 +1093,18 @@ function openDecisionModal({
     errorEl.classList.add('hidden');
     confirmBtn.textContent = confirmLabel;
     cancelBtn.textContent = cancelLabel;
+    stepperEl.classList.toggle('hidden-steppers', !step);
 
     overlay.classList.remove('hidden');
     setTimeout(() => { input.focus(); input.select(); }, 20);
+
+    function adjust(delta){
+      const current = Number(String(input.value).replace(/[^\d.,-]/g, '').replace(',', '.')) || 0;
+      const next = Math.max(min, current + delta);
+      input.value = String(Math.round(next));
+    }
+    function onStepUp(){ adjust(step); }
+    function onStepDown(){ adjust(-step); }
 
     function cleanup(){
       overlay.classList.add('hidden');
@@ -1096,6 +1113,8 @@ function openDecisionModal({
       closeBtn.removeEventListener('click', onCancel);
       overlay.removeEventListener('click', onOverlayClick);
       input.removeEventListener('keydown', onKeydown);
+      stepUpBtn.removeEventListener('click', onStepUp);
+      stepDownBtn.removeEventListener('click', onStepDown);
     }
     function onConfirm(){
       const value = input.value;
@@ -1119,6 +1138,10 @@ function openDecisionModal({
     closeBtn.addEventListener('click', onCancel);
     overlay.addEventListener('click', onOverlayClick);
     input.addEventListener('keydown', onKeydown);
+    if(step){
+      stepUpBtn.addEventListener('click', onStepUp);
+      stepDownBtn.addEventListener('click', onStepDown);
+    }
   });
 }
 
@@ -1133,6 +1156,8 @@ async function counterOffer(offerId, actionsBox, currentAmount){
     defaultValue: suggested ? String(suggested) : '',
     inputMode: 'decimal',
     confirmLabel: 'Enviar Contraproposta',
+    step: 2000,
+    min: Number(currentAmount) || 0,
   });
   if(amountText === null) return; // cancelou
 
@@ -2057,24 +2082,47 @@ el('tacaDrawBtn').addEventListener('click', async () => {
   }
 });
 
-/* ---------- Cerimónia de Prémios de Fim de Época ---------- */
+/* ---------- Cerimónia de Prémios de Fim de Época + Gala do 11 ---------- */
 let ceremonyShownForMsgId = null;
+let galaShownForMsgId = null;
+let pendingGalaData = null;
 
-async function maybeOpenAwardsCeremony(rolloverMsgId){
-  if(ceremonyShownForMsgId === rolloverMsgId) return; // já mostrada nesta sessão
-  ceremonyShownForMsgId = rolloverMsgId;
+async function handleSeasonRolloverPopups(rolloverMsgId){
+  if(ceremonyShownForMsgId === rolloverMsgId && galaShownForMsgId === rolloverMsgId) return; // já mostrado nesta sessão
 
+  let awardsData = null;
+  let galaData = null;
   try{
     const res = await fetch(`/api/league/awards-ceremony/${teamId}`);
-    if(!res.ok) throw new Error();
-    const data = await res.json();
-    if(data.status !== 'ready' || !data.awards.length) return;
+    if(res.ok){
+      const d = await res.json();
+      if(d.status === 'ready' && d.awards.length) awardsData = d;
+    }
+  }catch(err){ /* segue sem a cerimónia, o utilizador continua a ver os prémios na caixa de entrada */ }
 
-    openAwardsCeremony(data);
-    fetch(`/api/transfers/messages/${rolloverMsgId}/read`, { method: 'PUT' }).then(() => loadMessages());
-  }catch(err){
-    // se falhar, o utilizador continua a ver os prémios normalmente na caixa de entrada
+  try{
+    const res = await fetch(`/api/league/season-gala/${teamId}`);
+    if(res.ok){
+      const d = await res.json();
+      if(d.status === 'ready' && d.lineup.length) galaData = d;
+    }
+  }catch(err){ /* sem gala não há problema, é só um extra visual */ }
+
+  if(!awardsData && !galaData) return;
+
+  ceremonyShownForMsgId = rolloverMsgId;
+  galaShownForMsgId = rolloverMsgId;
+
+  if(awardsData){
+    // A Gala só abre depois de a cerimónia de prémios ser fechada (ver
+    // closeCeremonyAndMaybeOpenGala) — não faz sentido as duas ao mesmo tempo.
+    pendingGalaData = galaData;
+    openAwardsCeremony(awardsData);
+  }else if(galaData){
+    openSeasonGala(galaData);
   }
+
+  fetch(`/api/transfers/messages/${rolloverMsgId}/read`, { method: 'PUT' }).then(() => loadMessages());
 }
 
 function openAwardsCeremony(data){
@@ -2110,9 +2158,93 @@ function revealCeremonyAward(awards, index){
   el('ceremonyReveal').classList.remove('hidden');
 }
 
-el('ceremonyClose').addEventListener('click', () => el('ceremonyOverlay').classList.add('hidden'));
+function closeCeremonyAndMaybeOpenGala(){
+  el('ceremonyOverlay').classList.add('hidden');
+  if(pendingGalaData){
+    const data = pendingGalaData;
+    pendingGalaData = null;
+    openSeasonGala(data);
+  }
+}
+
+el('ceremonyClose').addEventListener('click', closeCeremonyAndMaybeOpenGala);
 el('ceremonyOverlay').addEventListener('click', (e) => {
-  if(e.target.id === 'ceremonyOverlay') el('ceremonyOverlay').classList.add('hidden');
+  if(e.target.id === 'ceremonyOverlay') closeCeremonyAndMaybeOpenGala();
+});
+
+/* ---------- Gala do 11 da Época ----------
+   Anima a entrada de cada jogador do "11 do Ano" (ver GET
+   /api/league/season-gala/:teamId) um a um no relvado, na posição certa
+   de uma formação 4-3-3 fixa — reaproveita exatamente as mesmas
+   coordenadas x/y usadas na Tática (ver FORMATIONS mais abaixo neste
+   ficheiro) para o visual bater certo com o resto do jogo. */
+const GALA_REVEAL_DELAY_MS = 1100;
+let galaRevealTimer = null;
+let galaRevealTimeouts = [];
+
+function galaSlotPositions(){
+  // FORMATIONS só é definida mais abaixo neste ficheiro, mas por essa
+  // altura o script já correu por completo — esta função só é chamada em
+  // resposta a eventos (nunca durante o carregamento inicial do ficheiro).
+  return (typeof FORMATIONS !== 'undefined' && FORMATIONS['4-3-3']) || [
+    { x: 50, y: 92 }, { x: 82, y: 74 }, { x: 62, y: 78 }, { x: 38, y: 78 }, { x: 18, y: 74 },
+    { x: 50, y: 58 }, { x: 30, y: 50 }, { x: 70, y: 50 },
+    { x: 80, y: 26 }, { x: 50, y: 16 }, { x: 20, y: 26 },
+  ];
+}
+
+function openSeasonGala(data){
+  clearTimeout(galaRevealTimer);
+  galaRevealTimeouts.forEach((t) => clearTimeout(t));
+  galaRevealTimeouts = [];
+
+  el('galaTitle').textContent = `O 11 do Ano — Época ${data.season_label}`;
+  el('galaCaption').textContent = 'A preparar a entrada dos jogadores…';
+
+  const positions = galaSlotPositions();
+  const slots = el('galaPitchSlots');
+  slots.innerHTML = data.lineup.map((p, i) => {
+    const pos = positions[i] || { x: 50, y: 50 };
+    return `
+      <div class="gala-slot" id="galaSlot-${i}" style="left:${pos.x}%;top:${pos.y}%;">
+        <div class="slot-avatar-wrap"><div class="slot-circle">${p.player_photo ? `<img src="${p.player_photo}" alt="">` : '🧑'}</div></div>
+        <div class="gala-slot-name">${p.player_name}</div>
+        <div class="gala-slot-team">${p.team_name || ''}</div>
+      </div>`;
+  }).join('');
+
+  el('galaOverlay').classList.remove('hidden');
+  galaRevealPlayers(data.lineup);
+}
+
+function galaRevealPlayers(lineup){
+  lineup.forEach((p, i) => {
+    const t = setTimeout(() => {
+      const slotEl = el(`galaSlot-${i}`);
+      if(slotEl) slotEl.classList.add('gala-slot-in');
+      el('galaCaption').textContent = i === lineup.length - 1
+        ? 'O 11 do Ano está completo!'
+        : `A entrar em campo: ${p.player_name} (${p.team_name || 'Sem clube'})`;
+    }, i * GALA_REVEAL_DELAY_MS);
+    galaRevealTimeouts.push(t);
+  });
+}
+
+function galaSkipToEnd(){
+  galaRevealTimeouts.forEach((t) => clearTimeout(t));
+  galaRevealTimeouts = [];
+  document.querySelectorAll('#galaPitchSlots .gala-slot').forEach((s) => s.classList.add('gala-slot-in'));
+  el('galaCaption').textContent = 'O 11 do Ano está completo!';
+}
+
+el('galaSkip').addEventListener('click', galaSkipToEnd);
+el('galaClose').addEventListener('click', () => {
+  el('galaOverlay').classList.add('hidden');
+  galaRevealTimeouts.forEach((t) => clearTimeout(t));
+  galaRevealTimeouts = [];
+});
+el('galaOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'galaOverlay') el('galaClose').click();
 });
 
 /* ---------- Mercado: jornal de notícias com todas as movimentações ---------- */

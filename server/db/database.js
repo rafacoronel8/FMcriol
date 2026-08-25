@@ -155,6 +155,19 @@ const PLAYER_COLUMNS = [
   ['stood_down_until', 'TEXT'],
   ['stood_down_reason', 'TEXT'],
 
+  /* ---------- Capitania ----------
+     Reavaliada no início de cada época (routes/league.js:runSeasonRolloverIfDue)
+     e sempre que um plantel fica sem capitão/sub-capitão definido (ver
+     routes/players.js:assignCaptaincy) — quem tem mais Liderança (mental_json)
+     do plantel é o capitão, o segundo é o sub-capitão. Só pode haver um de
+     cada por equipa; ver db.getCaptainFactor acima para o efeito no relvado. */
+  ['is_captain', 'INTEGER DEFAULT 0'],
+  ['is_vice_captain', 'INTEGER DEFAULT 0'],
+  // Marcos (jogos/golos pelo clube) já anunciados na caixa de entrada, para
+  // não repetir a mesma notícia todos os dias depois de o marco ser
+  // atingido — ver routes/morale.js.
+  ['announced_milestones_json', "TEXT DEFAULT '[]'"],
+
   /* ---------- Valores iniciais ("de fábrica") de cada jogador ----------
      Tudo o que o TREINO e os AMIGÁVEIS podem alterar durante a carreira
      (atributos, condição física, forma, disciplina, estatísticas da época)
@@ -1018,6 +1031,80 @@ db.syncLeagueFixtureFromFriendly = syncLeagueFixtureFromFriendly;
    desempate aleatório, ligeiramente influenciado pela reputação de cada
    equipa, e a marcação fica com decided_by_penalties = 1 para a interface
    poder mostrar "(gp)" junto ao resultado. */
+/* ---------- Prémios em dinheiro da Taça São Vicente ----------
+   Cada vitória (ou apuramento por desempate) que faça uma equipa avançar
+   de ronda vale £50.000, somados sempre ao saldo da equipa — geridas pelo
+   jogo ou não, para as contas do jogo se manterem coerentes. Nunca para um
+   "bye" (aí não houve jogo nenhum para ganhar). Sagrar-se CAMPEÃO (vencer
+   a Final) vale mais £100.000, à parte do prémio de vitória dessa própria
+   ronda — o troféu vale a dobrar de uma vitória "normal". Só o clube do
+   utilizador recebe mensagem na caixa de entrada; as outras 14 equipas só
+   veem o saldo mudar (não têm caixa de entrada — ver routes/morale.js).
+
+   Vive aqui (em vez de routes/cup.js) porque também é chamada de dentro de
+   syncCupFixtureFromFriendly, logo abaixo — o único sítio por onde passam
+   TODOS os jogos do utilizador na Taça, sejam simulados
+   (routes/game.js:simulateSingleFriendly) ou assistidos ao vivo
+   (routes/liveMatch.js). Se estivesse só em routes/cup.js:runCupTick (que
+   só trata jogos entre equipas geridas pelo jogo), o utilizador nunca
+   receberia prémio nenhum pelos SEUS próprios jogos da Taça. */
+const CUP_ROUND_ADVANCE_PRIZE = 50000;
+const CUP_CHAMPION_BONUS_PRIZE = 100000;
+
+function awardCupPrizeMoney(fixture) {
+  if (!fixture || !fixture.winner_team_id || fixture.is_bye) return;
+
+  const grantPrize = (teamId, amount, type, title, body) => {
+    db.prepare("UPDATE teams SET balance = balance + ?, updated_at = datetime('now') WHERE id = ?").run(amount, teamId);
+    const team = db.prepare('SELECT is_user_controlled FROM teams WHERE id = ?').get(teamId);
+    if (team && team.is_user_controlled) {
+      db.prepare('INSERT INTO messages (team_id, type, title, body) VALUES (?, ?, ?, ?)').run(teamId, type, title, body);
+    }
+  };
+
+  const winnerTeam = db.prepare('SELECT name FROM teams WHERE id = ?').get(fixture.winner_team_id);
+  const winnerName = winnerTeam ? winnerTeam.name : 'A equipa';
+  const prizeFmt = `£${CUP_ROUND_ADVANCE_PRIZE.toLocaleString('pt-PT')}`;
+  grantPrize(
+    fixture.winner_team_id, CUP_ROUND_ADVANCE_PRIZE, 'cup_prize_money',
+    `💰 Prémio da Taça: ${prizeFmt}`,
+    `O ${winnerName} apurou-se para a ronda seguinte da Taça São Vicente e recebeu ${prizeFmt} em prémios.`,
+  );
+
+  if (fixture.round_name === 'Final') {
+    const bonusFmt = `£${CUP_CHAMPION_BONUS_PRIZE.toLocaleString('pt-PT')}`;
+    grantPrize(
+      fixture.winner_team_id, CUP_CHAMPION_BONUS_PRIZE, 'cup_champion_prize',
+      `🏆 Prémio de Campeão: ${bonusFmt}`,
+      `O ${winnerName} conquistou a Taça São Vicente e recebeu mais ${bonusFmt} em prémios pelo título.`,
+    );
+  }
+}
+db.awardCupPrizeMoney = awardCupPrizeMoney;
+
+/* ---------- Efeito do capitão na simulação de jogos ----------
+   Um capitão com Liderança alta dá um pequeno empurrão extra à equipa
+   (como se fosse mais um pouco de reputação); um capitão mal escolhido
+   (liderança baixa — normalmente porque o plantel não tinha ninguém com
+   jeito para isso, ver routes/players.js:assignCaptaincy) tem o efeito
+   inverso. Não decide um jogo sozinho, mas garante que a escolha do
+   capitão pesa mesmo no relvado, não só na caixa de entrada. Usado pelo
+   Campeonato e pela Taça (jogos entre equipas geridas pelo jogo) e pelos
+   jogos do próprio utilizador (ver simulateFriendlyGoals em
+   routes/game.js) — o mesmo cálculo para todas as competições. */
+function getCaptainFactor(teamId) {
+  const captain = db.prepare("SELECT mental_json FROM players WHERE team_id = ? AND is_captain = 1").get(teamId);
+  if (!captain) return 0;
+  let mental = [];
+  try { mental = JSON.parse(captain.mental_json || '[]'); } catch { mental = []; }
+  const entry = mental.find(([name]) => name === 'Liderança');
+  const leadership = entry ? Number(entry[1]) || 0 : 10;
+  // Liderança vai de 1 a 20; 10 é neutro. O máximo dá +0.25 de reputação
+  // efetiva, o mínimo dá -0.225 — pequeno, mas soma ao longo da época.
+  return (leadership - 10) / 40;
+}
+db.getCaptainFactor = getCaptainFactor;
+
 function syncCupFixtureFromFriendly(friendlyId, homeScore, awayScore) {
   const fixture = db.prepare('SELECT * FROM cup_fixtures WHERE friendly_id = ?').get(friendlyId);
   if (!fixture) return;
@@ -1041,6 +1128,8 @@ function syncCupFixtureFromFriendly(friendlyId, homeScore, awayScore) {
       winner_team_id = ?, decided_by_penalties = ?
     WHERE id = ?
   `).run(homeScore, awayScore, winnerId, decidedByPenalties, fixture.id);
+
+  awardCupPrizeMoney({ winner_team_id: winnerId, round_name: fixture.round_name, is_bye: fixture.is_bye });
 }
 db.syncCupFixtureFromFriendly = syncCupFixtureFromFriendly;
 

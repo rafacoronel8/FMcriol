@@ -56,7 +56,7 @@ router.get('/:id', (req, res) => {
   const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(req.params.id);
   if (!team) return res.status(404).json({ error: 'Equipa não encontrada' });
 
-  const players = db.prepare('SELECT id, name, photo_path, jersey_number, position_tag FROM players WHERE team_id = ? ORDER BY name ASC').all(req.params.id);
+  const players = db.prepare('SELECT id, name, photo_path, jersey_number, position_tag, is_captain, is_vice_captain FROM players WHERE team_id = ? ORDER BY name ASC').all(req.params.id);
   const trophies = db.prepare('SELECT * FROM trophies WHERE team_id = ? ORDER BY won_date DESC').all(req.params.id);
   res.json({ ...team, players, player_count: players.length, trophies });
 });

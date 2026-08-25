@@ -30,6 +30,19 @@ const TIER_ACCEPT_RATIO = {
   'Muito Pobre': 0.40,
 };
 
+/* Até quanto acima do valor de mercado do jogador (estimateMarketValue) um
+   comprador está disposto a ir consoante o seu tier financeiro — clubes
+   ricos pagam prémios acima do valor de referência, clubes pobres ficam
+   abaixo dele. Usado em buyerCeiling(), sempre limitado depois pelo
+   orçamento de transferências real do clube. */
+const BUYER_CEILING_RATIO = {
+  'Muito Rico': 1.35,
+  'Rico': 1.15,
+  'Medio': 1.00,
+  'Pobre': 0.80,
+  'Muito Pobre': 0.60,
+};
+
 /* Extrai números de texto tipo "£95M - £113M", "£1.2M" ou "£120.000"/"£120 000"
    (número inteiro já formatado por toLocaleString('pt-PT'), sem sufixo) ->
    valores em libras (ex: [95000000, 113000000] / [1200000] / [120000]).
@@ -148,6 +161,16 @@ function ageFromBirthDate(birthDate) {
    um teto (MARKET_VALUE_CEILING) alinhado com o orçamento mais alto
    possível no jogo, para nenhum jogador ficar "impossível" de comprar. */
 const MARKET_VALUE_CEILING = 2_500_000;
+
+/* Quanto acima do teto do comprador (buyerCeiling) uma contraproposta pode
+   pedir antes de ser considerada um insulto — acima disto o comprador
+   desiste logo, em vez de tentar subir a oferta. */
+const INSULT_MULTIPLIER = 1.6;
+
+/* Número máximo de rondas de contraproposta permitidas numa negociação —
+   ao chegar aqui, a oferta em cima da mesa passa a ser a "palavra final"
+   do comprador (só resta Aceitar ou Recusar). */
+const MAX_NEGOTIATION_ROUNDS = 3;
 
 function estimateMarketValue(player) {
   const parsed = parseMoneyRange(player.market_value_text);

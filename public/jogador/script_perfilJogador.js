@@ -784,6 +784,8 @@ function fillFromPlayer(p){
   document.title = `${p.name} — FMcriol`;
 
   el('playerName').textContent = p.name || '';
+  const captainBadge = p.is_captain ? ' 🎖️ (Capitão)' : (p.is_vice_captain ? ' 🎖️ (Sub-capitão)' : '');
+  if (captainBadge) el('playerName').textContent += captainBadge;
   el('jerseyNumber').textContent = p.jersey_number || '00';
   el('positionTag').textContent = p.position_tag || '';
   el('nationCode').textContent = p.nationality_code || '';

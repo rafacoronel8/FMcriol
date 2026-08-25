@@ -79,10 +79,11 @@ function fill(team){
       const row = document.createElement('div');
       row.className = 'player-row';
       const avatar = p.photo_path ? `<img src="${p.photo_path}" alt="">` : '🧑';
+      const badge = p.is_captain ? ' <span title="Capitão">🎖️</span>' : (p.is_vice_captain ? ' <span title="Sub-capitão" style="opacity:.6">🎖️</span>' : '');
       row.innerHTML = `
         <div class="player-avatar">${avatar}</div>
         <div class="player-name-wrap">
-          <div class="player-name">${p.name}</div>
+          <div class="player-name">${p.name}${badge}</div>
           <div class="player-position">${p.position_tag || 'Posição não definida'}</div>
         </div>`;
       row.addEventListener('click', () => window.location.href = `/jogador/perfilJogador.html?id=${p.id}`);

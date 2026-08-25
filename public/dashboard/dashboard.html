@@ -557,7 +557,11 @@
     <p class="decision-modal-message" id="decisionModalMessage"></p>
     <div class="decision-modal-field">
       <label class="decision-modal-label hidden" id="decisionModalLabel" for="decisionModalInput"></label>
-      <input type="text" id="decisionModalInput" class="decision-modal-input" autocomplete="off">
+      <div class="decision-modal-stepper" id="decisionModalStepper">
+        <button type="button" class="decision-modal-step-btn" id="decisionModalStepDown" aria-label="Diminuir">−</button>
+        <input type="text" id="decisionModalInput" class="decision-modal-input" autocomplete="off">
+        <button type="button" class="decision-modal-step-btn" id="decisionModalStepUp" aria-label="Aumentar">+</button>
+      </div>
       <p class="decision-modal-hint hidden" id="decisionModalHint"></p>
     </div>
     <p class="decision-modal-error hidden" id="decisionModalError"></p>
@@ -599,6 +603,23 @@
         <div class="ceremony-reveal-team" id="ceremonyRevealTeam"></div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ===== Gala do 11 da Época ===== -->
+<div id="galaOverlay" class="ceremony-overlay gala-overlay hidden">
+  <div class="ceremony-modal gala-modal">
+    <button class="news-modal-close" id="galaClose" aria-label="Fechar">×</button>
+    <div class="ceremony-kicker">GALA DE FIM DE ÉPOCA</div>
+    <h2 class="ceremony-title" id="galaTitle">O 11 do Ano</h2>
+    <p class="ceremony-hint" id="galaCaption">A preparar a entrada dos jogadores…</p>
+
+    <div class="gala-pitch-board pitch-board">
+      <div class="pitch-lines"></div>
+      <div class="pitch-slots" id="galaPitchSlots"><!-- gerado via JS --></div>
+    </div>
+
+    <button class="msg-btn msg-btn-neutral gala-skip-btn" id="galaSkip">Mostrar tudo</button>
   </div>
 </div>
 

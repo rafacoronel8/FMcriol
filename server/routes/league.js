@@ -14,6 +14,7 @@
 const express = require('express');
 const db = require('../db/database');
 const { simulateCompetitionMatchStats, getCompetitionLeaders } = require('./competitionStats');
+const players = require('./players');
 
 const router = express.Router();
 
@@ -241,6 +242,59 @@ function assignSeasonAwards(teamIds, seasonLabel, wonDate) {
   }
 }
 
+/* ---------- "11 do Ano" — Gala de fim de época ----------
+   Escolhido a partir das mesmas estatísticas combinadas de Campeonato +
+   Taça já usadas acima para os prémios individuais (mínimo de 5 jogos),
+   mas classificando os jogadores por posição (cópia deliberada de
+   classifyPositionCode — ver routes/competitionStats.js, mesma lógica,
+   mantida separada de propósito) para preencher uma formação 4-3-3 fixa:
+   1 guarda-redes, 4 defesas, 3 médios, 3 atacantes (extremos + ponta de
+   lança juntos) — os de melhor nota média da época em cada grupo, de
+   QUALQUER equipa da divisão, não só do clube do utilizador. Fica
+   guardado em player_awards como qualquer outro prémio (best_xi_gr,
+   best_xi_def_1..4, best_xi_med_1..3, best_xi_ata_1..3), para a Gala (ver
+   GET /season-gala/:teamId) poder ler os prémios da época tal como a
+   cerimónia de prémios individuais já faz. */
+function classifyForBestXI(code) {
+  const c = String(code || '').split('/')[0].trim().toUpperCase();
+  if (c === 'GR') return 'GR';
+  if (['PL', 'AD', 'AE', 'ED', 'EE'].includes(c)) return 'ATA';
+  if (['MCO', 'MOD', 'MOE'].includes(c)) return 'ATA';
+  if (c.startsWith('M')) return 'MED';
+  return 'DEF';
+}
+const BEST_XI_SLOTS = { GR: 1, DEF: 4, MED: 3, ATA: 3 };
+
+function assignBestXI(teamIds, seasonLabel, wonDate) {
+  if (!teamIds.length) return;
+  const placeholders = teamIds.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT fps.player_id, fps.team_id, p.position_code,
+      AVG(fps.rating) AS avg_rating, COUNT(*) AS games
+    FROM friendly_player_stats fps
+    JOIN players p ON p.id = fps.player_id
+    WHERE fps.competition IN ('league','cup') AND fps.player_id IS NOT NULL AND fps.team_id IN (${placeholders})
+    GROUP BY fps.player_id
+    HAVING games >= 5
+  `).all(...teamIds);
+  if (!rows.length) return;
+
+  const insertAward = db.prepare(`
+    INSERT INTO player_awards (player_id, team_id, award_key, season_label, won_date)
+    VALUES (@player_id, @team_id, @award_key, @season_label, @won_date)
+  `);
+
+  Object.entries(BEST_XI_SLOTS).forEach(([group, slots]) => {
+    const pool = rows
+      .filter((r) => classifyForBestXI(r.position_code) === group)
+      .sort((a, b) => b.avg_rating - a.avg_rating);
+    pool.slice(0, slots).forEach((r, i) => {
+      const key = slots === 1 ? `best_xi_${group.toLowerCase()}` : `best_xi_${group.toLowerCase()}_${i + 1}`;
+      insertAward.run({ player_id: r.player_id, team_id: r.team_id, award_key: key, season_label: seasonLabel, won_date: wonDate });
+    });
+  });
+}
+
 /* ---------- Crédito de título coletivo aos jogadores do plantel ----------
    Chamado sempre que um troféu (Campeonato ou Taça) é atribuído a uma
    equipa em runSeasonRolloverIfDue — regista em player_trophies, para
@@ -306,6 +360,7 @@ function runSeasonRolloverIfDue(nextDateStr) {
     }
 
     assignSeasonAwards(teams.map((t) => t.id), seasonLabel, nextDateStr);
+    assignBestXI(teams.map((t) => t.id), seasonLabel, nextDateStr);
   });
 
   /* ---------- Arquiva o histórico de carreira ANTES de limpar a época ----------
@@ -365,6 +420,23 @@ function runSeasonRolloverIfDue(nextDateStr) {
   db.prepare('DELETE FROM cup_fixtures').run();
   db.prepare('UPDATE game_state SET current_season_start = ? WHERE id = 1').run(rolloverDate);
   regenerateSeasonFixtures(rolloverDate);
+
+  /* ---------- Capitão e sub-capitão da nova época ----------
+     Reavaliados para TODAS as equipas (mesmo as geridas pelo jogo, para o
+     efeito em db.getCaptainFactor e os perfis dos jogadores mostrarem
+     sempre a braçadeira certa) — ver assignCaptaincy em routes/players.js.
+     Só o clube do utilizador recebe mensagem na caixa de entrada. */
+  const allTeamsForCaptaincy = db.prepare('SELECT id, is_user_controlled FROM teams').all();
+  allTeamsForCaptaincy.forEach((t) => {
+    const result = players.assignCaptaincy(t.id, { force: true });
+    if (t.is_user_controlled && result && result.captain) {
+      const { title, body } = players.describeCaptaincyAnnouncement(result.captain, result.vice, seasonLabelFor(rolloverDate));
+      db.prepare(`
+        INSERT INTO messages (team_id, type, title, body, player_id)
+        VALUES (@team_id, 'captain_announced', @title, @body, @player_id)
+      `).run({ team_id: t.id, player_id: result.captain.id, title, body });
+    }
+  });
 
   /* Notifica o treinador — uma mensagem por cada troféu/prémio que o SEU
      clube (ou um jogador dele) tenha ganho, além do aviso geral de que a
@@ -461,8 +533,12 @@ function runLeagueTick(nextDateStr) {
 
     const homeDefBonus = teamHasPatrao(f.home_team_id) ? 0.3 : 0;
     const awayDefBonus = teamHasPatrao(f.away_team_id) ? 0.3 : 0;
-    const homeGoals = simulateLeagueGoals(f.home_reputation + 0.15, f.away_reputation + awayDefBonus);
-    const awayGoals = simulateLeagueGoals(f.away_reputation, f.home_reputation + 0.15 + homeDefBonus);
+    const homeCapFactor = db.getCaptainFactor(f.home_team_id);
+    const awayCapFactor = db.getCaptainFactor(f.away_team_id);
+    const homeRep = f.home_reputation + homeCapFactor;
+    const awayRep = f.away_reputation + awayCapFactor;
+    const homeGoals = simulateLeagueGoals(homeRep + 0.15, awayRep + awayDefBonus);
+    const awayGoals = simulateLeagueGoals(awayRep, homeRep + 0.15 + homeDefBonus);
 
     db.prepare("UPDATE league_fixtures SET status = 'played', home_score = ?, away_score = ? WHERE id = ?")
       .run(homeGoals, awayGoals, f.id);
@@ -605,6 +681,58 @@ router.get('/awards-ceremony/:teamId', (req, res) => {
     season_label: latest.season_label,
     won_date: latest.won_date,
     awards,
+  });
+});
+
+/* ---------- GET /api/league/season-gala/:teamId — "11 do Ano" para a Gala ----------
+   Mesmo espírito da cerimónia de prémios (award-ceremony, acima): lê a
+   época mais recente com prémios atribuídos para a divisão deste clube, e
+   devolve os 11 jogadores (best_xi_*) já pela ORDEM em que devem "entrar
+   em campo" na animação do frontend — guarda-redes primeiro, depois
+   defesas, médios e por fim os atacantes — com o formation slot (x/y) que
+   lhes corresponde na formação 4-3-3 fixa usada pela Gala (ver
+   dashboard.js, reaproveita as mesmas coordenadas da tática). Devolve
+   status 'none' se a divisão ainda não teve nenhuma época terminada. */
+const BEST_XI_ORDER = [
+  'best_xi_gr',
+  'best_xi_def_1', 'best_xi_def_2', 'best_xi_def_3', 'best_xi_def_4',
+  'best_xi_med_1', 'best_xi_med_2', 'best_xi_med_3',
+  'best_xi_ata_1', 'best_xi_ata_2', 'best_xi_ata_3',
+];
+
+router.get('/season-gala/:teamId', (req, res) => {
+  const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(req.params.teamId);
+  if (!team) return res.status(404).json({ error: 'Equipa não encontrada' });
+
+  const divisionTeamIds = db.prepare('SELECT id FROM teams WHERE division = ?').all(team.division).map((t) => t.id);
+  if (!divisionTeamIds.length) return res.json({ status: 'none' });
+  const placeholders = divisionTeamIds.map(() => '?').join(',');
+
+  const latest = db.prepare(`
+    SELECT season_label, won_date FROM player_awards
+    WHERE team_id IN (${placeholders}) AND award_key LIKE 'best_xi_%'
+    ORDER BY won_date DESC, id DESC LIMIT 1
+  `).get(...divisionTeamIds);
+  if (!latest) return res.json({ status: 'none' });
+
+  const rows = db.prepare(`
+    SELECT pa.award_key, pa.player_id, p.name AS player_name, p.photo_path AS player_photo,
+           t.id AS team_id, t.name AS team_name, t.shield_path AS team_shield
+    FROM player_awards pa
+    JOIN players p ON p.id = pa.player_id
+    LEFT JOIN teams t ON t.id = pa.team_id
+    WHERE pa.season_label = ? AND pa.won_date = ? AND pa.award_key LIKE 'best_xi_%'
+  `).all(latest.season_label, latest.won_date);
+
+  const byKey = new Map(rows.map((r) => [r.award_key, r]));
+  const lineup = BEST_XI_ORDER.filter((key) => byKey.has(key)).map((key) => byKey.get(key));
+
+  res.json({
+    status: lineup.length ? 'ready' : 'none',
+    season_label: latest.season_label,
+    won_date: latest.won_date,
+    formation: '4-3-3',
+    lineup,
   });
 });
 
