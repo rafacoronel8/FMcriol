@@ -279,6 +279,15 @@ CREATE TABLE IF NOT EXISTS contract_offers (
 CREATE INDEX IF NOT EXISTS idx_contract_offers_team ON contract_offers(team_id);
 `);
 
+/* ---------- Migração segura: negociação de propostas ----------
+   negotiation_round -> quantas vezes já houve troca de valores nesta
+                         proposta (a tua contraproposta conta como uma
+                         ronda); ver PUT /api/transfers/:id/counter em
+                         routes/transfers.js. Começa em 0 (proposta
+                         original, ainda sem nenhuma contraproposta tua). */
+const transferOfferCols = db.prepare("PRAGMA table_info(transfer_offers)").all().map((c) => c.name);
+if (!transferOfferCols.includes('negotiation_round')) db.exec('ALTER TABLE transfer_offers ADD COLUMN negotiation_round INTEGER NOT NULL DEFAULT 0');
+
 /* ---------- Calendário do jogo: uma única linha com a data atual ---------- */
 db.exec(`
 CREATE TABLE IF NOT EXISTS game_state (

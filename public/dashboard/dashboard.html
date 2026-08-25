@@ -548,6 +548,26 @@
   </div>
 </div>
 
+<!-- ===== Painel genérico de decisão (substitui os prompts nativos do browser:
+     contrapropostas, afastar jogador, colocar na lista de transferências, etc.) ===== -->
+<div id="decisionModalOverlay" class="news-modal-overlay hidden" style="z-index:280;">
+  <div class="news-modal decision-modal">
+    <button class="news-modal-close" id="decisionModalClose" aria-label="Fechar">×</button>
+    <div class="card-title no-margin" id="decisionModalTitle"></div>
+    <p class="decision-modal-message" id="decisionModalMessage"></p>
+    <div class="decision-modal-field">
+      <label class="decision-modal-label hidden" id="decisionModalLabel" for="decisionModalInput"></label>
+      <input type="text" id="decisionModalInput" class="decision-modal-input" autocomplete="off">
+      <p class="decision-modal-hint hidden" id="decisionModalHint"></p>
+    </div>
+    <p class="decision-modal-error hidden" id="decisionModalError"></p>
+    <div class="decision-modal-actions">
+      <button class="msg-btn msg-btn-neutral" id="decisionModalCancel">Cancelar</button>
+      <button class="msg-btn msg-btn-accept" id="decisionModalConfirm">OK</button>
+    </div>
+  </div>
+</div>
+
 <div id="newsModalOverlay" class="news-modal-overlay hidden">
   <div class="news-modal">
     <button class="news-modal-close" id="newsModalClose" aria-label="Fechar">×</button>
@@ -584,15 +604,23 @@
 
 <!-- ===== Palestra de Balneário (pré-jogo / pós-jogo) ===== -->
 <div id="teamTalkOverlay" class="news-modal-overlay hidden">
-  <div class="news-modal team-talk-modal">
+  <div class="news-modal team-talk-modal" id="teamTalkModal">
     <button class="news-modal-close" id="teamTalkClose" aria-label="Fechar">×</button>
-    <div class="news-modal-kicker" id="teamTalkKicker">PRÉ-JOGO</div>
-    <h2 class="news-modal-headline" id="teamTalkHeadline"></h2>
+
+    <div class="team-talk-top">
+      <div class="team-talk-icon" id="teamTalkIcon">🎙️</div>
+      <div class="team-talk-top-text">
+        <div class="team-talk-kicker" id="teamTalkKicker">PRÉ-JOGO</div>
+        <h2 class="news-modal-headline team-talk-headline" id="teamTalkHeadline"></h2>
+      </div>
+    </div>
 
     <div class="team-talk-lineup hidden" id="teamTalkLineup">
-      <div class="team-talk-lineup-title">Onze Inicial</div>
+      <div class="team-talk-lineup-head">
+        <span class="team-talk-lineup-title">👕 Onze Inicial</span>
+        <button class="btn-mini" id="teamTalkEditLineupBtn">Editar Escalação</button>
+      </div>
       <div class="team-talk-lineup-names" id="teamTalkLineupNames"></div>
-      <button class="btn-mini" id="teamTalkEditLineupBtn">Editar Escalação</button>
     </div>
 
     <p class="team-talk-prompt" id="teamTalkPrompt">Escolhe o tom da tua palestra:</p>
@@ -602,8 +630,8 @@
 
     <div class="team-talk-buttons">
       <button class="btn-advance small" id="teamTalkConfirmBtn" disabled>Começar Jogo</button>
-      <button class="btn-advance small hidden" id="teamTalkContinueBtn">Entrar em Campo ▶</button>
-      <button class="btn-advance small hidden" id="teamTalkDoneBtn">Fechar</button>
+      <button class="btn-advance small ghost hidden" id="teamTalkContinueBtn">Entrar em Campo ▶</button>
+      <button class="btn-advance small ghost hidden" id="teamTalkDoneBtn">Fechar</button>
     </div>
   </div>
 </div>
