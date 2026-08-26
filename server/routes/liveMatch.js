@@ -7,7 +7,7 @@
    ========================================================== */
 const express = require('express');
 const db = require('../db/database');
-const { buildPostMatchReactions } = require('./matchReactions');
+const { buildPostMatchReactions } = require('./matchreactions');
 
 const router = express.Router();
 
