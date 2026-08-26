@@ -205,18 +205,33 @@ function simulateCompetitionMatchStats(competition, homeTeamId, awayTeamId, home
 
     const resultBonus = goalsFor > goalsAgainst ? 0.3 : goalsFor < goalsAgainst ? -0.2 : 0.1;
 
+    /* Nota (0-10) de cada jogador. Golos/assistências pesam sempre mais no
+       ataque (é a natureza do jogo), mas guarda-redes e defesas raramente
+       marcam ou assistem — sem mais nada a puxar a nota para cima, ficam
+       sempre abaixo de médios/avançados por muito bem que joguem. Por
+       isso o trabalho puramente defensivo passa também a valer pontos
+       próprios: clean sheet (mais peso para GR/DEF, quase nulo à frente)
+       e o volume de cortes de cada jogo (já calculado abaixo, mas nunca
+       tinha entrado no cálculo da nota — ficava só na estatística). */
+    const CLEAN_SHEET_BONUS = { GR: 0.9, DEF: 0.6, MED: 0.25, MO: 0.05, PL: 0 };
+    const CONCEDED_PENALTY = { GR: -0.4, DEF: -0.25, MED: -0.1, MO: 0, PL: 0 };
+    const TACKLE_RATING_WEIGHT = { GR: 0, DEF: 0.12, MED: 0.07, MO: 0.02, PL: 0.01 };
+
     lineup.forEach((player) => {
       const { goals, assists, yellow, red } = tally.get(player.id);
-      let rating = 6.0 + resultBonus + (Math.random() * 0.6 - 0.3) + goals * 0.8 + assists * 0.4;
-      if (player.category === 'GR') rating += goalsAgainst === 0 ? 0.5 : (goalsAgainst >= 3 ? -0.4 : 0);
-      rating -= yellow * 0.1;
-      if (red) rating -= 1.0;
-      rating = Math.max(4.0, Math.min(10.0, rating));
 
       const tackles = Math.max(0, Math.round((TACKLE_BASE[player.category] || 0) * player.quality + (Math.random() * 2 - 1)));
       const passPct = Math.max(40, Math.min(98, Math.round(62 + player.quality * 10 + (Math.random() * 16 - 8))));
       const dribbles = Math.max(0, Math.round((DRIBBLE_BASE[player.category] || 1) * playerDribbleFactor(player) + (Math.random() * 2 - 1)));
       const passes = Math.max(0, Math.round((PASS_BASE[player.category] || 20) * playerPassFactor(player) + (Math.random() * 10 - 5)));
+
+      let rating = 6.0 + resultBonus + (Math.random() * 0.6 - 0.3) + goals * 0.8 + assists * 0.4;
+      if (goalsAgainst === 0) rating += CLEAN_SHEET_BONUS[player.category] || 0;
+      else if (goalsAgainst >= 3) rating += CONCEDED_PENALTY[player.category] || 0;
+      rating += tackles * (TACKLE_RATING_WEIGHT[player.category] || 0);
+      rating -= yellow * 0.1;
+      if (red) rating -= 1.0;
+      rating = Math.max(4.0, Math.min(10.0, rating));
 
       insertStat.run({
         competition, team_id: teamId, player_id: player.id,

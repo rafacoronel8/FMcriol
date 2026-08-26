@@ -643,20 +643,30 @@ function finalizeMatch(friendly, homeState, awayState, finalScore) {
     (state.subbedOut || []).forEach((p) => { if (!everyone.has(p.id)) everyone.set(p.id, p); });
     (state.dismissed || []).forEach((p) => { if (!everyone.has(p.id)) everyone.set(p.id, p); });
 
+    /* Ver explicação completa em routes/competitionStats.js
+       (simulateCompetitionMatchStats) — mesma lógica, mantida igual em
+       todos os sítios que geram notas para as não desalinhar entre
+       amigáveis, jogo ao vivo e Campeonato/Taça. */
+    const CLEAN_SHEET_BONUS = { GR: 0.9, DEF: 0.6, MED: 0.25, MO: 0.05, PL: 0 };
+    const CONCEDED_PENALTY = { GR: -0.4, DEF: -0.25, MED: -0.1, MO: 0, PL: 0 };
+    const TACKLE_RATING_WEIGHT = { GR: 0, DEF: 0.12, MED: 0.07, MO: 0.02, PL: 0.01 };
+
     everyone.forEach((p) => {
       const info = rosterById.get(p.id);
       if (!info) return;
       const yellowCount = p.yellow ? (p.sentOff && p.red !== true ? 2 : 1) : 0;
       const redCard = p.sentOff ? 1 : 0;
 
+      const quality = p.quality || 1;
+      const tackles = Math.max(0, Math.round((TACKLE_BASE[p.category] || 0) * quality + (Math.random() * 2 - 1)));
+
       let rating = 6.0 + resultBonus + (Math.random() * 0.6 - 0.3) + p.goals * 0.8 + p.assists * 0.4;
-      if (p.category === 'GR') rating += goalsAgainst === 0 ? 0.5 : (goalsAgainst >= 3 ? -0.4 : 0);
+      if (goalsAgainst === 0) rating += CLEAN_SHEET_BONUS[p.category] || 0;
+      else if (goalsAgainst >= 3) rating += CONCEDED_PENALTY[p.category] || 0;
+      rating += tackles * (TACKLE_RATING_WEIGHT[p.category] || 0);
       rating -= yellowCount * 0.1;
       if (redCard) rating -= 1.0;
       rating = Math.max(4.0, Math.min(10.0, rating));
-
-      const quality = p.quality || 1;
-      const tackles = Math.max(0, Math.round((TACKLE_BASE[p.category] || 0) * quality + (Math.random() * 2 - 1)));
       const passPct = Math.max(40, Math.min(98, Math.round(62 + quality * 10 + (Math.random() * 16 - 8))));
       const dribbles = Math.max(0, Math.round((DRIBBLE_BASE[p.category] || 1) * playerDribbleFactor(info) + (Math.random() * 2 - 1)));
       const passes = Math.max(0, Math.round((PASS_BASE[p.category] || 20) * playerPassFactor(info) + (Math.random() * 10 - 5)));
