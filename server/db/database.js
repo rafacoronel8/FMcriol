@@ -123,10 +123,21 @@ const PLAYER_COLUMNS = [
   ['career_clubs', 'INTEGER DEFAULT 1'],
   ['career_apps', 'INTEGER DEFAULT 0'],
   ['career_goals', 'INTEGER DEFAULT 0'],
-  // Marca se o jogador já mudou de clube durante a janela de mercado atual —
-  // só existe UM mercado por jogo, por isso cada jogador só pode ser
-  // transferido uma vez até o mercado fechar (ver isMarketWindowOpen abaixo).
+  // Marca se o jogador já mudou de clube durante a janela de mercado ATUAL
+  // (1-31 julho, todos os anos — ver isMarketWindowOpen abaixo) — cada
+  // jogador só pode ser transferido uma vez até essa janela fechar. Volta
+  // a 0 sozinho quando a janela seguinte abre (ver routes/game.js, no
+  // POST /advance, à procura da transição 30/06 -> 01/07) — antes disto só
+  // era reposto num "Novo Jogo", o que deixava QUALQUER jogador já
+  // transferido uma vez (incluindo os comprados pelo utilizador) fora de
+  // qualquer proposta futura para sempre.
   ['transferred_in_window', 'INTEGER DEFAULT 0'],
+  // Assinala que o jogador teve uma grande época (ver runPlayerDevelopmentForSeason
+  // em routes/league.js) — dá-lhe mais destaque no scouting de clubes mais
+  // fortes na janela de mercado seguinte (ver runAiScoutingTick em
+  // routes/game.js). É reposto a 0 no início de cada avaliação de fim de
+  // época, por isso só reflete sempre a época mais recente.
+  ['breakout_season', 'INTEGER DEFAULT 0'],
 
   /* ---------- Empréstimos ----------
      loan_from_team_id -> clube "dono" do jogador enquanto ele está emprestado

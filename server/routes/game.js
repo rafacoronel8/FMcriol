@@ -311,18 +311,31 @@ router.get('/state', (req, res) => {
 /* ---------- Lista de transferências: interesse dos clubes por dia ----------
    Um clube só se interessa por um jogador se a reputação do clube for
    compatível com o nível do jogador (não anda atrás de qualquer um) e
-   se conseguir pagar o valor pedido. */
-function reputationCompatible(buyerReputation, playerQuality) {
-  return Math.abs(buyerReputation - playerQuality) <= 1.1;
+   se conseguir pagar o valor pedido. `tolerance` alarga esta margem — usado
+   para jogadores em "breakout_season" (ver runPlayerDevelopmentForSeason em
+   routes/league.js), que chamam a atenção de clubes bem mais fortes do que
+   seria normal depois de uma época de destaque. */
+function reputationCompatible(buyerReputation, playerQuality, tolerance = 1.1) {
+  return Math.abs(buyerReputation - playerQuality) <= tolerance;
 }
 
-/* Lê um número aproximado de um texto de salário tipo "£41.5K p/s" ou "£3.000 p/s". */
+/* Lê um número aproximado de um texto de salário tipo "£41.5K p/s" ou
+   "£3.000 p/s". Só se trata como casa decimal o que vem antes de um sufixo
+   K/M — sem sufixo, o texto é um valor inteiro já por extenso ("3.000" ou
+   "3 000" = três mil), e o "." ou espaço é separador de milhar, não vírgula
+   decimal (mesma correção já aplicada em routes/transfers.js:parseMoneyRange
+   — antes disto, "£3.000 p/s" lia-se como "3", quase zero, distorcendo
+   qualquer decisão de mercado que dependesse do salário atual do jogador). */
 function parseWageAmount(text) {
-  const match = String(text || '').match(/[\d]+(?:[.,]\d+)?/);
-  if (!match) return 3000;
-  const num = parseFloat(match[0].replace(',', '.'));
-  const isThousands = /K/i.test(text || '');
-  const value = isThousands ? num * 1000 : num;
+  const str = String(text || '');
+  const suffixMatch = str.match(/([\d]+(?:[.,]\d+)?)\s*(K|M)/i);
+  if (suffixMatch) {
+    const num = parseFloat(suffixMatch[1].replace(',', '.'));
+    const mult = /M/i.test(suffixMatch[2]) ? 1_000_000 : 1_000;
+    return Number.isFinite(num) && num > 0 ? num * mult : 3000;
+  }
+  const digitsOnly = str.replace(/[^\d]/g, '');
+  const value = digitsOnly ? parseInt(digitsOnly, 10) : 0;
   return Number.isFinite(value) && value > 0 ? value : 3000;
 }
 
@@ -748,7 +761,13 @@ function runAiScoutingTick(squadNeedsCache) {
 
   eligiblePlayers.forEach((player) => {
     const isReserve = reservePlayerIds.has(player.id);
-    const scoutChance = isReserve ? 0.02625 * 3 : 0.02625; // reservas são notadas ~3x mais
+    const isBreakout = !!player.breakout_season;
+    /* Reservas são notadas ~3x mais; quem teve uma grande época
+       (breakout_season, ver runPlayerDevelopmentForSeason em
+       routes/league.js) chama a atenção ~2x mais do que o normal — os
+       dois efeitos empilham-se no caso raro de um suplente ter explodido
+       numa grande época mesmo sem titularidade. */
+    const scoutChance = (isReserve ? 0.02625 * 3 : 0.02625) * (isBreakout ? 2 : 1);
     if (Math.random() > scoutChance) return;
 
     const sellerTeam = teamsById.get(player.team_id);
@@ -771,7 +790,10 @@ function runAiScoutingTick(squadNeedsCache) {
        ele propõe através das suas próprias ações no perfil do jogador. */
     const candidates = aiTeams
       .filter((t) => t.id !== sellerTeam.id)
-      .filter((t) => reputationCompatible(t.reputation_stars, quality))
+      /* Um jogador em breakout_season chama a atenção de clubes bem mais
+         fortes do que seria normal para o seu nível atual (tolerance mais
+         larga) — é a "grande época atrai clubes maiores" pedida. */
+      .filter((t) => reputationCompatible(t.reputation_stars, quality, isBreakout ? 1.8 : 1.1))
       .filter((t) => t.transfer_budget >= referenceValue * tierRatio);
     if (!candidates.length) return;
 
@@ -1371,6 +1393,21 @@ router.post('/advance', (req, res) => {
   const liveMatchesAutoFinished = liveMatch.finishStaleLiveMatches(state.current_date);
 
   db.prepare('UPDATE game_state SET current_date = ? WHERE id = 1').run(nextDateStr);
+
+  /* ---------- Reabertura anual da janela de mercado ----------
+     transferred_in_window só devia impedir um jogador de mudar de clube
+     DUAS VEZES na MESMA janela (1-31 julho) — mas nunca era reposto a 0
+     depois disso, só num "Novo Jogo". Na prática isto significava que
+     QUALQUER jogador que alguma vez tivesse mudado de clube (incluindo os
+     comprados pelo utilizador) ficava fora de qualquer proposta futura
+     para sempre. Aqui deteta-se a transição exata 30/06 -> 01/07 (a janela
+     acaba de abrir) e repõe-se toda a gente — um jogador comprado o ano
+     passado volta a poder receber propostas assim que a nova janela abre. */
+  const prevMonthDay = String(state.current_date).slice(5, 10);
+  const nextMonthDay = nextDateStr.slice(5, 10);
+  if (prevMonthDay < '07-01' && nextMonthDay >= '07-01') {
+    db.prepare('UPDATE players SET transferred_in_window = 0').run();
+  }
 
   /* Avança o Campeonato ANTES dos amigáveis: se hoje for jornada do clube
      do utilizador, isto cria o "amigável" interno ligado a essa jornada

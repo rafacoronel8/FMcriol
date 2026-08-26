@@ -182,6 +182,18 @@ function classifyForAwards(code) {
 function assignSeasonAwards(teamIds, seasonLabel, wonDate) {
   if (!teamIds.length) return;
   const placeholders = teamIds.map(() => '?').join(',');
+
+  /* Proteção contra duplicados — mesma ideia de creditPlayerTrophy acima:
+     se esta função for chamada mais que uma vez para a mesma época (o
+     sintoma real que motivou esta correção: "Melhor Marcador da Taça"
+     aparecia várias vezes com datas seguidas mas a mesma época), cada
+     prémio só pode ser atribuído UMA VEZ por award_key + época. */
+  const alreadyAwardedKeys = new Set(
+    db.prepare(`SELECT DISTINCT award_key FROM player_awards WHERE team_id IN (${placeholders}) AND season_label = ?`)
+      .all(...teamIds, seasonLabel)
+      .map((r) => r.award_key)
+  );
+
   const rows = db.prepare(`
     SELECT fps.player_id, fps.team_id, p.name AS player_name, p.position_code,
       SUM(fps.goals) AS goals, SUM(fps.assists) AS assists,
@@ -199,7 +211,7 @@ function assignSeasonAwards(teamIds, seasonLabel, wonDate) {
     VALUES (@player_id, @team_id, @award_key, @season_label, @won_date)
   `);
   const award = (key, candidate) => {
-    if (!candidate) return;
+    if (!candidate || alreadyAwardedKeys.has(key)) return;
     insertAward.run({ player_id: candidate.player_id, team_id: candidate.team_id, award_key: key, season_label: seasonLabel, won_date: wonDate });
   };
 
@@ -268,6 +280,14 @@ const BEST_XI_SLOTS = { GR: 1, DEF: 4, MED: 3, ATA: 3 };
 function assignBestXI(teamIds, seasonLabel, wonDate) {
   if (!teamIds.length) return;
   const placeholders = teamIds.map(() => '?').join(',');
+
+  /* Mesma proteção contra duplicados de assignSeasonAwards — o "Onze do
+     Ano" só pode ser escolhido UMA VEZ por época. */
+  const alreadyAssigned = db.prepare(`
+    SELECT 1 FROM player_awards WHERE team_id IN (${placeholders}) AND season_label = ? AND award_key LIKE 'best_xi_%' LIMIT 1
+  `).get(...teamIds, seasonLabel);
+  if (alreadyAssigned) return;
+
   const rows = db.prepare(`
     SELECT fps.player_id, fps.team_id, p.position_code,
       AVG(fps.rating) AS avg_rating, COUNT(*) AS games
@@ -300,7 +320,14 @@ function assignBestXI(teamIds, seasonLabel, wonDate) {
    equipa em runSeasonRolloverIfDue — regista em player_trophies, para
    CADA jogador atualmente no plantel dessa equipa, que ele fez parte do
    título. Alimenta a secção "Títulos Coletivos" da aba Carreira do perfil
-   do jogador (ver GET /api/players/:id em routes/players.js). */
+   do jogador (ver GET /api/players/:id em routes/players.js).
+
+   Proteção contra duplicados: se por algum motivo runSeasonRolloverIfDue
+   for chamada mais que uma vez para a mesma época (ex: dois avanços de dia
+   muito próximos), sem isto cada jogador do plantel campeão ficava com o
+   MESMO título coletivo repetido no perfil, tantas vezes quantas as
+   chamadas a mais — dá para ver isto a acontecer com "Campeão da Taça São
+   Vicente" repetido várias vezes com datas seguidas mas a mesma época. */
 function creditPlayerTrophy(teamId, competition, seasonLabel, wonDate) {
   const team = db.prepare('SELECT name, shield_path FROM teams WHERE id = ?').get(teamId);
   const roster = db.prepare('SELECT id FROM players WHERE team_id = ?').all(teamId);
@@ -308,7 +335,13 @@ function creditPlayerTrophy(teamId, competition, seasonLabel, wonDate) {
     INSERT INTO player_trophies (player_id, team_id, team_name, team_shield, competition, season_label, won_date)
     VALUES (@player_id, @team_id, @team_name, @team_shield, @competition, @season_label, @won_date)
   `);
+  const alreadyCredited = db.prepare(`
+    SELECT player_id FROM player_trophies WHERE team_id = ? AND competition = ? AND season_label = ?
+  `).all(teamId, competition, seasonLabel).map((r) => r.player_id);
+  const alreadyCreditedSet = new Set(alreadyCredited);
+
   roster.forEach((pl) => {
+    if (alreadyCreditedSet.has(pl.id)) return;
     insertTrophy.run({
       player_id: pl.id, team_id: teamId,
       team_name: team ? team.name : null, team_shield: team ? team.shield_path : null,
@@ -327,10 +360,170 @@ function creditPlayerTrophy(teamId, competition, seasonLabel, wonDate) {
    novo. A Taça (routes/cup.js) não precisa de nenhum aviso especial — ao
    ver league_fixtures vazio outra vez, fica automaticamente "trancada"
    até este novo Campeonato também terminar. */
+/* ---------- Evolução de jogadores no fim da época ----------
+   Quem tiver uma grande época (média de classificação alta, com jogos
+   suficientes para não ser sorte de um jogo só) evolui: sobe de nível
+   (current_ability_stars, nunca além do potencial) e alguns atributos
+   individuais sobem também — só jogadores com menos de 32 anos, que já
+   não têm margem de progressão realista depois disso. Quem tem mesmo uma
+   época de destaque fica com breakout_season=1, o que lhe dá bastante mais
+   atenção de clubes mais fortes no scouting da próxima janela de mercado
+   (ver runAiScoutingTick em routes/game.js) — reposto a 0 no início desta
+   função, para só refletir sempre a época que acabou de terminar. */
+const GROWTH_MIN_GAMES = 8;
+const GROWTH_RATING_THRESHOLD = 6.9;
+const GROWTH_STANDOUT_RATING = 7.6;
+const GROWTH_MAX_AGE = 32;
+
+function ageFromBirthDateOn(birthDateStr, todayStr) {
+  if (!birthDateStr || !todayStr) return null;
+  const [ty, tm, td] = todayStr.split('-').map(Number);
+  const [by, bm, bd] = String(birthDateStr).slice(0, 10).split('-').map(Number);
+  if (!by) return null;
+  let age = ty - by;
+  if (tm < bm || (tm === bm && td < bd)) age -= 1;
+  return age;
+}
+
+function seasonGamesAndRating(seasonStatsJson) {
+  let rows = [];
+  try { rows = JSON.parse(seasonStatsJson || '[]'); } catch { rows = []; }
+  if (!Array.isArray(rows)) return { games: 0, avgRating: 0 };
+  let games = 0;
+  let weightedRating = 0;
+  rows.forEach((r) => {
+    const j = Number(r.j) || 0;
+    games += j;
+    const media = parseFloat(r.media);
+    if (Number.isFinite(media) && j) weightedRating += media * j;
+  });
+  return { games, avgRating: games ? weightedRating / games : 0 };
+}
+
+/* Sobe `count` atributos escolhidos ao calhas dentro de uma lista
+   [[nome, valor], ...] em `amount` (1-20, arredondado a 1 casa) — mesma
+   ideia de bumpAttributes em routes/activities.js, mas sem alvos fixos
+   (aqui o desenvolvimento é geral, não ligado a um tipo de treino). Listas
+   vazias (ex: goalkeeping_json de um jogador de campo) ficam intocadas. */
+function bumpRandomAttrs(jsonText, count, amount) {
+  let list;
+  try { list = JSON.parse(jsonText || '[]'); } catch { list = []; }
+  if (!Array.isArray(list) || !list.length) return jsonText;
+  const indexSet = new Set([...list.keys()].sort(() => Math.random() - 0.5).slice(0, count));
+  const updated = list.map(([name, value], i) => {
+    if (!indexSet.has(i)) return [name, value];
+    const next = Math.max(1, Math.min(20, Number((Number(value || 0) + amount).toFixed(1))));
+    return [name, next];
+  });
+  return JSON.stringify(updated);
+}
+
+function runPlayerDevelopmentForSeason(seasonLabel, wonDate) {
+  /* Repõe o destaque da época anterior antes de recalcular — só quem teve
+     uma grande época AGORA é que deve continuar a chamar a atenção. */
+  db.prepare('UPDATE players SET breakout_season = 0').run();
+
+  const players = db.prepare(`
+    SELECT id, team_id, name, birth_date, season_stats_json, current_ability_stars, potential_ability_stars,
+           technical_json, set_pieces_json, mental_json, physical_json, goalkeeping_json
+    FROM players WHERE team_id IS NOT NULL
+  `).all();
+
+  const updatePlayer = db.prepare(`
+    UPDATE players SET
+      current_ability_stars = @current_ability_stars,
+      technical_json = @technical_json, set_pieces_json = @set_pieces_json,
+      mental_json = @mental_json, physical_json = @physical_json, goalkeeping_json = @goalkeeping_json,
+      breakout_season = @breakout_season, updated_at = datetime('now')
+    WHERE id = @id
+  `);
+
+  const developed = [];
+
+  players.forEach((p) => {
+    const age = ageFromBirthDateOn(p.birth_date, wonDate);
+    if (age == null || age >= GROWTH_MAX_AGE) return;
+
+    const { games, avgRating } = seasonGamesAndRating(p.season_stats_json);
+    if (games < GROWTH_MIN_GAMES || avgRating < GROWTH_RATING_THRESHOLD) return;
+
+    const potential = p.potential_ability_stars ?? p.current_ability_stars ?? 2.5;
+    const current = p.current_ability_stars ?? 2.5;
+    if (current >= potential) return;
+
+    const isStandout = avgRating >= GROWTH_STANDOUT_RATING;
+    const starBump = isStandout ? (0.15 + Math.random() * 0.15) : (0.05 + Math.random() * 0.1);
+    const nextStars = Math.min(potential, Number((current + starBump).toFixed(2)));
+    const attrAmount = isStandout ? (0.8 + Math.random() * 0.6) : (0.4 + Math.random() * 0.4);
+    const attrCount = isStandout ? 3 : 2;
+
+    updatePlayer.run({
+      id: p.id,
+      current_ability_stars: nextStars,
+      technical_json: bumpRandomAttrs(p.technical_json, attrCount, attrAmount),
+      set_pieces_json: bumpRandomAttrs(p.set_pieces_json, Math.max(1, Math.floor(attrCount / 2)), attrAmount),
+      mental_json: bumpRandomAttrs(p.mental_json, attrCount, attrAmount),
+      physical_json: bumpRandomAttrs(p.physical_json, Math.max(1, Math.floor(attrCount / 2)), attrAmount),
+      goalkeeping_json: bumpRandomAttrs(p.goalkeeping_json, attrCount, attrAmount),
+      breakout_season: isStandout ? 1 : 0,
+    });
+
+    developed.push({ id: p.id, team_id: p.team_id, name: p.name, isStandout });
+  });
+
+  return developed;
+}
+
+/* ---------- Reputação evolui com o plantel ----------
+   Sem isto, a reputação de cada clube era fixa desde o início do jogo para
+   sempre — o mesmo favorito ganhava sempre o Campeonato, porque as equipas
+   geridas pelo jogo nunca ficavam mais fortes nem mais fracas de verdade,
+   por muito que se reforçassem no mercado. No fim de cada época, a
+   reputação ajusta-se GRADUALMENTE (nunca de repente, para não dar saltos
+   estranhos) na direção da qualidade real do plantel (média das estrelas
+   dos prováveis titulares) mais um bónus por títulos ganhos essa época —
+   assim uma equipa que invista bem no mercado e desenvolva jogadores vai
+   mesmo subindo ao longo de várias épocas e tornando-se concorrente a
+   títulos, tal como pedido. */
+function updateTeamReputations(seasonLabel) {
+  const teams = db.prepare('SELECT id, reputation_stars FROM teams').all();
+  const updateRep = db.prepare("UPDATE teams SET reputation_stars = ?, updated_at = datetime('now') WHERE id = ?");
+
+  teams.forEach((team) => {
+    const squad = db.prepare('SELECT current_ability_stars FROM players WHERE team_id = ?').all(team.id);
+    if (!squad.length) return;
+
+    const startingXI = squad.map((p) => p.current_ability_stars ?? 2.5).sort((a, b) => b - a).slice(0, 11);
+    const squadQuality = startingXI.reduce((sum, v) => sum + v, 0) / startingXI.length;
+
+    const wonLeague = db.prepare("SELECT 1 FROM trophies WHERE team_id = ? AND competition = 'league' AND season_label = ?").get(team.id, seasonLabel);
+    const wonCup = db.prepare("SELECT 1 FROM trophies WHERE team_id = ? AND competition = 'cup' AND season_label = ?").get(team.id, seasonLabel);
+    const trophyBonus = (wonLeague ? 0.25 : 0) + (wonCup ? 0.1 : 0);
+
+    const target = Math.max(0.5, Math.min(5, squadQuality + trophyBonus));
+    const current = team.reputation_stars ?? 2.5;
+    const blended = current * 0.75 + target * 0.25; // ajuste gradual — nunca de repente
+    const rounded = Math.round(Math.max(0.5, Math.min(5, blended)) * 2) / 2; // arredondado a 0.5 estrelas
+
+    if (rounded !== current) updateRep.run(rounded, team.id);
+  });
+}
+
 function runSeasonRolloverIfDue(nextDateStr) {
   const seasonStart = getCurrentSeasonStart();
   const rolloverDate = nextAugustFirst(seasonStart);
   if (nextDateStr < rolloverDate) return;
+
+  /* Proteção extra contra reentrância — se por algum motivo esta função
+     for chamada mais que uma vez depois de current_season_start já ter
+     avançado (ex: dois avanços de dia muito próximos, ou um pedido
+     repetido), regenerateSeasonFixtures(rolloverDate) mais abaixo já terá
+     criado jornadas do Campeonato com match_date a partir de rolloverDate
+     — encontrar alguma é sinal de que esta época já rolou e não deve
+     voltar a apagar/gerar tudo outra vez (o que também duplicaria
+     troféus, prémios e o arquivo de carreira). */
+  const alreadyRolledOver = db.prepare('SELECT 1 FROM league_fixtures WHERE match_date >= ? LIMIT 1').get(rolloverDate);
+  if (alreadyRolledOver) return;
 
   const seasonLabel = seasonLabelFor(seasonStart);
   const cup = require('./cup');
@@ -345,18 +538,31 @@ function runSeasonRolloverIfDue(nextDateStr) {
 
     const standings = buildStandings(teams, played);
     if (standings[0]) {
-      db.prepare(`
-        INSERT INTO trophies (team_id, competition, season_label, won_date) VALUES (?, 'league', ?, ?)
-      `).run(standings[0].team_id, seasonLabel, nextDateStr);
-      creditPlayerTrophy(standings[0].team_id, 'league', seasonLabel, nextDateStr);
+      /* Proteção contra duplicados — ver comentário em creditPlayerTrophy:
+         sem isto, se esta função corresse mais que uma vez para a mesma
+         época, o campeão ganhava o troféu do Campeonato repetido. */
+      const alreadyLeagueChamp = db.prepare(`
+        SELECT 1 FROM trophies WHERE team_id = ? AND competition = 'league' AND season_label = ?
+      `).get(standings[0].team_id, seasonLabel);
+      if (!alreadyLeagueChamp) {
+        db.prepare(`
+          INSERT INTO trophies (team_id, competition, season_label, won_date) VALUES (?, 'league', ?, ?)
+        `).run(standings[0].team_id, seasonLabel, nextDateStr);
+        creditPlayerTrophy(standings[0].team_id, 'league', seasonLabel, nextDateStr);
+      }
     }
 
     const cupState = cup.getCupState(division);
     if (cupState.status === 'finished' && cupState.champion) {
-      db.prepare(`
-        INSERT INTO trophies (team_id, competition, season_label, won_date) VALUES (?, 'cup', ?, ?)
-      `).run(cupState.champion.id, seasonLabel, nextDateStr);
-      creditPlayerTrophy(cupState.champion.id, 'cup', seasonLabel, nextDateStr);
+      const alreadyCupChamp = db.prepare(`
+        SELECT 1 FROM trophies WHERE team_id = ? AND competition = 'cup' AND season_label = ?
+      `).get(cupState.champion.id, seasonLabel);
+      if (!alreadyCupChamp) {
+        db.prepare(`
+          INSERT INTO trophies (team_id, competition, season_label, won_date) VALUES (?, 'cup', ?, ?)
+        `).run(cupState.champion.id, seasonLabel, nextDateStr);
+        creditPlayerTrophy(cupState.champion.id, 'cup', seasonLabel, nextDateStr);
+      }
     }
 
     assignSeasonAwards(teams.map((t) => t.id), seasonLabel, nextDateStr);
@@ -408,6 +614,15 @@ function runSeasonRolloverIfDue(nextDateStr) {
   db.prepare("DELETE FROM friendly_player_stats WHERE competition IN ('league','cup')").run();
   const resettableRowNames = [db.COMPETITION_ROW_NAMES.league, db.COMPETITION_ROW_NAMES.cup];
   const strip = db.prepare('UPDATE players SET season_stats_json = ? WHERE id = ?');
+
+  /* IMPORTANTE: a evolução dos jogadores (ver runPlayerDevelopmentForSeason)
+     tem de correr ANTES desta limpeza — precisa do season_stats_json ainda
+     com os dados de Campeonato/Taça desta época para calcular a média de
+     classificação de cada jogador. A atualização da reputação das equipas
+     pode correr a seguir, já só precisa dos troféus (já gravados acima). */
+  const developedPlayers = runPlayerDevelopmentForSeason(seasonLabel, nextDateStr);
+  updateTeamReputations(seasonLabel);
+
   db.prepare('SELECT id, season_stats_json FROM players').all().forEach((p) => {
     let rows;
     try { rows = JSON.parse(p.season_stats_json || '[]'); } catch { rows = []; }
@@ -460,6 +675,24 @@ function runSeasonRolloverIfDue(nextDateStr) {
     });
 
     const myPlayerIds = new Set(db.prepare('SELECT id FROM players WHERE team_id = ?').all(myTeam.id).map((r) => r.id));
+
+    /* ---------- Evolução dos jogadores do MEU clube ----------
+       Uma mensagem por cada jogador que teve mesmo uma época de destaque
+       (breakout) — os que só subiram um pouco não geram mensagem própria,
+       para não encher a caixa de entrada com coisas pequenas. */
+    developedPlayers
+      .filter((d) => d.team_id === myTeam.id && d.isStandout)
+      .forEach((d) => {
+        db.prepare(`
+          INSERT INTO messages (team_id, type, title, body, player_id) VALUES (@team_id, 'player_developed', @title, @body, @player_id)
+        `).run({
+          team_id: myTeam.id,
+          player_id: d.id,
+          title: `📈 ${d.name} evoluiu muito esta época!`,
+          body: `${d.name} teve uma época de destaque e melhorou como jogador. Clubes mais fortes já começam a reparar nele — não te surpreendas se aparecerem propostas inesperadas na próxima janela de mercado.`,
+        });
+      });
+
     const myAwards = db.prepare(`
       SELECT * FROM player_awards WHERE team_id = ? AND season_label = ? AND won_date = ?
     `).all(myTeam.id, seasonLabel, nextDateStr);

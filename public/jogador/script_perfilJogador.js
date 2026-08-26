@@ -1012,7 +1012,7 @@ function renderCareerHistory(rows){
 }
 
 const TROPHY_LABELS = { league: 'Campeão do Campeonato', cup: 'Campeão da Taça São Vicente' };
-const TROPHY_ICONS = { league: '🏆', cup: '🏆⚔️' };
+const TROPHY_ICONS = { league: '🏆', cup: '🎖️' };
 
 function renderCollectiveTrophies(trophies){
   const box = el('collectiveTrophiesList');
@@ -1021,14 +1021,18 @@ function renderCollectiveTrophies(trophies){
     box.innerHTML = '<p class="placeholder-text">Sem títulos coletivos ainda.</p>';
     return;
   }
-  box.innerHTML = trophies.map((t) => `
-    <div class="trophy-item">
+  box.innerHTML = trophies.map((t) => {
+    const isCup = t.competition === 'cup';
+    return `
+    <div class="trophy-item${isCup ? ' trophy-item-cup' : ''}">
+      ${isCup ? '<span class="trophy-cup-ribbon">🏆 Taça São Vicente</span>' : ''}
       <div class="trophy-icon">${TROPHY_ICONS[t.competition] || '🏆'}</div>
       <div class="trophy-info">
         <span class="trophy-label">${TROPHY_LABELS[t.competition] || t.competition} · ${t.team_name || ''}</span>
         <span class="trophy-meta">${t.season_label} · ${fmtAwardDate(t.won_date)}</span>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 /* ---------- 10a-bis. Clube de Origem (admin) ----------
