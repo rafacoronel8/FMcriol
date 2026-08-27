@@ -995,6 +995,31 @@ body{
   background:var(--bg-3);padding:2px 8px;border-radius:10px;
 }
 
+/* ============ CLÁUSULAS ============ */
+.clauses-list{display:flex;flex-direction:column;gap:10px;}
+.clause-item{
+  display:flex;gap:12px;align-items:center;
+  background:var(--bg-2);border:1px solid var(--line);
+  border-radius:var(--radius-m);padding:12px 14px;
+}
+.clause-item-photo{
+  width:44px;height:44px;border-radius:50%;object-fit:cover;
+  background:var(--bg-3);border:1px solid var(--line);flex-shrink:0;
+}
+.clause-item-main{flex:1;min-width:0;}
+.clause-item-title{font-size:13.5px;font-weight:700;color:var(--text-0);margin-bottom:3px;}
+.clause-item-teams{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);margin-bottom:4px;flex-wrap:wrap;}
+.clause-item-teams img{width:16px;height:16px;object-fit:cover;border-radius:4px;background:var(--bg-3);}
+.clause-item-teams .arrow{color:var(--text-2);font-size:11px;}
+.clause-item-desc{font-size:12.5px;color:var(--text-1);}
+.clause-item-progress{font-size:11px;color:var(--text-2);margin-top:2px;}
+.clause-item-status{
+  font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+  padding:3px 9px;border-radius:20px;white-space:nowrap;flex-shrink:0;
+}
+.clause-item-status.active{color:var(--gold);background:rgba(242,193,78,.12);}
+.clause-item-status.fulfilled{color:var(--green);background:rgba(62,207,110,.12);}
+
 /* ---- Modal de detalhe, estilo notícia de jornal ---- */
 .news-modal-overlay{
   position:fixed;

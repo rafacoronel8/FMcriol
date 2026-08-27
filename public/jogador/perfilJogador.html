@@ -366,10 +366,38 @@
       <p class="negotiate-hint" id="negotiateBudgetHint">A carregar orçamento…</p>
 
       <form id="offerForm" class="negotiate-form">
-        <label class="field">
-          <span>Valor da proposta (£)</span>
-          <input type="number" id="offerAmount" min="1" step="1" required>
+        <label class="field offer-mode-toggle">
+          <span>Tipo de proposta</span>
+          <select id="offerMode">
+            <option value="buy">Compra definitiva</option>
+            <option value="loan">Empréstimo</option>
+          </select>
         </label>
+
+        <label class="field">
+          <span id="offerAmountLabel">Valor da proposta (£)</span>
+          <input type="number" id="offerAmount" min="0" step="1">
+        </label>
+
+        <label class="field hidden" id="loanDurationField">
+          <span>Duração do empréstimo</span>
+          <select id="loanDurationMonths">
+            <option value="3">3 meses</option>
+            <option value="6" selected>6 meses</option>
+            <option value="12">12 meses</option>
+            <option value="18">18 meses</option>
+            <option value="24">24 meses</option>
+          </select>
+        </label>
+
+        <div class="clauses-editor" id="clausesEditor">
+          <div class="clauses-editor-header">
+            <span>Cláusulas do negócio (opcional)</span>
+            <button type="button" class="btn-secondary btn-small" id="addClauseBtn">+ Adicionar cláusula</button>
+          </div>
+          <div id="clausesEditorList"></div>
+        </div>
+
         <button type="submit" class="btn-primary">Enviar proposta</button>
       </form>
       <p id="offerResult" class="negotiate-result"></p>

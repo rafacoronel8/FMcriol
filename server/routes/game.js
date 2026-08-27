@@ -311,12 +311,20 @@ router.get('/state', (req, res) => {
 /* ---------- Lista de transferências: interesse dos clubes por dia ----------
    Um clube só se interessa por um jogador se a reputação do clube for
    compatível com o nível do jogador (não anda atrás de qualquer um) e
-   se conseguir pagar o valor pedido. `tolerance` alarga esta margem — usado
-   para jogadores em "breakout_season" (ver runPlayerDevelopmentForSeason em
-   routes/league.js), que chamam a atenção de clubes bem mais fortes do que
-   seria normal depois de uma época de destaque. */
-function reputationCompatible(buyerReputation, playerQuality, tolerance = 1.1) {
-  return Math.abs(buyerReputation - playerQuality) <= tolerance;
+   se conseguir pagar o valor pedido.
+
+   A margem é ASSIMÉTRICA de propósito: um clube ambicioso a tentar subir de
+   nível e ir atrás de alguém MELHOR do que costuma contratar é normal (dá
+   sempre alguma margem, `upTolerance`). O contrário — um clube grande a
+   correr atrás de um jogador claramente mais fraco — só faz sentido se esse
+   jogador tiver tido mesmo uma época de destaque (breakout_season, ver
+   runPlayerDevelopmentForSeason em routes/league.js); sem isso, a margem
+   para "descer" é bem mais apertada, para os clubes grandes não andarem
+   sempre atrás de reforços fracos só porque calham a precisar da posição. */
+function reputationCompatible(buyerReputation, playerQuality, { breakout = false, upTolerance = 1.1, downTolerance = 0.6, breakoutDownTolerance = 1.8 } = {}) {
+  const gap = buyerReputation - playerQuality; // positivo = o comprador é mais forte do que o jogador
+  if (gap <= 0) return Math.abs(gap) <= upTolerance;
+  return gap <= (breakout ? breakoutDownTolerance : downTolerance);
 }
 
 /* Lê um número aproximado de um texto de salário tipo "£41.5K p/s" ou
@@ -503,7 +511,7 @@ function runTransferListTick(squadNeedsCache) {
     const quality = player.current_ability_stars ?? 2.5;
     const playerCode = getMainPositionCode(player.position_code);
     const candidates = db.prepare('SELECT * FROM teams WHERE id != ?').all(player.team_id)
-      .filter((t) => reputationCompatible(t.reputation_stars, quality))
+      .filter((t) => reputationCompatible(t.reputation_stars, quality, { breakout: !!player.breakout_season }))
       .filter((t) => t.transfer_budget >= player.asking_price);
     if (!candidates.length) return;
 
@@ -527,10 +535,13 @@ function runTransferListTick(squadNeedsCache) {
     if (sellerTeam.is_user_controlled) {
       logInterestMessage(buyer, sellerTeam, player);
 
+      const aiClauses = transfers.maybeGenerateAiClauses({ player, buyerTeam: buyer, sellerTeam, amount });
+      const clauseLines = aiClauses.map((c) => `• ${db.describeClause(c)}`).join('\n');
+
       const offerInfo = db.prepare(`
-        INSERT INTO transfer_offers (player_id, buyer_team_id, seller_team_id, offer_amount, status)
-        VALUES (@player_id, @buyer_team_id, @seller_team_id, @offer_amount, 'pending')
-      `).run({ player_id: player.id, buyer_team_id: buyer.id, seller_team_id: sellerTeam.id, offer_amount: amount });
+        INSERT INTO transfer_offers (player_id, buyer_team_id, seller_team_id, offer_amount, status, clauses_json)
+        VALUES (@player_id, @buyer_team_id, @seller_team_id, @offer_amount, 'pending', @clauses_json)
+      `).run({ player_id: player.id, buyer_team_id: buyer.id, seller_team_id: sellerTeam.id, offer_amount: amount, clauses_json: JSON.stringify(aiClauses) });
 
       const msgInfo = db.prepare(`
         INSERT INTO messages (team_id, type, title, body, player_id, related_team_id, transfer_offer_id)
@@ -538,7 +549,7 @@ function runTransferListTick(squadNeedsCache) {
       `).run({
         team_id: sellerTeam.id,
         title: `Proposta recebida: ${player.name}`,
-        body: `O ${buyer.name} quer comprar ${player.name} por ${amountFmt}. Aceita ou recusa a proposta.`,
+        body: `O ${buyer.name} quer comprar ${player.name} por ${amountFmt}.${clauseLines ? ` A proposta inclui as seguintes cláusulas:\n${clauseLines}` : ''} Aceita, recusa ou contrapropõe.`,
         player_id: player.id,
         related_team_id: buyer.id,
         transfer_offer_id: offerInfo.lastInsertRowid,
@@ -601,19 +612,18 @@ function runTransferListTick(squadNeedsCache) {
       wage_text: `£${Number(decision.wageOffer).toLocaleString('pt-PT')} p/s`, contract_end: contractEndText,
     });
 
-    db.prepare('UPDATE teams SET balance = balance + @amount, transfer_budget = transfer_budget + @amount, updated_at = datetime(\'now\') WHERE id = @id')
-      .run({ amount, id: sellerTeam.id });
-    db.prepare('UPDATE teams SET balance = balance - @amount, transfer_budget = transfer_budget - @amount, updated_at = datetime(\'now\') WHERE id = @id')
-      .run({ amount, id: buyer.id });
+    const aiClauses = transfers.maybeGenerateAiClauses({ player, buyerTeam: buyer, sellerTeam, amount });
+    transfers.settleTransferMoney({ playerId: player.id, buyerTeam: buyer, sellerTeam, amount, clauses: aiClauses });
     applyNeedsTransfer(squadNeedsCache, playerCode, sellerTeam.id, buyer.id);
 
+    const clauseLines = aiClauses.map((c) => `• ${db.describeClause(c)}`).join('\n');
     db.prepare(`
       INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
       VALUES (@team_id, 'player_sold', @title, @body, @player_id, @related_team_id)
     `).run({
       team_id: sellerTeam.id,
       title: `Jogador vendido: ${player.name}`,
-      body: `O ${buyer.name} propôs ${amountFmt} por ${player.name} — igual ou acima do valor que pediste, e o jogador aceitou a mudança. A transferência foi concluída.`,
+      body: `O ${buyer.name} propôs ${amountFmt} por ${player.name} — igual ou acima do valor que pediste, e o jogador aceitou a mudança. A transferência foi concluída.${clauseLines ? `\n\nCláusulas do negócio:\n${clauseLines}` : ''}`,
       player_id: player.id,
       related_team_id: buyer.id,
     });
@@ -791,9 +801,10 @@ function runAiScoutingTick(squadNeedsCache) {
     const candidates = aiTeams
       .filter((t) => t.id !== sellerTeam.id)
       /* Um jogador em breakout_season chama a atenção de clubes bem mais
-         fortes do que seria normal para o seu nível atual (tolerance mais
-         larga) — é a "grande época atrai clubes maiores" pedida. */
-      .filter((t) => reputationCompatible(t.reputation_stars, quality, isBreakout ? 1.8 : 1.1))
+         fortes do que seria normal para o seu nível atual — mas só nesse
+         caso: um clube grande não anda atrás de reforços fracos só porque
+         precisa da posição (ver reputationCompatible acima). */
+      .filter((t) => reputationCompatible(t.reputation_stars, quality, { breakout: isBreakout }))
       .filter((t) => t.transfer_budget >= referenceValue * tierRatio);
     if (!candidates.length) return;
 
@@ -822,10 +833,13 @@ function runAiScoutingTick(squadNeedsCache) {
     if (sellerTeam.is_user_controlled) {
       logInterestMessage(buyer, sellerTeam, player);
 
+      const aiClauses = transfers.maybeGenerateAiClauses({ player, buyerTeam: buyer, sellerTeam, amount });
+      const clauseLines = aiClauses.map((c) => `• ${db.describeClause(c)}`).join('\n');
+
       const offerInfo = db.prepare(`
-        INSERT INTO transfer_offers (player_id, buyer_team_id, seller_team_id, offer_amount, status)
-        VALUES (@player_id, @buyer_team_id, @seller_team_id, @offer_amount, 'pending')
-      `).run({ player_id: player.id, buyer_team_id: buyer.id, seller_team_id: sellerTeam.id, offer_amount: amount });
+        INSERT INTO transfer_offers (player_id, buyer_team_id, seller_team_id, offer_amount, status, clauses_json)
+        VALUES (@player_id, @buyer_team_id, @seller_team_id, @offer_amount, 'pending', @clauses_json)
+      `).run({ player_id: player.id, buyer_team_id: buyer.id, seller_team_id: sellerTeam.id, offer_amount: amount, clauses_json: JSON.stringify(aiClauses) });
 
       const msgInfo = db.prepare(`
         INSERT INTO messages (team_id, type, title, body, player_id, related_team_id, transfer_offer_id)
@@ -833,7 +847,7 @@ function runAiScoutingTick(squadNeedsCache) {
       `).run({
         team_id: sellerTeam.id,
         title: `Proposta recebida: ${player.name}`,
-        body: `O ${buyer.name} quer comprar ${player.name} por ${amountFmt}, mesmo não estando na lista de transferências. Aceita ou recusa a proposta.`,
+        body: `O ${buyer.name} quer comprar ${player.name} por ${amountFmt}, mesmo não estando na lista de transferências.${clauseLines ? ` A proposta inclui as seguintes cláusulas:\n${clauseLines}` : ''} Aceita, recusa ou contrapropõe.`,
         player_id: player.id,
         related_team_id: buyer.id,
         transfer_offer_id: offerInfo.lastInsertRowid,
@@ -884,24 +898,15 @@ function runAiScoutingTick(squadNeedsCache) {
       wage_text: `£${Number(decision.wageOffer).toLocaleString('pt-PT')} p/s`, contract_end: contractEndText,
     });
 
-    db.prepare('UPDATE teams SET balance = balance + @amount, transfer_budget = transfer_budget + @amount, updated_at = datetime(\'now\') WHERE id = @id')
-      .run({ amount, id: sellerTeam.id });
-    db.prepare('UPDATE teams SET balance = balance - @amount, transfer_budget = transfer_budget - @amount, updated_at = datetime(\'now\') WHERE id = @id')
-      .run({ amount, id: buyer.id });
-
-    /* Atualiza os objetos em memória (mesma referência dentro de aiTeams) para
-       que o resto deste tick veja logo o orçamento correto de ambas as
-       equipas, em vez de trabalhar com valores desatualizados. */
-    sellerTeam.balance += amount;
-    sellerTeam.transfer_budget += amount;
-    buyer.balance -= amount;
-    buyer.transfer_budget -= amount;
+    const aiClauses = transfers.maybeGenerateAiClauses({ player, buyerTeam: buyer, sellerTeam, amount });
+    transfers.settleTransferMoney({ playerId: player.id, buyerTeam: buyer, sellerTeam, amount, clauses: aiClauses });
     applyNeedsTransfer(squadNeedsCache, playerCode, sellerTeam.id, buyer.id);
 
+    const clauseLines = aiClauses.map((c) => `• ${db.describeClause(c)}`).join('\n');
     db.logMarketNews({
       type: 'transfer_completed',
       headline: `${player.name} muda-se para o ${buyer.name}`,
-      body: `${player.name} foi transferido do ${sellerTeam.name} para o ${buyer.name} por ${amountFmt}.`,
+      body: `${player.name} foi transferido do ${sellerTeam.name} para o ${buyer.name} por ${amountFmt}.${clauseLines ? `\n\nCláusulas do negócio:\n${clauseLines}` : ''}`,
       player_name: player.name, player_photo: player.photo_path,
       from_team_name: sellerTeam.name, from_team_shield: sellerTeam.shield_path,
       to_team_name: buyer.name, to_team_shield: buyer.shield_path,
@@ -1424,6 +1429,7 @@ router.post('/advance', (req, res) => {
   /* Empréstimos: jogadores cuja loan_return_date chegou voltam hoje
      automaticamente ao clube de origem — ver routes/transfers.js. */
   transfers.runLoanReturnsIfDue(nextDateStr);
+  db.runInstallmentClausesTick(nextDateStr);
 
   /* Cache partilhada das necessidades do plantel (por posição) para este
      avanço de dia — assim as duas funções abaixo veem sempre a versão mais

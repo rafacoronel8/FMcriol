@@ -325,6 +325,7 @@ document.querySelectorAll('.tab').forEach((tab) => {
     if (tab.dataset.tab === 'inscritos') loadInscritos();
     if (tab.dataset.tab === 'tatica') loadTactics();
     if (tab.dataset.tab === 'mercado') { loadMarketNews(); loadWindowSummary(); }
+    if (tab.dataset.tab === 'clausulas') loadClauses();
     if (tab.dataset.tab === 'campeonato') loadLeague();
     if (tab.dataset.tab === 'taca') loadCup();
   });
@@ -2373,6 +2374,59 @@ function renderWindowSummary(data){
   }).join('');
 
   card.classList.remove('hidden');
+}
+
+/* ---------- Aba Cláusulas ---------- */
+const CLAUSE_TYPE_LABELS = {
+  installments: '💷 Pagamento em prestações',
+  goal_bonus: '🎯 Prémio por golos',
+  sell_on_percentage: '📈 Percentagem de próxima venda',
+};
+
+async function loadClauses(){
+  const list = el('clausesList');
+  const empty = el('clausesEmpty');
+  list.innerHTML = '<p class="placeholder-text">A carregar…</p>';
+  try{
+    const res = await fetch('/api/transfers/clauses');
+    if(!res.ok) throw new Error();
+    const data = await res.json();
+    const clauses = data.clauses || [];
+
+    if(!clauses.length){
+      list.innerHTML = '';
+      empty.classList.remove('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+
+    list.innerHTML = clauses.map((c) => {
+      const photo = c.player_photo ? `<img class="clause-item-photo" src="${c.player_photo}" alt="">` : '<div class="clause-item-photo"></div>';
+      const beneficiaryShield = c.beneficiary_shield ? `<img src="${c.beneficiary_shield}" alt="">` : '';
+      const obligorShield = c.obligor_shield ? `<img src="${c.obligor_shield}" alt="">` : '';
+      const statusLabel = c.status === 'fulfilled' ? 'Cumprida' : 'Ativa';
+      let progress = '';
+      if(c.type === 'installments'){
+        progress = `${c.months_paid}/${c.months} prestações pagas`;
+      }else if(c.type === 'goal_bonus'){
+        progress = `${c.goals_scored_since}/${c.goals_threshold} golos`;
+      }
+      return `
+        <div class="clause-item">
+          ${photo}
+          <div class="clause-item-main">
+            <div class="clause-item-title">${CLAUSE_TYPE_LABELS[c.type] || 'Cláusula'} — ${c.player_name || '—'}</div>
+            <div class="clause-item-teams">${obligorShield}<span>${c.obligor_name || '—'}</span><span class="arrow">→</span>${beneficiaryShield}<span>${c.beneficiary_name || '—'}</span></div>
+            <div class="clause-item-desc">${c.description}</div>
+            ${progress ? `<div class="clause-item-progress">${progress}</div>` : ''}
+          </div>
+          <div class="clause-item-status ${c.status}">${statusLabel}</div>
+        </div>`;
+    }).join('');
+  }catch(err){
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+  }
 }
 
 function openNewsModal(newsId){

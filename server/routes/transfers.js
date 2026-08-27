@@ -223,21 +223,115 @@ function decidePlayerConsent(player, buyerTeam, sellerTeam) {
 }
 
 /* Próximo 1 de julho a partir da data atual do calendário do jogo — usado
-   como data de regresso de um empréstimo (ver reunião de transferência
-   abaixo). O mercado só está aberto entre 1 e 31 de julho (ver
-   isMarketWindowOpen em db/database.js), por isso uma reunião só pode
-   acontecer dentro dessa janela — "a época seguinte" começa sempre no
-   1 de julho do ANO SEGUINTE ao da data atual. */
+   como data de regresso de um empréstimo proposto na reunião de
+   transferência (ver abaixo), quando não é dada nenhuma duração concreta.
+   O mercado só está aberto entre 1 e 31 de julho (ver isMarketWindowOpen em
+   db/database.js), por isso uma reunião só pode acontecer dentro dessa
+   janela — "a época seguinte" começa sempre no 1 de julho do ANO SEGUINTE
+   ao da data atual. */
 function nextJulyFirst(currentDateStr) {
   const year = Number(String(currentDateStr).slice(0, 4));
   return `${year + 1}-07-01`;
 }
 
+/* Durações de empréstimo aceites numa proposta (POST /api/transfers/offer,
+   is_loan=true) — em meses, a contar da data atual do jogo. */
+const VALID_LOAN_MONTHS = [3, 6, 12, 18, 24];
+
+/* Decide, ao acaso, se um negócio entre clubes geridos pelo jogo (ou uma
+   proposta que um clube gerido pelo jogo faça a um jogador do utilizador)
+   vem com alguma cláusula — mantém a maior parte dos negócios simples
+   (só dinheiro), mas dá alguma variedade à aba "Cláusulas". Nunca gera
+   mais do que uma cláusula de cada vez. */
+function maybeGenerateAiClauses({ player, buyerTeam, sellerTeam, amount }) {
+  if (!sellerTeam || !(amount > 0)) return [];
+  if (Math.random() > 0.22) return [];
+
+  const age = ageFromBirthDate(player.birth_date);
+  const poorBuyer = ['Pobre', 'Muito Pobre'].includes(buyerTeam.financial_tier);
+  const roll = Math.random();
+
+  if (poorBuyer && roll < 0.55) {
+    const months = [6, 12, 18][Math.floor(Math.random() * 3)];
+    return [{ type: 'installments', total_amount: Math.round(amount), months }];
+  }
+  if (age <= 22 && roll < 0.85) {
+    const percentage = [10, 15, 20, 25][Math.floor(Math.random() * 4)];
+    return [{ type: 'sell_on_percentage', percentage }];
+  }
+  const threshold = 5 + Math.floor(Math.random() * 10);
+  const bonus = Math.round(amount * (0.08 + Math.random() * 0.12));
+  return [{ type: 'goal_bonus', goals_threshold: threshold, bonus_amount: bonus }];
+}
+
+
+/* ---------- Dinheiro de uma venda definitiva, já com o negócio fechado ----------
+   Faz sempre as duas coisas juntas: reparte o valor entre orçamento de
+   transferências (transfer_budget, ajustado já de uma vez, tal como numa
+   venda normal) e saldo (balance) — mas, se houver uma cláusula de
+   prestações, o SALDO só é ajustado aos poucos, mês a mês (ver
+   runInstallmentClausesTick em db/database.js), embora a CAPACIDADE de
+   orçamento dos dois clubes mude já toda de uma vez, exatamente como
+   aconteceria numa venda a pronto — e materializa as cláusulas acordadas
+   (db.materializeClauses) e cobra logo qualquer percentagem de revenda que
+   o clube vendedor deva a um dono anterior do jogador (db.triggerSellOnClauses).
+   Partilhado entre finalizePlayerMove (abaixo) e as vendas automáticas
+   entre clubes geridos pelo jogo em routes/game.js, para as duas vias
+   seguirem sempre exatamente as mesmas regras de dinheiro e cláusulas. */
+function settleTransferMoney({ playerId, buyerTeam, sellerTeam, amount, clauses = [], transferOfferId = null }) {
+  const hasInstallments = clauses.some((c) => c.type === 'installments');
+
+  if (sellerTeam) {
+    if (hasInstallments) {
+      db.prepare("UPDATE teams SET transfer_budget = transfer_budget + @amount, updated_at = datetime('now') WHERE id = @id")
+        .run({ amount, id: sellerTeam.id });
+      sellerTeam.transfer_budget += amount;
+    } else {
+      db.prepare("UPDATE teams SET balance = balance + @amount, transfer_budget = transfer_budget + @amount, updated_at = datetime('now') WHERE id = @id")
+        .run({ amount, id: sellerTeam.id });
+      sellerTeam.balance += amount;
+      sellerTeam.transfer_budget += amount;
+    }
+  }
+
+  if (hasInstallments) {
+    db.prepare("UPDATE teams SET transfer_budget = transfer_budget - @amount, updated_at = datetime('now') WHERE id = @id")
+      .run({ amount, id: buyerTeam.id });
+    buyerTeam.transfer_budget -= amount;
+  } else {
+    db.prepare("UPDATE teams SET balance = balance - @amount, transfer_budget = transfer_budget - @amount, updated_at = datetime('now') WHERE id = @id")
+      .run({ amount, id: buyerTeam.id });
+    buyerTeam.balance -= amount;
+    buyerTeam.transfer_budget -= amount;
+  }
+
+  if (sellerTeam && amount > 0) {
+    db.triggerSellOnClauses({ playerId, sellingTeamId: sellerTeam.id, saleAmount: amount });
+  }
+  if (sellerTeam && clauses.length) {
+    db.materializeClauses({ transferOfferId, playerId, buyerTeamId: buyerTeam.id, sellerTeamId: sellerTeam.id, clauses });
+  }
+}
+
+/* Decide, com um pequeno viés a favor (é temporário, não uma venda
+   definitiva), se o próprio jogador aceita ser emprestado — mesma ideia de
+   decidePlayerConsent, reaproveitada tanto por POST /api/transfers/offer
+   (proposta de empréstimo em primeira mão) como pela reunião de
+   transferência (PUT /meetings/:id/respond, ação 'loan'). */
+function decideLoanConsent(player, buyerTeam, sellerTeam) {
+  const repDelta = (buyerTeam.reputation_stars - (sellerTeam?.reputation_stars ?? buyerTeam.reputation_stars)) / 5;
+  const luck = (Math.random() * 0.2) - 0.1;
+  const boost = Number(player.consent_boost) || 0;
+  return ((repDelta * 0.6) + luck + 0.2 + boost) > 0;
+}
+
 /* Concretiza a mudança de clube de um jogador, com ou sem empréstimo —
    partilhado entre a aceitação normal de uma proposta (PUT
-   /:id/respond) e a reunião de transferência (PUT /meetings/:id/respond),
-   para as duas seguirem sempre exatamente as mesmas regras. */
-function finalizePlayerMove({ player, buyerTeam, sellerTeam, wageOffer, amount, isLoan, loanReturnDate }) {
+   /:id/respond), a proposta de empréstimo (POST /offer) e a reunião de
+   transferência (PUT /meetings/:id/respond), para todas seguirem sempre
+   exatamente as mesmas regras. `clauses` só se aplica a vendas definitivas
+   — nunca a empréstimos. */
+function finalizePlayerMove({ player, buyerTeam, sellerTeam, wageOffer, amount, isLoan, loanReturnDate, clauses = [], transferOfferId = null }) {
   const contractEndText = computeContractEndText();
 
   if (isLoan) {
@@ -251,6 +345,11 @@ function finalizePlayerMove({ player, buyerTeam, sellerTeam, wageOffer, amount, 
       team_id: buyerTeam.id, loan_from_team_id: sellerTeam ? sellerTeam.id : player.team_id,
       loan_return_date: loanReturnDate, player_id: player.id,
     });
+    if (amount > 0) {
+      /* A taxa de empréstimo (se houver) é sempre paga a pronto — não faz
+         sentido parcelar uma taxa de empréstimo, que já é temporária. */
+      settleTransferMoney({ playerId: player.id, buyerTeam, sellerTeam, amount, clauses: [], transferOfferId });
+    }
     return;
   }
 
@@ -261,12 +360,7 @@ function finalizePlayerMove({ player, buyerTeam, sellerTeam, wageOffer, amount, 
     WHERE id = @player_id
   `).run({ team_id: buyerTeam.id, player_id: player.id, wage_text: `£${Number(wageOffer).toLocaleString('pt-PT')} p/s`, contract_end: contractEndText });
 
-  if (sellerTeam) {
-    db.prepare("UPDATE teams SET balance = balance + @amount, transfer_budget = transfer_budget + @amount, updated_at = datetime('now') WHERE id = @id")
-      .run({ amount, id: sellerTeam.id });
-  }
-  db.prepare("UPDATE teams SET balance = balance - @amount, transfer_budget = transfer_budget - @amount, updated_at = datetime('now') WHERE id = @id")
-    .run({ amount, id: buyerTeam.id });
+  settleTransferMoney({ playerId: player.id, buyerTeam, sellerTeam, amount, clauses, transferOfferId });
 }
 
 /* ---------- Empréstimos: regresso automático ao clube de origem ----------
@@ -306,14 +400,26 @@ function runLoanReturnsIfDue(nextDateStr) {
   return due.length;
 }
 
-/* ---------- POST /api/transfers/offer — enviar proposta financeira por um jogador ---------- */
+/* ---------- POST /api/transfers/offer — enviar proposta financeira por um jogador ----------
+   Aceita tanto uma proposta de COMPRA definitiva como uma proposta de
+   EMPRÉSTIMO (is_loan=true, loan_duration_months em {3,6,12,18,24}), e
+   pode vir acompanhada de até 3 cláusulas (clauses: pagamento em
+   prestações / prémio por golos / percentagem de próxima venda — ver
+   db.normalizeClauseSpecs). As cláusulas nunca se aplicam a empréstimos. */
 router.post('/offer', (req, res) => {
-  const { player_id, buyer_team_id, offer_amount } = req.body;
-  const offerAmount = Number(offer_amount);
+  const { player_id, buyer_team_id, offer_amount, is_loan, loan_duration_months } = req.body;
+  const offerAmount = Number(offer_amount) || 0;
+  const isLoan = !!is_loan;
 
-  if (!player_id || !buyer_team_id || !offerAmount || offerAmount <= 0) {
+  if (!player_id || !buyer_team_id || (!isLoan && !(offerAmount > 0))) {
     return res.status(400).json({ error: 'Dados da proposta incompletos' });
   }
+  if (isLoan && !VALID_LOAN_MONTHS.includes(Number(loan_duration_months))) {
+    return res.status(400).json({ error: 'Indica uma duração de empréstimo válida (3, 6, 12, 18 ou 24 meses)' });
+  }
+
+  const clauses = isLoan ? [] : db.normalizeClauseSpecs(req.body.clauses);
+  if (clauses === null) return res.status(400).json({ error: 'Cláusulas inválidas na proposta' });
 
   if (!db.isMarketWindowOpen()) {
     return res.status(400).json({ error: 'O mercado de transferências está fechado. Só há uma janela de mercado por jogo.' });
@@ -339,28 +445,106 @@ router.post('/offer', (req, res) => {
   logInterestMessage(buyerTeam, sellerTeam, player);
 
   const referenceValue = estimateMarketValue(player);
+  const offerFmt = `£${Math.round(offerAmount).toLocaleString('pt-PT')}`;
+  const clauseLines = clauses.map((c) => `• ${db.describeClause(c)}`).join('\n');
+
+  /* ---------- Proposta de empréstimo — decisão bem mais leniente do que
+     uma venda definitiva, e sem cláusulas: quanto mais importante o
+     jogador for para o plantel atual (roleWeight), mais relutante fica o
+     clube vendedor em emprestá-lo. */
+  if (isLoan) {
+    const importance = roleWeight(player.club_status);
+    const willingness = 0.75 - importance * 0.11 + Math.min(0.15, offerAmount / 50_000);
+    const luck = (Math.random() * 0.2) - 0.1;
+    const clubAccepts = (willingness + luck) > 0.28;
+
+    if (!clubAccepts) {
+      const info = db.prepare(`
+        INSERT INTO transfer_offers (player_id, buyer_team_id, seller_team_id, offer_amount, status, resolved_at, is_loan, loan_duration_months)
+        VALUES (@player_id, @buyer_team_id, @seller_team_id, @offer_amount, 'rejected', datetime('now'), 1, @loan_duration_months)
+      `).run({ player_id, buyer_team_id, seller_team_id: player.team_id, offer_amount: offerAmount, loan_duration_months: Number(loan_duration_months) });
+
+      db.prepare(`
+        INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
+        VALUES (@team_id, 'transfer_rejected', @title, @body, @player_id, @related_team_id)
+      `).run({
+        team_id: buyer_team_id, player_id, related_team_id: player.team_id,
+        title: `Empréstimo recusado: ${player.name}`,
+        body: `O ${sellerTeam?.name || 'clube'} não quer emprestar ${player.name} de momento. Tenta de novo mais tarde ou propõe uma taxa de empréstimo mais alta.`,
+      });
+      return res.status(201).json(db.prepare('SELECT * FROM transfer_offers WHERE id = ?').get(info.lastInsertRowid));
+    }
+
+    const state = db.prepare('SELECT game_state.current_date FROM game_state WHERE id = 1').get();
+    const loanReturnDate = db.addMonthsToIsoDate(state.current_date, Number(loan_duration_months));
+    const playerAccepts = decideLoanConsent(player, buyerTeam, sellerTeam);
+
+    const info = db.prepare(`
+      INSERT INTO transfer_offers (player_id, buyer_team_id, seller_team_id, offer_amount, status, resolved_at, is_loan, loan_duration_months)
+      VALUES (@player_id, @buyer_team_id, @seller_team_id, @offer_amount, @status, datetime('now'), 1, @loan_duration_months)
+    `).run({
+      player_id, buyer_team_id, seller_team_id: player.team_id, offer_amount: offerAmount,
+      loan_duration_months: Number(loan_duration_months), status: playerAccepts ? 'accepted' : 'rejected',
+    });
+
+    if (playerAccepts) {
+      finalizePlayerMove({ player, buyerTeam, sellerTeam, amount: offerAmount, isLoan: true, loanReturnDate, transferOfferId: info.lastInsertRowid });
+
+      db.prepare(`
+        INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
+        VALUES (@team_id, 'transfer_accepted', @title, @body, @player_id, @related_team_id)
+      `).run({
+        team_id: buyer_team_id, player_id, related_team_id: player.team_id,
+        title: `Empréstimo acordado: ${player.name}`,
+        body: `O ${sellerTeam?.name || 'clube'} e ${player.name} aceitaram o empréstimo${offerAmount ? ` (taxa de ${offerFmt})` : ''} — o jogador está no teu plantel até ${Number(loanReturnDate.slice(0, 4))}.`,
+      });
+      db.logMarketNews({
+        type: 'loan_agreed',
+        headline: `${player.name} sai por empréstimo para o ${buyerTeam.name}`,
+        body: `${player.name} muda-se por empréstimo do ${sellerTeam?.name || '—'} para o ${buyerTeam.name} até ${loanReturnDate}.`,
+        player_name: player.name, player_photo: player.photo_path,
+        from_team_name: sellerTeam?.name, from_team_shield: sellerTeam?.shield_path,
+        to_team_name: buyerTeam.name, to_team_shield: buyerTeam.shield_path,
+        amount: offerAmount || null,
+      });
+    } else {
+      db.prepare(`
+        INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
+        VALUES (@team_id, 'transfer_rejected', @title, @body, @player_id, @related_team_id)
+      `).run({
+        team_id: buyer_team_id, player_id, related_team_id: player.team_id,
+        title: `Empréstimo caiu: ${player.name}`,
+        body: `O ${sellerTeam?.name || 'clube'} aceitou emprestar ${player.name}, mas o próprio jogador recusou a mudança temporária.`,
+      });
+    }
+
+    return res.status(201).json(db.prepare('SELECT * FROM transfer_offers WHERE id = ?').get(info.lastInsertRowid));
+  }
+
+  /* ---------- Proposta de compra definitiva (com ou sem cláusulas) ---------- */
   const tierRatio = TIER_ACCEPT_RATIO[sellerTeam?.financial_tier] ?? 0.70;
   const reputationPremium = ((sellerTeam?.reputation_stars ?? 3) - 3) * 0.03;
   const abilityPremium = Math.max(0, (player.current_ability_stars ?? 2.5) - 3.5) * 0.05;
   const acceptRatio = tierRatio + reputationPremium + abilityPremium;
 
-  const offerRatio = offerAmount / referenceValue;
+  const clausesValue = db.estimateClausesValue(clauses, { player, referenceValue });
+  const effectiveAmount = (offerAmount * db.installmentDiscountFactor(clauses)) + clausesValue;
+  const offerRatio = effectiveAmount / referenceValue;
   const luck = (Math.random() * 0.16) - 0.08;
   const accepted = (offerRatio + luck) >= acceptRatio;
 
   const info = db.prepare(`
-    INSERT INTO transfer_offers (player_id, buyer_team_id, seller_team_id, offer_amount, status, resolved_at)
-    VALUES (@player_id, @buyer_team_id, @seller_team_id, @offer_amount, @status, datetime('now'))
+    INSERT INTO transfer_offers (player_id, buyer_team_id, seller_team_id, offer_amount, status, resolved_at, clauses_json)
+    VALUES (@player_id, @buyer_team_id, @seller_team_id, @offer_amount, @status, datetime('now'), @clauses_json)
   `).run({
     player_id, buyer_team_id, seller_team_id: player.team_id, offer_amount: offerAmount,
-    status: accepted ? 'accepted' : 'rejected',
+    status: accepted ? 'accepted' : 'rejected', clauses_json: JSON.stringify(clauses),
   });
 
-  const offerFmt = `£${Math.round(offerAmount).toLocaleString('pt-PT')}`;
   const title = accepted ? `Proposta aceite: ${player.name}` : `Proposta recusada: ${player.name}`;
   const body = accepted
-    ? `O ${sellerTeam?.name || 'clube'} aceitou a tua proposta de ${offerFmt} por ${player.name}. Já podes negociar o contrato com o jogador no perfil dele.`
-    : `O ${sellerTeam?.name || 'clube'} recusou a tua proposta de ${offerFmt} por ${player.name}. Tenta um valor mais alto ou volta a tentar mais tarde.`;
+    ? `O ${sellerTeam?.name || 'clube'} aceitou a tua proposta de ${offerFmt} por ${player.name}${clauseLines ? ` com as seguintes cláusulas:\n${clauseLines}` : ''}. Já podes negociar o contrato com o jogador no perfil dele.`
+    : `O ${sellerTeam?.name || 'clube'} recusou a tua proposta de ${offerFmt}${clauseLines ? ` (com cláusulas)` : ''} por ${player.name}. Tenta um valor mais alto, ajusta as cláusulas, ou volta a tentar mais tarde.`;
 
   db.prepare(`
     INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
@@ -371,7 +555,7 @@ router.post('/offer', (req, res) => {
     type: accepted ? 'offer_accepted' : 'offer_rejected',
     headline: accepted ? `${sellerTeam?.name || 'Clube'} aceita proposta por ${player.name}` : `${sellerTeam?.name || 'Clube'} recusa proposta por ${player.name}`,
     body: accepted
-      ? `O ${buyerTeam.name} propôs ${offerFmt} pelo passe de ${player.name} e o ${sellerTeam?.name || 'clube vendedor'} aceitou o negócio. Falta agora fechar os termos do contrato com o jogador.`
+      ? `O ${buyerTeam.name} propôs ${offerFmt} pelo passe de ${player.name}${clauseLines ? ` (com cláusulas)` : ''} e o ${sellerTeam?.name || 'clube vendedor'} aceitou o negócio. Falta agora fechar os termos do contrato com o jogador.`
       : `O ${buyerTeam.name} propôs ${offerFmt} pelo passe de ${player.name}, mas o ${sellerTeam?.name || 'clube vendedor'} recusou a oferta.`,
     player_name: player.name,
     player_photo: player.photo_path,
@@ -465,12 +649,38 @@ router.post('/:id/contract', (req, res) => {
       id: player.id,
     });
 
+    const clauses = (() => { try { return JSON.parse(transferOffer.clauses_json || '[]'); } catch { return []; } })();
+    const hasInstallments = clauses.some((c) => c.type === 'installments');
+
+    /* O comprador perde sempre a capacidade de orçamento (transfer_budget)
+       de uma vez, tal como em qualquer venda — só o SALDO (balance) fica
+       condicionado ao método de pagamento escolhido. */
     db.prepare(`
       UPDATE teams SET
-        balance = balance - @totalCost, transfer_budget = transfer_budget - @totalCost,
+        balance = balance - @cashNow, transfer_budget = transfer_budget - @totalCost,
         wage_budget = wage_budget - @wage_offer, updated_at = datetime('now')
       WHERE id = @id
-    `).run({ totalCost, wage_offer: wageOffer, id: buyerTeam.id });
+    `).run({
+      cashNow: hasInstallments ? signingBonus : totalCost, totalCost, wage_offer: wageOffer, id: buyerTeam.id,
+    });
+
+    if (sellerTeam) {
+      db.prepare(`
+        UPDATE teams SET
+          balance = balance + @cashNow, transfer_budget = transfer_budget + @amount, updated_at = datetime('now')
+        WHERE id = @id
+      `).run({ cashNow: hasInstallments ? 0 : transferOffer.offer_amount, amount: transferOffer.offer_amount, id: sellerTeam.id });
+
+      if (transferOffer.offer_amount > 0) {
+        db.triggerSellOnClauses({ playerId: player.id, sellingTeamId: sellerTeam.id, saleAmount: transferOffer.offer_amount });
+      }
+      if (clauses.length) {
+        db.materializeClauses({
+          transferOfferId: transferOffer.id, playerId: player.id,
+          buyerTeamId: buyerTeam.id, sellerTeamId: sellerTeam.id, clauses,
+        });
+      }
+    }
   }
 
   const title = accepted ? `Contrato assinado: ${player.name}` : `Jogador recusou o contrato: ${player.name}`;
@@ -579,7 +789,8 @@ function acceptOfferAtAmount(offer, player, buyerTeam, sellerTeam, amount) {
 
     db.prepare("UPDATE transfer_offers SET status = 'accepted', offer_amount = ?, resolved_at = datetime('now') WHERE id = ?")
       .run(amount, offer.id);
-    finalizePlayerMove({ player, buyerTeam, sellerTeam, wageOffer: consent.wageOffer, amount, isLoan: false });
+    const clauses = (() => { try { return JSON.parse(offer.clauses_json || '[]'); } catch { return []; } })();
+    finalizePlayerMove({ player, buyerTeam, sellerTeam, wageOffer: consent.wageOffer, amount, isLoan: false, clauses, transferOfferId: offer.id });
 
     const title = `Transferência aceite: ${player.name}`;
     const body = `Aceitaste a proposta do ${buyerTeam.name} de ${amountFmt} por ${player.name}. A transferência foi concluída.`;
@@ -693,6 +904,14 @@ router.put('/:id/counter', (req, res) => {
     return res.status(400).json({ error: 'Já não há mais rondas de negociação disponíveis para esta proposta — aceita ou recusa a oferta atual.' });
   }
 
+  /* O vendedor também pode pedir cláusulas na contraproposta (ex: "aceito
+     por menos dinheiro, mas quero 20% da próxima venda") — se não vier
+     nada no corpo do pedido, mantêm-se as cláusulas já em cima da mesa. */
+  const clauses = req.body.clauses !== undefined
+    ? db.normalizeClauseSpecs(req.body.clauses)
+    : (() => { try { return JSON.parse(offer.clauses_json || '[]'); } catch { return []; } })();
+  if (clauses === null) return res.status(400).json({ error: 'Cláusulas inválidas na contraproposta' });
+
   const player = db.prepare('SELECT * FROM players WHERE id = ?').get(offer.player_id);
   const buyerTeam = db.prepare('SELECT * FROM teams WHERE id = ?').get(offer.buyer_team_id);
   const sellerTeam = offer.seller_team_id ? db.prepare('SELECT * FROM teams WHERE id = ?').get(offer.seller_team_id) : null;
@@ -701,16 +920,28 @@ router.put('/:id/counter', (req, res) => {
   const ceiling = buyerCeiling(player, buyerTeam);
   const nextRound = offer.negotiation_round + 1;
 
-  if (counterAmount > ceiling * INSULT_MULTIPLIER) {
+  const referenceValue = estimateMarketValue(player);
+  const clausesValue = db.estimateClausesValue(clauses, { player, referenceValue });
+  const installmentDiscount = db.installmentDiscountFactor(clauses);
+  /* Quanto o comprador "sente" que está a pagar, já a contar com as
+     cláusulas — uma percentagem de revenda ou um prémio por golos tornam
+     um pedido mais alto mais aceitável; prestações tornam-no ligeiramente
+     menos apetecível (o dinheiro demora a chegar). */
+  const effectiveCounter = Math.max(0, (counterAmount * installmentDiscount) - clausesValue);
+
+  db.prepare('UPDATE transfer_offers SET clauses_json = ? WHERE id = ?').run(JSON.stringify(clauses), offer.id);
+  offer.clauses_json = JSON.stringify(clauses); // mantém o objeto em memória sincronizado para acceptOfferAtAmount, já mais abaixo
+
+  if (effectiveCounter > ceiling * INSULT_MULTIPLIER) {
     rejectOfferMessage(offer, player, buyerTeam, sellerTeam, { byBuyer: true });
     return res.json({ ok: true, status: 'rejected', reason: 'insulted' });
   }
 
-  if (counterAmount <= ceiling) {
+  if (effectiveCounter <= ceiling) {
     return res.json(acceptOfferAtAmount(offer, player, buyerTeam, sellerTeam, counterAmount));
   }
 
-  const raisedAmount = Math.min(ceiling, Math.round((offer.offer_amount + Math.min(counterAmount, ceiling)) / 2));
+  const raisedAmount = Math.min(ceiling, Math.round((offer.offer_amount + Math.min(effectiveCounter, ceiling)) / 2));
   const isFinalRound = nextRound >= MAX_NEGOTIATION_ROUNDS;
 
   db.prepare('UPDATE transfer_offers SET offer_amount = ?, negotiation_round = ? WHERE id = ?')
@@ -718,10 +949,11 @@ router.put('/:id/counter', (req, res) => {
 
   const raisedFmt = `£${Math.round(raisedAmount).toLocaleString('pt-PT')}`;
   const counterFmt = `£${Math.round(counterAmount).toLocaleString('pt-PT')}`;
+  const clauseLines = clauses.map((c) => `• ${db.describeClause(c)}`).join('\n');
   const title = `Nova oferta: ${player.name}`;
   const body = isFinalRound
-    ? `Pediste ${counterFmt} por ${player.name}. O ${buyerTeam.name} não chega lá, mas sobe a proposta para ${raisedFmt} — é a oferta final, sem mais margem para negociar. Aceita ou recusa.`
-    : `Pediste ${counterFmt} por ${player.name}. O ${buyerTeam.name} sobe a proposta para ${raisedFmt}. Podes aceitar, recusar, ou voltar a contrapropor.`;
+    ? `Pediste ${counterFmt} por ${player.name}${clauseLines ? ` com cláusulas:\n${clauseLines}` : ''}. O ${buyerTeam.name} não chega lá, mas sobe a proposta para ${raisedFmt} — é a oferta final, sem mais margem para negociar. Aceita ou recusa.`
+    : `Pediste ${counterFmt} por ${player.name}${clauseLines ? ` com cláusulas:\n${clauseLines}` : ''}. O ${buyerTeam.name} sobe a proposta para ${raisedFmt}. Podes aceitar, recusar, ou voltar a contrapropor.`;
 
   db.prepare(`
     INSERT INTO messages (team_id, type, title, body, player_id, related_team_id, transfer_offer_id)
@@ -796,7 +1028,9 @@ router.put('/meetings/:id/respond', (req, res) => {
     const consent = decidePlayerConsent(boostedPlayer, buyerTeam, sellerTeam);
 
     if (consent.accepted) {
-      finalizePlayerMove({ player: boostedPlayer, buyerTeam, sellerTeam, wageOffer: consent.wageOffer, amount: meeting.offer_amount, isLoan: false });
+      const originalOffer = db.prepare('SELECT clauses_json FROM transfer_offers WHERE id = ?').get(meeting.transfer_offer_id);
+      const clauses = (() => { try { return JSON.parse(originalOffer?.clauses_json || '[]'); } catch { return []; } })();
+      finalizePlayerMove({ player: boostedPlayer, buyerTeam, sellerTeam, wageOffer: consent.wageOffer, amount: meeting.offer_amount, isLoan: false, clauses, transferOfferId: meeting.transfer_offer_id });
 
       resolution = `Disseste a ${player.name} que não faz parte dos teus planos — ele reconsiderou e aceitou mudar-se para o ${buyerTeam.name} por ${amountFmt}.`;
       resultStatus = 'accepted_after_talk';
@@ -973,5 +1207,29 @@ router.get('/window-summary', (req, res) => {
   });
 });
 
+/* ---------- GET /api/transfers/clauses — aba "Cláusulas" do Mercado ----------
+   TODAS as cláusulas de transferência atualmente ativas (ainda por cumprir)
+   e as cumpridas mais recentemente, de qualquer negócio — envolvendo o
+   utilizador ou só entre clubes geridos pelo jogo — com o jogador, as duas
+   equipas envolvidas e uma descrição pronta a mostrar. */
+router.get('/clauses', (req, res) => {
+  const rows = db.prepare(`
+    SELECT tc.*,
+           p.name AS player_name, p.photo_path AS player_photo,
+           b.name AS beneficiary_name, b.shield_path AS beneficiary_shield,
+           o.name AS obligor_name, o.shield_path AS obligor_shield
+    FROM transfer_clauses tc
+    JOIN players p ON p.id = tc.player_id
+    LEFT JOIN teams b ON b.id = tc.beneficiary_team_id
+    LEFT JOIN teams o ON o.id = tc.obligor_team_id
+    ORDER BY (tc.status = 'active') DESC, tc.created_at DESC
+    LIMIT 200
+  `).all();
+
+  res.json({ clauses: rows });
+});
+
 module.exports = router;
 module.exports.runLoanReturnsIfDue = runLoanReturnsIfDue;
+module.exports.settleTransferMoney = settleTransferMoney;
+module.exports.maybeGenerateAiClauses = maybeGenerateAiClauses;

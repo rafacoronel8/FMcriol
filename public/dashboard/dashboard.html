@@ -32,6 +32,7 @@
   <button class="tab active" data-tab="visaoGeral">Visão Geral</button>
   <button class="tab" data-tab="inscritos">Inscritos</button>
   <button class="tab" data-tab="mercado">Mercado</button>
+  <button class="tab" data-tab="clausulas">Cláusulas</button>
   <button class="tab" data-tab="meuClube">Meu Clube</button>
   <button class="tab" data-tab="minhaEquipa">Minha Equipa</button>
   <button class="tab" data-tab="tatica">Tática</button>
@@ -89,6 +90,17 @@
         <p class="market-hint">Todas as transferências concluídas, por ordem de relevância</p>
         <div class="window-summary-list" id="windowSummaryList"></div>
       </div>
+    </div>
+  </section>
+
+  <section class="tab-panel hidden" id="panel-clausulas">
+    <div class="card">
+      <div class="messages-header">
+        <div class="card-title no-margin">Cláusulas de Transferência</div>
+        <span class="market-hint">Todas as cláusulas de negócios já fechados — de qualquer clube</span>
+      </div>
+      <div class="clauses-list" id="clausesList"></div>
+      <p class="placeholder-text hidden" id="clausesEmpty">Ainda não há nenhuma cláusula ativa. Propõe pagamentos em prestações, prémios por golos ou percentagens de revenda numa proposta de transferência para começarem a aparecer aqui.</p>
     </div>
   </section>
 

@@ -414,4 +414,3 @@ router.put('/questions/:id/respond', (req, res) => {
 
 module.exports = router;
 module.exports.runMoraleTick = runMoraleTick;
-module.exports.PERSONALITY_TIERS = db.PERSONALITY_TIERS;

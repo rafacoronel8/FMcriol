@@ -5,14 +5,55 @@ const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
 
+const crypto = require('crypto');
+
+/* ==========================================================
+   Um save por dispositivo
+   ==========================================================
+   Cada browser/dispositivo tem o seu PRÓPRIO ficheiro .db, identificado
+   por um cookie (fmcriol_device). Isto evita que abrir o jogo no
+   telemóvel e no PC ao mesmo tempo parta o MESMO save global.
+
+   Como todos os routers fazem `const db = require('../db/database')`
+   uma única vez, no arranque, e depois chamam db.prepare(...)/db.exec(...)
+   diretamente, o objeto exportado aqui não é uma ligação SQLite normal:
+   é um "proxy" que redireciona cada chamada para a ligação do
+   dispositivo do pedido HTTP em curso (guardada em `currentConnection`,
+   atualizada pelo middleware attachDeviceContext logo no início de cada
+   pedido — ver server.js, que o regista ANTES de todas as rotas).
+
+   Isto funciona porque o better-sqlite3 é síncrono: dentro de um único
+   pedido não há nenhum "await" entre o middleware e as chamadas à base
+   de dados, por isso não há troca de dispositivo a meio de um pedido.
+   (Se algum dia se introduzir uma chamada assíncrona ENTRE
+   attachDeviceContext e o uso de `db` num handler, isso deixa de ser
+   garantido — ver aviso na função attachDeviceContext.) */
+
 const DB_DIR = path.join(__dirname, '..', 'data');
-const DB_PATH = path.join(DB_DIR, 'fmcriol.db');
+const LEGACY_DB_PATH = path.join(DB_DIR, 'fmcriol.db');
+const DEVICE_COOKIE_NAME = 'fmcriol_device';
+const DEVICE_COOKIE_MAX_AGE_MS = 10 * 365 * 24 * 60 * 60 * 1000; // ~10 anos
 
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+function devicePathFor(deviceId) {
+  return path.join(DB_DIR, `fmcriol_${deviceId}.db`);
+}
+
+/* Cria a ligação SQLite crua para um ficheiro .db (sem schema) */
+function openConnection(dbFilePath) {
+  const conn = new Database(dbFilePath);
+  conn.pragma('journal_mode = WAL');
+  conn.pragma('foreign_keys = ON');
+  return conn;
+}
+
+/* Todo o schema/migrações do jogo, aplicado a UMA ligação.
+   (Corpo igual ao que existia antes de haver dispositivos — só passou
+   a viver dentro desta função para poder ser repetido por cada
+   dispositivo em vez de correr uma única vez no arranque.) */
+function initializeSchema(db) {
+
 
 /* ---------- Tabela de equipas ---------- */
 db.exec(`
@@ -311,6 +352,353 @@ CREATE INDEX IF NOT EXISTS idx_contract_offers_team ON contract_offers(team_id);
                          original, ainda sem nenhuma contraproposta tua). */
 const transferOfferCols = db.prepare("PRAGMA table_info(transfer_offers)").all().map((c) => c.name);
 if (!transferOfferCols.includes('negotiation_round')) db.exec('ALTER TABLE transfer_offers ADD COLUMN negotiation_round INTEGER NOT NULL DEFAULT 0');
+
+/* ---------- Migração segura: empréstimos e cláusulas numa proposta ----------
+   is_loan/loan_duration_months -> a proposta é de EMPRÉSTIMO em vez de compra
+                                    definitiva (ver POST /api/transfers/offer);
+                                    offer_amount passa a ser a taxa de
+                                    empréstimo (pode ser 0).
+   clauses_json                 -> cláusulas ainda em NEGOCIAÇÃO nesta
+                                    proposta (prestações / prémio por golos /
+                                    percentagem de próxima venda) — só passam
+                                    a registos ATIVOS em transfer_clauses
+                                    (abaixo) quando o negócio fecha de vez. */
+if (!transferOfferCols.includes('is_loan')) db.exec('ALTER TABLE transfer_offers ADD COLUMN is_loan INTEGER NOT NULL DEFAULT 0');
+if (!transferOfferCols.includes('loan_duration_months')) db.exec('ALTER TABLE transfer_offers ADD COLUMN loan_duration_months INTEGER');
+if (!transferOfferCols.includes('clauses_json')) db.exec("ALTER TABLE transfer_offers ADD COLUMN clauses_json TEXT NOT NULL DEFAULT '[]'");
+
+/* ---------- Cláusulas de transferência (registos ATIVOS, já fora da negociação) ----------
+   Vivem à parte de transfer_offers (que só guarda o que está "em cima da
+   mesa" enquanto a proposta ainda não fechou). Mal um negócio se concretiza
+   — venda definitiva, nunca empréstimo — ver materializeClauses() abaixo,
+   chamada a partir de finalizePlayerMove/settleTransferMoney em
+   routes/transfers.js (usada também pelas vendas automáticas entre clubes
+   geridos pelo jogo, em routes/game.js).
+
+   - installments      -> em vez de um valor único, o comprador paga o total
+                           em prestações mensais (ex: 12x de £2.916 = £35.000).
+                           Só mexe no SALDO (balance) de cada clube, mês a
+                           mês — o orçamento de transferências (transfer_budget)
+                           de ambos já foi ajustado de uma vez, no momento em
+                           que o negócio fechou, tal como uma venda normal.
+   - goal_bonus         -> se o jogador chegar a `goals_threshold` golos
+                           PELO CLUBE COMPRADOR (obligor_team_id), o clube
+                           vendedor (beneficiary_team_id) recebe um prémio de
+                           `bonus_amount`, tirado do saldo do comprador. Só
+                           dispara uma vez.
+   - sell_on_percentage -> se o clube comprador (obligor_team_id) alguma vez
+                           voltar a VENDER o jogador, o clube que o vendeu
+                           agora (beneficiary_team_id) fica com `percentage`%
+                           desse valor. Só se aplica à PRÓXIMA venda. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS transfer_clauses (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  transfer_offer_id   INTEGER REFERENCES transfer_offers(id) ON DELETE SET NULL,
+  player_id           INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  beneficiary_team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  obligor_team_id     INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  type                TEXT NOT NULL CHECK (type IN ('installments','goal_bonus','sell_on_percentage')),
+  description         TEXT NOT NULL DEFAULT '',
+  total_amount        REAL,
+  months              INTEGER,
+  months_paid         INTEGER NOT NULL DEFAULT 0,
+  monthly_amount      REAL,
+  next_payment_date   TEXT,
+  goals_threshold     INTEGER,
+  bonus_amount        REAL,
+  goals_scored_since  INTEGER NOT NULL DEFAULT 0,
+  percentage          REAL,
+  status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','fulfilled','cancelled')),
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  fulfilled_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_transfer_clauses_player ON transfer_clauses(player_id);
+CREATE INDEX IF NOT EXISTS idx_transfer_clauses_status ON transfer_clauses(status);
+`);
+
+const CLAUSE_TYPES = ['installments', 'goal_bonus', 'sell_on_percentage'];
+
+/* Texto pronto a mostrar (caixa de entrada, notícias, aba Cláusulas) para
+   qualquer cláusula, seja ainda só uma proposta (sem monthly_amount
+   calculado) ou já um registo ativo em transfer_clauses. */
+function describeClause(c) {
+  const fmt = (n) => `£${Math.round(Number(n) || 0).toLocaleString('pt-PT')}`;
+  if (c.type === 'installments') {
+    const monthly = c.monthly_amount ?? (c.total_amount / c.months);
+    return `Pagamento em ${c.months}x de ${fmt(monthly)} (total ${fmt(c.total_amount)})`;
+  }
+  if (c.type === 'goal_bonus') {
+    return `Prémio de ${fmt(c.bonus_amount)} se o jogador chegar aos ${c.goals_threshold} golos`;
+  }
+  if (c.type === 'sell_on_percentage') {
+    return `${Number(c.percentage).toFixed(0)}% do valor da próxima venda do jogador`;
+  }
+  return '';
+}
+db.describeClause = describeClause;
+
+/* Valida e normaliza a lista de cláusulas vinda do corpo do pedido (ver
+   routes/transfers.js) — nunca confia em valores vindos do frontend sem
+   passar primeiro por aqui. Devolve null se alguma cláusula for inválida,
+   [] se não vier nenhuma. */
+function normalizeClauseSpecs(rawClauses) {
+  if (rawClauses == null) return [];
+  if (!Array.isArray(rawClauses)) return null;
+  const out = [];
+  for (const raw of rawClauses) {
+    if (!raw || !CLAUSE_TYPES.includes(raw.type)) return null;
+    if (raw.type === 'installments') {
+      const total = Number(raw.total_amount);
+      const months = Number(raw.months);
+      if (!(total > 0) || !Number.isInteger(months) || months < 2 || months > 36) return null;
+      out.push({ type: 'installments', total_amount: total, months });
+    } else if (raw.type === 'goal_bonus') {
+      const threshold = Number(raw.goals_threshold);
+      const bonus = Number(raw.bonus_amount);
+      if (!Number.isInteger(threshold) || threshold < 1 || threshold > 60 || !(bonus > 0)) return null;
+      out.push({ type: 'goal_bonus', goals_threshold: threshold, bonus_amount: bonus });
+    } else if (raw.type === 'sell_on_percentage') {
+      const pct = Number(raw.percentage);
+      if (!(pct > 0) || pct > 50) return null;
+      out.push({ type: 'sell_on_percentage', percentage: pct });
+    }
+  }
+  if (out.length > 3) return null; // no máximo 3 cláusulas por proposta, para a caixa de entrada não ficar ilegível
+  return out;
+}
+db.normalizeClauseSpecs = normalizeClauseSpecs;
+
+/* Adiciona meses a uma data ISO do calendário do JOGO (nunca o do
+   computador) — usado para agendar a próxima prestação de uma cláusula de
+   pagamento faseado (ver runInstallmentClausesTick). */
+function addMonthsToIsoDate(isoDateStr, months) {
+  const [y, m, d] = isoDateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1 + months, d));
+  const yyyy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+db.addMonthsToIsoDate = addMonthsToIsoDate;
+
+function ageFromBirthDateShared(birthDate) {
+  if (!birthDate) return 25;
+  const b = new Date(birthDate);
+  if (Number.isNaN(b.getTime())) return 25;
+  return Math.floor((Date.now() - b.getTime()) / (365.25 * 24 * 3600 * 1000));
+}
+
+/* Estima o valor "efetivo" que as cláusulas de prémio/revenda acrescentam a
+   uma proposta, para pesar na decisão do clube vendedor de aceitar ou não
+   — ver POST /api/transfers/offer e PUT /api/transfers/:id/counter. Nunca
+   entra em jogo no dinheiro realmente movimentado (isso só acontece quando
+   o negócio fecha, ver materializeClauses). A cláusula de prestações não
+   soma valor aqui — é só um MÉTODO de pagamento, não dinheiro extra; o
+   desconto por essa demora é tratado à parte, em installmentDiscountFactor. */
+function estimateClausesValue(clauses, { player, referenceValue }) {
+  if (!clauses || !clauses.length) return 0;
+  let value = 0;
+  clauses.forEach((c) => {
+    if (c.type === 'goal_bonus') {
+      const chance = Math.max(0.05, Math.min(0.85, 0.85 - c.goals_threshold * 0.04));
+      value += c.bonus_amount * chance * 0.7;
+    } else if (c.type === 'sell_on_percentage') {
+      const age = player ? ageFromBirthDateShared(player.birth_date) : 25;
+      const growthFactor = age <= 21 ? 1.5 : age <= 25 ? 1.15 : 0.7;
+      value += (c.percentage / 100) * referenceValue * growthFactor * 0.5;
+    }
+  });
+  return value;
+}
+db.estimateClausesValue = estimateClausesValue;
+
+/* Desconto que uma cláusula de prestações aplica ao valor "sentido" pelo
+   clube vendedor — receber tudo já vale mais do que receber aos poucos,
+   por mais meses que demore o total a ser o mesmo. */
+function installmentDiscountFactor(clauses) {
+  const installment = (clauses || []).find((c) => c.type === 'installments');
+  if (!installment) return 1;
+  return Math.max(0.85, 1 - Math.max(0, installment.months - 3) * 0.015);
+}
+db.installmentDiscountFactor = installmentDiscountFactor;
+
+/* ---------- Materializa as cláusulas de um negócio já fechado ----------
+   Chamado sempre que uma venda definitiva (nunca um empréstimo) se
+   concretiza — ver settleTransferMoney em routes/transfers.js, usada tanto
+   pela venda "normal" (finalizePlayerMove) como pelas vendas automáticas
+   entre clubes geridos pelo jogo (routes/game.js). */
+function materializeClauses({ transferOfferId = null, playerId, buyerTeamId, sellerTeamId, clauses }) {
+  if (!clauses || !clauses.length || !sellerTeamId) return [];
+  const state = db.prepare('SELECT game_state.current_date FROM game_state WHERE id = 1').get();
+  const insert = db.prepare(`
+    INSERT INTO transfer_clauses
+      (transfer_offer_id, player_id, beneficiary_team_id, obligor_team_id, type, description,
+       total_amount, months, monthly_amount, next_payment_date,
+       goals_threshold, bonus_amount, percentage)
+    VALUES
+      (@transfer_offer_id, @player_id, @beneficiary_team_id, @obligor_team_id, @type, @description,
+       @total_amount, @months, @monthly_amount, @next_payment_date,
+       @goals_threshold, @bonus_amount, @percentage)
+  `);
+
+  const created = [];
+  clauses.forEach((c) => {
+    const monthlyAmount = c.type === 'installments' ? Math.round((c.total_amount / c.months) * 100) / 100 : null;
+    const row = {
+      transfer_offer_id: transferOfferId, player_id: playerId,
+      beneficiary_team_id: sellerTeamId, obligor_team_id: buyerTeamId,
+      type: c.type,
+      total_amount: c.total_amount ?? null, months: c.months ?? null,
+      monthly_amount: monthlyAmount,
+      next_payment_date: c.type === 'installments' ? addMonthsToIsoDate(state.current_date, 1) : null,
+      goals_threshold: c.goals_threshold ?? null, bonus_amount: c.bonus_amount ?? null,
+      percentage: c.percentage ?? null,
+      description: describeClause({ ...c, monthly_amount: monthlyAmount }),
+    };
+    const info = insert.run(row);
+    created.push({ id: info.lastInsertRowid, ...row });
+  });
+  return created;
+}
+db.materializeClauses = materializeClauses;
+
+/* ---------- Prestações em atraso ----------
+   Chamado a partir de POST /api/game/advance (routes/game.js), tal como o
+   regresso dos empréstimos — só mexe no SALDO (balance) de cada clube,
+   nunca no orçamento de transferências (já foi todo ajustado quando o
+   negócio fechou, ver materializeClauses). */
+function runInstallmentClausesTick(nextDateStr) {
+  const due = db.prepare(`
+    SELECT * FROM transfer_clauses
+    WHERE type = 'installments' AND status = 'active' AND next_payment_date <= ?
+  `).all(nextDateStr);
+
+  due.forEach((c) => {
+    db.prepare("UPDATE teams SET balance = balance - @amt, updated_at = datetime('now') WHERE id = @id")
+      .run({ amt: c.monthly_amount, id: c.obligor_team_id });
+    db.prepare("UPDATE teams SET balance = balance + @amt, updated_at = datetime('now') WHERE id = @id")
+      .run({ amt: c.monthly_amount, id: c.beneficiary_team_id });
+
+    const monthsPaid = c.months_paid + 1;
+    const finished = monthsPaid >= c.months;
+    db.prepare(`
+      UPDATE transfer_clauses SET months_paid = @months_paid, next_payment_date = @next_payment_date,
+        status = @status, fulfilled_at = @fulfilled_at
+      WHERE id = @id
+    `).run({
+      months_paid: monthsPaid,
+      next_payment_date: finished ? null : addMonthsToIsoDate(nextDateStr, 1),
+      status: finished ? 'fulfilled' : 'active',
+      fulfilled_at: finished ? new Date().toISOString() : null,
+      id: c.id,
+    });
+
+    if (finished) {
+      const player = db.prepare('SELECT name FROM players WHERE id = ?').get(c.player_id);
+      const beneficiary = db.prepare('SELECT name, is_user_controlled FROM teams WHERE id = ?').get(c.beneficiary_team_id);
+      const obligor = db.prepare('SELECT name FROM teams WHERE id = ?').get(c.obligor_team_id);
+      if (beneficiary?.is_user_controlled) {
+        db.prepare(`
+          INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
+          VALUES (@team_id, 'clause_fulfilled', @title, @body, @player_id, @related_team_id)
+        `).run({
+          team_id: c.beneficiary_team_id, player_id: c.player_id, related_team_id: c.obligor_team_id,
+          title: `💷 Última prestação recebida: ${player?.name || ''}`,
+          body: `O ${obligor?.name || 'clube'} pagou a última prestação da venda de ${player?.name || 'jogador'}. O pagamento em prestações está concluído.`,
+        });
+      }
+    }
+  });
+
+  return due.length;
+}
+db.runInstallmentClausesTick = runInstallmentClausesTick;
+
+/* ---------- Prémio por golos ----------
+   Chamado a partir de applySeasonStat (mais abaixo neste ficheiro) sempre
+   que se regista qualquer jogo (amigável, Campeonato ou Taça) em que o
+   jogador tenha marcado. Só conta golos pelo CLUBE OBRIGADO (o comprador
+   da altura em que a cláusula nasceu) — se o jogador já tiver mudado de
+   clube outra vez entretanto, deixa de somar para esta cláusula. */
+function checkGoalBonusClauses(playerId, goalsInMatch) {
+  if (!goalsInMatch) return;
+  const player = db.prepare('SELECT team_id, name FROM players WHERE id = ?').get(playerId);
+  if (!player || !player.team_id) return;
+
+  const clauses = db.prepare(`
+    SELECT * FROM transfer_clauses
+    WHERE type = 'goal_bonus' AND status = 'active' AND player_id = ? AND obligor_team_id = ?
+  `).all(playerId, player.team_id);
+
+  clauses.forEach((c) => {
+    const goalsScored = c.goals_scored_since + goalsInMatch;
+    const triggered = goalsScored >= c.goals_threshold;
+    db.prepare('UPDATE transfer_clauses SET goals_scored_since = ?, status = ?, fulfilled_at = ? WHERE id = ?')
+      .run(goalsScored, triggered ? 'fulfilled' : 'active', triggered ? new Date().toISOString() : null, c.id);
+
+    if (triggered) {
+      db.prepare("UPDATE teams SET balance = balance - @amt, updated_at = datetime('now') WHERE id = @id")
+        .run({ amt: c.bonus_amount, id: c.obligor_team_id });
+      db.prepare("UPDATE teams SET balance = balance + @amt, updated_at = datetime('now') WHERE id = @id")
+        .run({ amt: c.bonus_amount, id: c.beneficiary_team_id });
+
+      const beneficiary = db.prepare('SELECT name, is_user_controlled FROM teams WHERE id = ?').get(c.beneficiary_team_id);
+      const obligor = db.prepare('SELECT name FROM teams WHERE id = ?').get(c.obligor_team_id);
+      if (beneficiary?.is_user_controlled) {
+        db.prepare(`
+          INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
+          VALUES (@team_id, 'clause_fulfilled', @title, @body, @player_id, @related_team_id)
+        `).run({
+          team_id: c.beneficiary_team_id, player_id: playerId, related_team_id: c.obligor_team_id,
+          title: `🎯 Prémio por golos ativado: ${player.name}`,
+          body: `${player.name} chegou aos ${c.goals_threshold} golos pelo ${obligor?.name || 'novo clube'} — a cláusula do contrato de venda deu-te um prémio de £${Math.round(c.bonus_amount).toLocaleString('pt-PT')}.`,
+        });
+      }
+    }
+  });
+}
+db.checkGoalBonusClauses = checkGoalBonusClauses;
+
+/* ---------- Percentagem de próxima venda ----------
+   Chamado sempre que um jogador é vendido por dinheiro (nunca em
+   empréstimos) — ver settleTransferMoney em routes/transfers.js. Só
+   dispara para cláusulas cujo obligor_team_id seja EXATAMENTE quem está
+   agora a vender (o comprador da altura em que a cláusula nasceu), e só
+   uma vez — depois disso fica cumprida, mesmo que o jogador mude de clube
+   outra vez mais tarde. */
+function triggerSellOnClauses({ playerId, sellingTeamId, saleAmount }) {
+  if (!saleAmount || saleAmount <= 0) return;
+  const clauses = db.prepare(`
+    SELECT * FROM transfer_clauses
+    WHERE type = 'sell_on_percentage' AND status = 'active' AND player_id = ? AND obligor_team_id = ?
+  `).all(playerId, sellingTeamId);
+
+  clauses.forEach((c) => {
+    const cut = Math.round(saleAmount * (c.percentage / 100));
+    if (cut <= 0) return;
+
+    db.prepare("UPDATE teams SET balance = balance - @amt, updated_at = datetime('now') WHERE id = @id")
+      .run({ amt: cut, id: sellingTeamId });
+    db.prepare("UPDATE teams SET balance = balance + @amt, updated_at = datetime('now') WHERE id = @id")
+      .run({ amt: cut, id: c.beneficiary_team_id });
+    db.prepare("UPDATE transfer_clauses SET status = 'fulfilled', fulfilled_at = datetime('now') WHERE id = ?").run(c.id);
+
+    const player = db.prepare('SELECT name FROM players WHERE id = ?').get(playerId);
+    const beneficiary = db.prepare('SELECT name, is_user_controlled FROM teams WHERE id = ?').get(c.beneficiary_team_id);
+    const seller = db.prepare('SELECT name FROM teams WHERE id = ?').get(sellingTeamId);
+    if (beneficiary?.is_user_controlled) {
+      db.prepare(`
+        INSERT INTO messages (team_id, type, title, body, player_id, related_team_id)
+        VALUES (@team_id, 'clause_fulfilled', @title, @body, @player_id, @related_team_id)
+      `).run({
+        team_id: c.beneficiary_team_id, player_id: playerId, related_team_id: sellingTeamId,
+        title: `💰 Percentagem de revenda recebida: ${player?.name || ''}`,
+        body: `O ${seller?.name || 'clube'} vendeu ${player?.name || 'o jogador'} e, pela cláusula de ${c.percentage}% que tinhas na venda original, recebeste £${cut.toLocaleString('pt-PT')}.`,
+      });
+    }
+  });
+}
+db.triggerSellOnClauses = triggerSellOnClauses;
 
 /* ---------- Calendário do jogo: uma única linha com a data atual ---------- */
 db.exec(`
@@ -904,6 +1292,11 @@ function applySeasonStat(playerId, competitionRowName, stats) {
 
   db.prepare("UPDATE players SET season_stats_json = ?, updated_at = datetime('now') WHERE id = ?")
     .run(JSON.stringify(rows), playerId);
+
+  /* Cláusula de prémio por golos (ver mais abaixo, checkGoalBonusClauses) —
+     centralizado aqui porque TODOS os golos de qualquer jogo (amigável,
+     Campeonato, Taça, ao vivo ou simulado) passam sempre por esta função. */
+  if (goals) checkGoalBonusClauses(playerId, goals);
 }
 db.applySeasonStat = applySeasonStat;
 
@@ -1351,5 +1744,144 @@ CREATE TABLE IF NOT EXISTS staff (
 );
 CREATE INDEX IF NOT EXISTS idx_staff_team ON staff(team_id);
 `);
+
+
+  return db;
+}
+
+/* ---------- Registo de ligações já abertas, uma por dispositivo ---------- */
+const connectionsByDevice = new Map();
+
+function getOrCreateDeviceConnection(deviceId) {
+  let conn = connectionsByDevice.get(deviceId);
+  if (conn) return conn;
+
+  const dbFilePath = devicePathFor(deviceId);
+  const isNewFile = !fs.existsSync(dbFilePath);
+
+  // Se é um dispositivo novo, criar o seu save
+  // a partir da base original com todas as equipas/jogadores.
+  if (isNewFile && fs.existsSync(LEGACY_DB_PATH)) {
+    try {
+      fs.copyFileSync(LEGACY_DB_PATH, dbFilePath);
+      console.log(`📋 Base inicial copiada para o dispositivo ${deviceId}`);
+    } catch (err) {
+      console.error('❌ Erro ao copiar a base inicial:', err);
+    }
+  }
+
+  conn = openConnection(dbFilePath);
+  initializeSchema(conn);
+
+  connectionsByDevice.set(deviceId, conn);
+
+  if (isNewFile) {
+    console.log(`🆕 Novo save criado para o dispositivo ${deviceId} (${dbFilePath})`);
+  }
+
+  return conn;
+}
+
+/* Ligação usada AGORA (durante o pedido HTTP em curso). Ver aviso no
+   comentário grande acima sobre a garantia de sincronismo. */
+let currentConnection = null;
+
+/* Migra o save antigo (data/fmcriol.db, de antes de existir o conceito de
+   dispositivo) para o PRIMEIRO dispositivo que aparecer sem cookie ainda —
+   assim quem já estava a jogar não perde o progresso. Só acontece uma vez:
+   depois de migrado, o ficheiro antigo é preservado mas deixa de ser usado
+   (fica como cópia de segurança). */
+let legacyMigrationDone = false;
+function migrateLegacySaveIfNeeded(deviceId) {
+  if (legacyMigrationDone) return;
+  legacyMigrationDone = true;
+  if (connectionsByDevice.size > 0) return; // já há dispositivos -> nada a migrar
+  if (!fs.existsSync(LEGACY_DB_PATH)) return; // nunca houve save antigo
+  const targetPath = devicePathFor(deviceId);
+  if (fs.existsSync(targetPath)) return; // já existe um ficheiro para este dispositivo
+  try {
+    fs.copyFileSync(LEGACY_DB_PATH, targetPath);
+    console.log(`♻️  Save antigo (fmcriol.db) migrado para o dispositivo ${deviceId}`);
+  } catch (err) {
+    console.error('Falha ao migrar o save antigo para o novo formato por dispositivo:', err);
+  }
+}
+
+/* Lê o cookie fmcriol_device manualmente (sem depender do cookie-parser,
+   que não está registado no server.js). */
+function readDeviceCookie(req) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  const parts = header.split(';');
+  for (const part of parts) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const name = part.slice(0, idx).trim();
+    if (name === DEVICE_COOKIE_NAME) {
+      return decodeURIComponent(part.slice(idx + 1).trim());
+    }
+  }
+  return null;
+}
+
+/* ---------- Middleware: app.use(db.attachDeviceContext) ----------
+   Tem de ser o PRIMEIRO middleware a tocar na base de dados (ver
+   server.js). Lê o cookie fmcriol_device; se não existir, cria um
+   dispositivo novo (UUID) e devolve o cookie no pedido. Depois liga
+   `currentConnection` à base de dados desse dispositivo, para que
+   qualquer db.prepare()/db.exec() chamado durante este pedido use o
+   ficheiro .db certo.
+
+   AVISO: se algum handler futuro fizer `await` (chamada assíncrona) ENTRE
+   este middleware e uma chamada a `db`, um pedido de OUTRO dispositivo
+   pode ser processado entretanto e mudar `currentConnection` primeiro —
+   nesse caso as chamadas à bd desse handler passariam a usar o save
+   errado. Enquanto todas as rotas usarem só better-sqlite3 (síncrono)
+   sem awaits pelo meio, isto é seguro. */
+function attachDeviceContext(req, res, next) {
+  let deviceId = readDeviceCookie(req);
+
+  if (!deviceId) {
+    deviceId = crypto.randomUUID();
+    res.cookie(DEVICE_COOKIE_NAME, deviceId, {
+      maxAge: DEVICE_COOKIE_MAX_AGE_MS,
+      httpOnly: true,
+      sameSite: 'lax',
+    });
+    migrateLegacySaveIfNeeded(deviceId);
+  }
+
+  req.deviceId = deviceId;
+  currentConnection = getOrCreateDeviceConnection(deviceId);
+  next();
+}
+
+/* ---------- Objeto exportado ----------
+   Continua a comportar-se como "a" ligação à base de dados para quem já
+   faz `const db = require('../db/database')` e chama db.prepare(...),
+   db.exec(...), db.transaction(...), db.AWARD_LABELS, etc. — só que por
+   baixo redireciona sempre para currentConnection (o dispositivo do
+   pedido em curso). attachDeviceContext é a única propriedade que não
+   vem da ligação SQLite. */
+const db = new Proxy({}, {
+  get(_target, prop, receiver) {
+    if (prop === 'attachDeviceContext') return attachDeviceContext;
+    if (!currentConnection) {
+      throw new Error(
+        'db acedido antes de attachDeviceContext correr — confirma que ' +
+        'app.use(db.attachDeviceContext) está registado antes de qualquer rota em server.js.'
+      );
+    }
+    const value = currentConnection[prop];
+    return typeof value === 'function' ? value.bind(currentConnection) : value;
+  },
+  set(_target, prop, value) {
+    if (!currentConnection) {
+      throw new Error('db acedido antes de attachDeviceContext correr.');
+    }
+    currentConnection[prop] = value;
+    return true;
+  },
+});
 
 module.exports = db;

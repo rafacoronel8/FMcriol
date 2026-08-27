@@ -1299,33 +1299,130 @@ async function setupBuySection(p, myId){
     ? `${p.name} recebe atualmente ${fmtMoneyNegotiate(currentWage)}/semana — normalmente só aceita um salário igual ou um pouco melhor do que esse.`
     : `Não sabemos o salário atual de ${p.name} — propõe um valor competitivo para o nível dele.`;
 
+  const offerModeSelect = el('offerMode');
+  const offerAmountLabel = el('offerAmountLabel');
+  const loanDurationField = el('loanDurationField');
+  const clausesEditor = el('clausesEditor');
+  const clausesEditorList = el('clausesEditorList');
+  const addClauseBtn = el('addClauseBtn');
+  const offerAmountInput = el('offerAmount');
+
+  const CLAUSE_FIELD_TEMPLATES = {
+    installments: (row) => `
+      <label class="field field-inline"><span>Total (£)</span><input type="number" min="1" class="clause-field" data-field="total_amount"></label>
+      <label class="field field-inline"><span>Nº de meses</span><input type="number" min="2" max="36" value="12" class="clause-field" data-field="months"></label>
+    `,
+    goal_bonus: () => `
+      <label class="field field-inline"><span>Golos necessários</span><input type="number" min="1" max="60" value="10" class="clause-field" data-field="goals_threshold"></label>
+      <label class="field field-inline"><span>Prémio (£)</span><input type="number" min="1" class="clause-field" data-field="bonus_amount"></label>
+    `,
+    sell_on_percentage: () => `
+      <label class="field field-inline"><span>Percentagem (%)</span><input type="number" min="1" max="50" value="15" class="clause-field" data-field="percentage"></label>
+    `,
+  };
+
+  function renderClauseFields(row){
+    const type = row.querySelector('.clause-type-select').value;
+    const fieldsWrap = row.querySelector('.clause-fields');
+    fieldsWrap.innerHTML = CLAUSE_FIELD_TEMPLATES[type](row);
+  }
+
+  function addClauseRow(){
+    const row = document.createElement('div');
+    row.className = 'clause-row';
+    row.innerHTML = `
+      <div class="clause-row-header">
+        <select class="clause-type-select">
+          <option value="installments">Pagamento em prestações</option>
+          <option value="goal_bonus">Prémio por golos</option>
+          <option value="sell_on_percentage">Percentagem de próxima venda</option>
+        </select>
+        <button type="button" class="btn-remove-clause" title="Remover cláusula">✕</button>
+      </div>
+      <div class="clause-fields"></div>
+    `;
+    row.querySelector('.clause-type-select').addEventListener('change', () => renderClauseFields(row));
+    row.querySelector('.btn-remove-clause').addEventListener('click', () => row.remove());
+    clausesEditorList.appendChild(row);
+    renderClauseFields(row);
+  }
+
+  function collectClauses(){
+    return Array.from(clausesEditorList.querySelectorAll('.clause-row')).map((row) => {
+      const type = row.querySelector('.clause-type-select').value;
+      const values = {};
+      row.querySelectorAll('.clause-field').forEach((input) => { values[input.dataset.field] = parseFloat(input.value); });
+      return { type, ...values };
+    });
+  }
+
+  addClauseBtn.addEventListener('click', addClauseRow);
+
+  offerModeSelect.addEventListener('change', () => {
+    const isLoan = offerModeSelect.value === 'loan';
+    loanDurationField.classList.toggle('hidden', !isLoan);
+    clausesEditor.classList.toggle('hidden', isLoan);
+    offerAmountLabel.textContent = isLoan ? 'Taxa de empréstimo (£, opcional)' : 'Valor da proposta (£)';
+    offerAmountInput.required = !isLoan;
+  });
+
   offerForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const amount = parseFloat(el('offerAmount').value);
-    if(!amount || amount <= 0) return;
+    const isLoan = offerModeSelect.value === 'loan';
+    const amount = parseFloat(offerAmountInput.value) || 0;
+    if(!isLoan && amount <= 0) return;
 
-    const btn = offerForm.querySelector('button');
+    const clauses = isLoan ? [] : collectClauses();
+    for(const c of clauses){
+      if(c.type === 'installments' && (!(c.total_amount > 0) || !(c.months >= 2))) {
+        offerResult.textContent = 'Preenche corretamente os valores da cláusula de prestações.';
+        offerResult.className = 'negotiate-result err';
+        return;
+      }
+      if(c.type === 'goal_bonus' && (!(c.goals_threshold >= 1) || !(c.bonus_amount > 0))) {
+        offerResult.textContent = 'Preenche corretamente os valores da cláusula de prémio por golos.';
+        offerResult.className = 'negotiate-result err';
+        return;
+      }
+      if(c.type === 'sell_on_percentage' && !(c.percentage > 0)) {
+        offerResult.textContent = 'Preenche corretamente a percentagem da cláusula de revenda.';
+        offerResult.className = 'negotiate-result err';
+        return;
+      }
+    }
+
+    const btn = offerForm.querySelector('button[type="submit"]');
     btn.disabled = true;
-    offerResult.textContent = 'A enviar proposta…';
+    offerResult.textContent = isLoan ? 'A propor empréstimo…' : 'A enviar proposta…';
     offerResult.className = 'negotiate-result';
 
     try{
       const res = await fetch('/api/transfers/offer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ player_id: p.id, buyer_team_id: myId, offer_amount: amount }),
+        body: JSON.stringify({
+          player_id: p.id, buyer_team_id: myId, offer_amount: amount,
+          is_loan: isLoan, loan_duration_months: isLoan ? Number(el('loanDurationMonths').value) : undefined,
+          clauses,
+        }),
       });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || 'Erro ao enviar proposta');
 
-      if(data.status === 'accepted'){
+      if(data.status === 'accepted' && !isLoan){
         offerResult.textContent = 'Proposta aceite! Agora propõe um contrato ao jogador.';
         offerResult.classList.add('ok');
         offerForm.classList.add('hidden');
         contractForm.classList.remove('hidden');
         contractForm.dataset.transferOfferId = data.id;
+      }else if(data.status === 'accepted' && isLoan){
+        offerResult.textContent = 'Empréstimo acordado! O jogador já está no teu plantel.';
+        offerResult.classList.add('ok');
+        offerForm.classList.add('hidden');
       }else{
-        offerResult.textContent = 'O clube recusou a proposta. Consulta a caixa de entrada e tenta um valor mais alto.';
+        offerResult.textContent = isLoan
+          ? 'O empréstimo não se realizou. Consulta a caixa de entrada para mais detalhes.'
+          : 'O clube recusou a proposta. Consulta a caixa de entrada e tenta um valor mais alto ou ajusta as cláusulas.';
         offerResult.classList.add('err');
       }
     }catch(err){
