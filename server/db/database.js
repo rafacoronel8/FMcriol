@@ -1,18 +1,51 @@
 /* ==========================================================
-   FMcriol — Ligação à base de dados (SQLite)
-   ========================================================== */
+   FMcriol — Ligação à base de dados (SQLite), uma por "dispositivo"
+   ==========================================================
+   Cada browser (identificado por um cookie fmcriol_device — ver
+   attachDeviceContext abaixo, montado em server.js) tem o seu PRÓPRIO
+   ficheiro .db, para abrir o jogo no telemóvel e no PC ao mesmo tempo
+   não misturar os dois saves. Toda a lógica de schema/migrações abaixo
+   é EXATAMENTE a mesma de antes — só passou a estar dentro de
+   buildDatabase(dbPath), chamada uma vez por dispositivo (a primeira vez
+   que esse cookie aparece), em vez de uma vez só à boleia do require(). */
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 const Database = require('better-sqlite3');
 
-const DB_DIR = path.join(__dirname, '..', 'data');
-const DB_PATH = path.join(DB_DIR, 'fmcriol.db');
-
+const DB_DIR = path.join(__dirname, '..', 'data', 'saves');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+/* ---------- Migração a partir do save único antigo ----------
+   Antes desta versão, havia só UM ficheiro (data/fmcriol.db) partilhado por
+   toda a gente. Para quem já tinha um jogo em curso nesse ficheiro, o
+   PRIMEIRO browser a aparecer sem cookie fica automaticamente "dono" desse
+   save antigo em vez de começar um save novo vazio — ver attachDeviceContext
+   abaixo. LEGACY_CLAIM_MARKER garante que isto só acontece uma única vez;
+   qualquer dispositivo a seguir (o teu telemóvel, por exemplo) já começa
+   mesmo do zero, como deve ser. */
+const LEGACY_DB_PATH = path.join(__dirname, '..', 'data', 'fmcriol.db');
+const LEGACY_CLAIM_MARKER = path.join(DB_DIR, '.legacy-claimed');
+function legacyAlreadyClaimed() {
+  return fs.existsSync(LEGACY_CLAIM_MARKER);
+}
+function claimLegacy() {
+  fs.writeFileSync(LEGACY_CLAIM_MARKER, new Date().toISOString());
+}
+
+/* deviceId só pode conter caracteres seguros para nome de ficheiro — um
+   cookie adulterado ou em falta nunca deve conseguir escapar da pasta
+   data/saves (ver sanitizeDeviceId, usado antes de montar o caminho). */
+function sanitizeDeviceId(rawId) {
+  const cleaned = String(rawId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  return cleaned && cleaned.length <= 64 ? cleaned : null;
+}
+
+function buildDatabase(dbPath) {
+  const db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
 
 /* ---------- Tabela de equipas ---------- */
 db.exec(`
@@ -1352,4 +1385,107 @@ CREATE TABLE IF NOT EXISTS staff (
 CREATE INDEX IF NOT EXISTS idx_staff_team ON staff(team_id);
 `);
 
-module.exports = db;
+  return db;
+} // ---------- fim de buildDatabase — tudo acima corre uma vez por dispositivo ----------
+
+/* ---------- Uma ligação por dispositivo, guardada em memória ----------
+   Reabrir o ficheiro .db a cada pedido seria lento e arriscado (bloqueios
+   de ficheiro); guarda-se a ligação já aberta por deviceId e reutiliza-se
+   em todos os pedidos seguintes desse dispositivo. */
+const connectionsByDevice = new Map();
+
+function getDeviceDatabase(deviceId) {
+  const safeId = sanitizeDeviceId(deviceId) || 'default';
+  let conn = connectionsByDevice.get(safeId);
+  if (!conn) {
+    const dbPath = safeId === 'legacy' ? LEGACY_DB_PATH : path.join(DB_DIR, `${safeId}.db`);
+    conn = buildDatabase(dbPath);
+    connectionsByDevice.set(safeId, conn);
+  }
+  return conn;
+}
+
+/* ---------- Contexto do pedido atual (qual dispositivo está a falar) ----------
+   attachDeviceContext (chamado em server.js, antes de qualquer rota) lê o
+   cookie fmcriol_device — criando um novo, aleatório, se ainda não existir
+   — e corre o resto do pedido "dentro" desse contexto. Como todas as
+   rotas desta aplicação são síncronas (better-sqlite3 é síncrono, sem
+   await pelo meio), isto chega para toda a cadeia de chamadas de um
+   pedido ver sempre o dispositivo certo, sem ter de passar `db` à mão por
+   todas as rotas. */
+const deviceContext = new AsyncLocalStorage();
+
+function attachDeviceContext(req, res, next) {
+  const cookies = String(req.headers.cookie || '').split(';').reduce((acc, part) => {
+    const idx = part.indexOf('=');
+    if (idx === -1) return acc;
+    acc[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+    return acc;
+  }, {});
+
+  const setDeviceCookie = (id) => {
+    res.setHeader('Set-Cookie', `fmcriol_device=${id}; Path=/; Max-Age=${60 * 60 * 24 * 365 * 5}; SameSite=Lax`);
+  };
+
+  let deviceId = sanitizeDeviceId(cookies.fmcriol_device);
+
+  if (!deviceId) {
+    /* Browser sem cookie — ou é mesmo a primeira visita de sempre, ou é a
+       transição para este sistema de saves por dispositivo. Se ainda
+       existir o save único antigo e ninguém o tiver reclamado ainda, este
+       é o browser que fica com ele. */
+    if (!legacyAlreadyClaimed() && fs.existsSync(LEGACY_DB_PATH)) {
+      deviceId = 'legacy';
+      claimLegacy();
+    } else {
+      deviceId = crypto.randomBytes(16).toString('hex');
+    }
+    setDeviceCookie(deviceId);
+  } else if (deviceId !== 'legacy' && !legacyAlreadyClaimed() && fs.existsSync(LEGACY_DB_PATH)) {
+    /* Cobre o caso de alguém já ter recebido um cookie novo (e vazio) nos
+       primeiros minutos depois desta atualização, antes desta correção —
+       se esse save novo ainda não tem NENHUMA equipa, é seguro assumir que
+       foi criado por engano e trazer de volta o save antigo em vez de
+       deixar o jogo "vazio" sem explicação. */
+    const emptyConn = getDeviceDatabase(deviceId);
+    const hasTeams = emptyConn.prepare('SELECT COUNT(*) AS n FROM teams').get().n > 0;
+    if (!hasTeams) {
+      deviceId = 'legacy';
+      claimLegacy();
+      setDeviceCookie(deviceId);
+    }
+  }
+
+  deviceContext.run(deviceId, next);
+}
+
+/* ---------- Objeto exportado ----------
+   Um Proxy: qualquer coisa que se peça a `db` (db.prepare(...), db.exec(...),
+   db.applySeasonStat(...), etc.) é encaminhada para a ligação do
+   dispositivo ATUAL (via AsyncLocalStorage). Isto significa que TODOS os
+   routes/*.js continuam a fazer `const db = require('../db/database')` e a
+   usá-lo exatamente como antes, sem precisar de saber nada sobre
+   dispositivos — só database.js e server.js (attachDeviceContext) é que
+   sabem que existe mais do que uma base de dados. */
+const dbProxy = new Proxy({}, {
+  get(target, prop) {
+    /* attachDeviceContext é middleware puro, não faz sentido reencaminhar
+       para nenhuma base de dados de dispositivo — atende-se sempre aqui,
+       mesmo fora de qualquer pedido (é usado em server.js antes de as
+       rotas correrem). */
+    if (prop === 'attachDeviceContext') return attachDeviceContext;
+    const deviceId = deviceContext.getStore();
+    const conn = getDeviceDatabase(deviceId);
+    const value = conn[prop];
+    return typeof value === 'function' ? value.bind(conn) : value;
+  },
+  set(target, prop, value) {
+    if (prop === 'attachDeviceContext') return true;
+    const deviceId = deviceContext.getStore();
+    const conn = getDeviceDatabase(deviceId);
+    conn[prop] = value;
+    return true;
+  },
+});
+
+module.exports = dbProxy;

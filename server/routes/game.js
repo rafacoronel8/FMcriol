@@ -311,12 +311,20 @@ router.get('/state', (req, res) => {
 /* ---------- Lista de transferências: interesse dos clubes por dia ----------
    Um clube só se interessa por um jogador se a reputação do clube for
    compatível com o nível do jogador (não anda atrás de qualquer um) e
-   se conseguir pagar o valor pedido. `tolerance` alarga esta margem — usado
-   para jogadores em "breakout_season" (ver runPlayerDevelopmentForSeason em
-   routes/league.js), que chamam a atenção de clubes bem mais fortes do que
-   seria normal depois de uma época de destaque. */
-function reputationCompatible(buyerReputation, playerQuality, tolerance = 1.1) {
-  return Math.abs(buyerReputation - playerQuality) <= tolerance;
+   se conseguir pagar o valor pedido.
+
+   A margem é ASSIMÉTRICA de propósito: um clube ambicioso a tentar subir de
+   nível e ir atrás de alguém MELHOR do que costuma contratar é normal (dá
+   sempre alguma margem, `upTolerance`). O contrário — um clube grande a
+   correr atrás de um jogador claramente mais fraco — só faz sentido se esse
+   jogador tiver tido mesmo uma época de destaque (breakout_season, ver
+   runPlayerDevelopmentForSeason em routes/league.js); sem isso, a margem
+   para "descer" é bem mais apertada, para os clubes grandes não andarem
+   sempre atrás de reforços fracos só porque calham a precisar da posição. */
+function reputationCompatible(buyerReputation, playerQuality, { breakout = false, upTolerance = 1.1, downTolerance = 0.6, breakoutDownTolerance = 1.8 } = {}) {
+  const gap = buyerReputation - playerQuality; // positivo = o comprador é mais forte do que o jogador
+  if (gap <= 0) return Math.abs(gap) <= upTolerance;
+  return gap <= (breakout ? breakoutDownTolerance : downTolerance);
 }
 
 /* Lê um número aproximado de um texto de salário tipo "£41.5K p/s" ou
@@ -503,7 +511,7 @@ function runTransferListTick(squadNeedsCache) {
     const quality = player.current_ability_stars ?? 2.5;
     const playerCode = getMainPositionCode(player.position_code);
     const candidates = db.prepare('SELECT * FROM teams WHERE id != ?').all(player.team_id)
-      .filter((t) => reputationCompatible(t.reputation_stars, quality))
+      .filter((t) => reputationCompatible(t.reputation_stars, quality, { breakout: !!player.breakout_season }))
       .filter((t) => t.transfer_budget >= player.asking_price);
     if (!candidates.length) return;
 
@@ -791,9 +799,10 @@ function runAiScoutingTick(squadNeedsCache) {
     const candidates = aiTeams
       .filter((t) => t.id !== sellerTeam.id)
       /* Um jogador em breakout_season chama a atenção de clubes bem mais
-         fortes do que seria normal para o seu nível atual (tolerance mais
-         larga) — é a "grande época atrai clubes maiores" pedida. */
-      .filter((t) => reputationCompatible(t.reputation_stars, quality, isBreakout ? 1.8 : 1.1))
+         fortes do que seria normal para o seu nível atual — mas só nesse
+         caso: um clube grande não anda atrás de reforços fracos só porque
+         precisa da posição (ver reputationCompatible acima). */
+      .filter((t) => reputationCompatible(t.reputation_stars, quality, { breakout: isBreakout }))
       .filter((t) => t.transfer_budget >= referenceValue * tierRatio);
     if (!candidates.length) return;
 
