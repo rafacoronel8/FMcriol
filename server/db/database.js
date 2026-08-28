@@ -1486,6 +1486,72 @@ function awardCupPrizeMoney(fixture) {
 }
 db.awardCupPrizeMoney = awardCupPrizeMoney;
 
+/* ---------- Prémios em dinheiro do Campeonato (Campeão + Lanterna-vermelha) ----------
+   Ao contrário dos prémios da Taça (creditados jogo a jogo, logo acima —
+   há sempre um vencedor por eliminatória), o Campeonato só tem UMA tabela
+   classificativa por época, por isso o prémio não pode ser distribuído aos
+   poucos: só existe mesmo no fim, quando a classificação final está
+   fechada. Pagos SEMPRE no dia 1 de Junho de cada época (data fixa,
+   independente de quando a última jornada calhou ter sido jogada — ver
+   awardLeagueSeasonPrizeMoney em routes/league.js, chamada a partir de
+   runLeagueTick), para o dinheiro já estar disponível bem antes da janela
+   de mercado de pré-época (1 a 31 de Julho, ver MARKET_WINDOW_MONTH) e dar
+   tempo ao utilizador (e à IA) de planear contratações com essa folga.
+
+   Campeão: £420.000. Último classificado: £30.000 — uma "rede de
+   segurança" para as equipas mais fracas não ficarem sem hipótese nenhuma
+   de reforçar o plantel na janela seguinte.
+
+   Guardado em season_prizes com UNIQUE(team_id, prize_type, season_label)
+   para nunca pagar em duplicado, mesmo que runLeagueTick corra mais que
+   uma vez depois de 1 de Junho para a mesma época (ex: dois avanços de dia
+   seguidos, ou um pedido repetido) — mesma proteção usada em
+   runSeasonRolloverIfDue para os troféus. Só o clube do utilizador recebe
+   mensagem na caixa de entrada; as outras equipas só veem o saldo mudar. */
+const LEAGUE_CHAMPION_PRIZE = 420000;
+const LEAGUE_LAST_PLACE_PRIZE = 30000;
+
+function grantSeasonPrize(teamId, prizeType, amount, seasonLabel, title, body) {
+  const already = db.prepare(`
+    SELECT 1 FROM season_prizes WHERE team_id = ? AND prize_type = ? AND season_label = ?
+  `).get(teamId, prizeType, seasonLabel);
+  if (already) return;
+
+  db.prepare("UPDATE teams SET balance = balance + ?, updated_at = datetime('now') WHERE id = ?").run(amount, teamId);
+  db.prepare(`
+    INSERT INTO season_prizes (team_id, prize_type, season_label, amount) VALUES (?, ?, ?, ?)
+  `).run(teamId, prizeType, seasonLabel, amount);
+
+  const team = db.prepare('SELECT is_user_controlled FROM teams WHERE id = ?').get(teamId);
+  if (team && team.is_user_controlled) {
+    db.prepare('INSERT INTO messages (team_id, type, title, body) VALUES (?, ?, ?, ?)').run(teamId, prizeType, title, body);
+  }
+}
+
+function awardLeagueSeasonPrizeMoney({ champion_team_id, last_place_team_id, season_label }) {
+  if (champion_team_id) {
+    const team = db.prepare('SELECT name FROM teams WHERE id = ?').get(champion_team_id);
+    const name = team ? team.name : 'A equipa';
+    const fmt = `£${LEAGUE_CHAMPION_PRIZE.toLocaleString('pt-PT')}`;
+    grantSeasonPrize(
+      champion_team_id, 'league_champion', LEAGUE_CHAMPION_PRIZE, season_label,
+      `💰 Prémio de Campeão: ${fmt}`,
+      `O ${name} sagrou-se Campeão e recebeu ${fmt} em prémios monetários pelo título — já a tempo do mercado de pré-época.`,
+    );
+  }
+  if (last_place_team_id && last_place_team_id !== champion_team_id) {
+    const team = db.prepare('SELECT name FROM teams WHERE id = ?').get(last_place_team_id);
+    const name = team ? team.name : 'A equipa';
+    const fmt = `£${LEAGUE_LAST_PLACE_PRIZE.toLocaleString('pt-PT')}`;
+    grantSeasonPrize(
+      last_place_team_id, 'league_last_place', LEAGUE_LAST_PLACE_PRIZE, season_label,
+      `💰 Prémio monetário: ${fmt}`,
+      `O ${name} terminou o Campeonato no último lugar, mas ainda assim recebeu ${fmt} em prémios monetários — já a tempo do mercado de pré-época.`,
+    );
+  }
+}
+db.awardLeagueSeasonPrizeMoney = awardLeagueSeasonPrizeMoney;
+
 /* ---------- Efeito do capitão na simulação de jogos ----------
    Um capitão com Liderança alta dá um pequeno empurrão extra à equipa
    (como se fosse mais um pouco de reputação); um capitão mal escolhido
@@ -1592,6 +1658,17 @@ CREATE TABLE IF NOT EXISTS player_awards (
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_player_awards_player ON player_awards(player_id);
+
+CREATE TABLE IF NOT EXISTS season_prizes (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id       INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  prize_type    TEXT NOT NULL CHECK (prize_type IN ('league_champion','league_last_place')),
+  season_label  TEXT NOT NULL,
+  amount        INTEGER NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(team_id, prize_type, season_label)
+);
+CREATE INDEX IF NOT EXISTS idx_season_prizes_team ON season_prizes(team_id);
 `);
 
 /* ---------- Migração segura: alarga o CHECK de award_key ----------

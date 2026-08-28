@@ -43,6 +43,16 @@ function nextAugustFirst(seasonStart) {
   return `${year + 1}-08-01`;
 }
 
+/* Data fixa em que os prémios monetários de fim de época do Campeonato
+   (Campeão + último classificado, ver awardLeagueSeasonPrizeMoneyIfDue
+   mais abaixo) são pagos — sempre 1 de Junho do ano em que a época em
+   curso termina, independentemente de quando a última jornada foi mesmo
+   jogada. */
+function juneFirstOfSeason(seasonStart) {
+  const year = Number(seasonStart.slice(0, 4));
+  return `${year + 1}-06-01`;
+}
+
 function addDaysToIsoDate(isoDateStr, days) {
   const [y, m, d] = isoDateStr.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d) + days * 86400000);
@@ -721,6 +731,44 @@ function runSeasonRolloverIfDue(nextDateStr) {
   }
 }
 
+/* ---------- Prémios em dinheiro de fim de época do Campeonato ----------
+   Campeão: £420.000. Último classificado: £30.000 (ver
+   db.awardLeagueSeasonPrizeMoney em db/database.js, que já trata da
+   proteção contra pagamentos em duplicado). Pagos sempre no dia 1 de
+   Junho — NUNCA ligados ao fim real da última jornada (que pode calhar
+   mais cedo ou mais tarde) nem ao "rollover" da época (sempre 1 de
+   Agosto seguinte, ver runSeasonRolloverIfDue) — para o dinheiro estar
+   disponível bem antes da janela de mercado de pré-época (1 a 31 de
+   Julho). Só paga quando a divisão tiver mesmo o Campeonato todo
+   disputado (senão "último classificado" ainda nem faz sentido); se 1 de
+   Junho passar sem isso acontecer, os prémios saem assim que a última
+   jornada em atraso for resolvida. */
+function awardLeagueSeasonPrizeMoneyIfDue(nextDateStr) {
+  const seasonStart = getCurrentSeasonStart();
+  const prizeDate = juneFirstOfSeason(seasonStart);
+  if (nextDateStr < prizeDate) return;
+
+  const seasonLabel = seasonLabelFor(seasonStart);
+  const divisions = db.prepare('SELECT DISTINCT division FROM teams').all().map((r) => r.division);
+
+  divisions.forEach((division) => {
+    const teams = db.prepare('SELECT id, name, shield_path FROM teams WHERE division = ?').all(division);
+    const fixtures = db.prepare(`
+      SELECT * FROM league_fixtures WHERE home_team_id IN (SELECT id FROM teams WHERE division = ?)
+    `).all(division);
+    if (!fixtures.length || fixtures.some((f) => f.status !== 'played')) return;
+
+    const standings = buildStandings(teams, fixtures);
+    if (!standings.length) return;
+
+    db.awardLeagueSeasonPrizeMoney({
+      champion_team_id: standings[0].team_id,
+      last_place_team_id: standings[standings.length - 1].team_id,
+      season_label: seasonLabel,
+    });
+  });
+}
+
 /* ---------- Avança o Campeonato ao chegar a uma nova data ----------
    Chamado a partir de POST /api/game/advance, ANTES de runFriendliesTick
    (routes/game.js) — para que, se hoje for dia de jogo do clube do
@@ -729,6 +777,7 @@ function runSeasonRolloverIfDue(nextDateStr) {
    qualquer amigável de hoje que envolva o utilizador). */
 function runLeagueTick(nextDateStr) {
   runSeasonRolloverIfDue(nextDateStr);
+  awardLeagueSeasonPrizeMoneyIfDue(nextDateStr);
   ensureSeasonFixtures();
 
   const due = db.prepare(`
