@@ -176,6 +176,13 @@
     </div>
 
     <div class="card">
+      <div class="card-title no-margin">🎖️ Capitania</div>
+      <p class="market-hint">Escolhe o capitão e o sub-capitão da equipa — normalmente no início de cada época. Aparecem destacados no plantel e no perfil de cada jogador.</p>
+      <div id="captaincyList" class="captaincy-list"></div>
+      <p class="placeholder-text hidden" id="captaincyEmpty">Ainda não tens jogadores no plantel.</p>
+    </div>
+
+    <div class="card">
       <div class="card-title no-margin">Comissão Técnica</div>
       <div id="staffHired" class="staff-hired-grid"></div>
       <p class="placeholder-text hidden" id="staffHiredEmpty">Ainda não contrataste ninguém para a comissão técnica.</p>
@@ -257,7 +264,7 @@
       </div>
 
       <div class="squad-pool-card">
-        <div class="card-title no-margin">Plantel <span class="squad-pool-hint">arrasta para o campo ou para os suplentes</span></div>
+        <div class="card-title no-margin">Plantel <span class="squad-pool-hint">arrasta para o campo ou para os suplentes — no telemóvel, toca no jogador e depois no destino</span></div>
         <div class="squad-pool" id="squadPool"><!-- gerado via JS --></div>
       </div>
 
@@ -432,6 +439,7 @@
 </main>
 
 <div id="newMsgToast" class="new-msg-toast hidden"></div>
+<div id="captaincyToast" class="new-msg-toast captaincy-toast hidden"></div>
 
 <div id="friendlyModalOverlay" class="news-modal-overlay hidden">
   <div class="news-modal">

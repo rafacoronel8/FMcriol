@@ -132,6 +132,145 @@ el('budgetSplitSlider').addEventListener('change', async (e) => {
   }
 });
 
+/* ---------- Capitania: escolher capitão e sub-capitão do plantel ----------
+   Reaproveita o mesmo GET /api/players?team_id= usado na Minha Equipa /
+   Inscritos, e o mesmo PATCH /api/players/:id usado para o número da
+   camisola — só que aqui a atualizar is_captain / is_vice_captain. Só pode
+   haver um capitão e um sub-capitão de cada vez, e nunca a mesma pessoa. */
+async function loadCaptaincy(){
+  const box = el('captaincyList');
+  const empty = el('captaincyEmpty');
+  try{
+    const res = await fetch(`/api/players?team_id=${teamId}`);
+    if(!res.ok) throw new Error();
+    const players = await res.json();
+    renderCaptaincy(players);
+  }catch(err){
+    box.innerHTML = '';
+    empty.textContent = 'Não foi possível carregar o plantel.';
+    empty.classList.remove('hidden');
+  }
+}
+
+function renderCaptaincy(players){
+  const box = el('captaincyList');
+  const empty = el('captaincyEmpty');
+
+  if(!players.length){
+    box.innerHTML = '';
+    empty.textContent = 'Ainda não tens jogadores no plantel.';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  const sorted = [...players].sort((a, b) => a.name.localeCompare(b.name, 'pt'));
+
+  box.innerHTML = sorted.map((p) => {
+    const avatar = p.photo_path ? `<img src="${p.photo_path}" alt="">` : '🧑';
+    return `
+      <div class="captaincy-row" data-id="${p.id}">
+        <div class="captaincy-avatar">${avatar}</div>
+        <div class="captaincy-info">
+          <div class="captaincy-name">${p.name}</div>
+          <div class="captaincy-position">${p.position_tag || 'Posição não definida'}</div>
+        </div>
+        <div class="captaincy-actions">
+          <button type="button" class="captaincy-btn captain${p.is_captain ? ' active' : ''}" data-role="captain">C Capitão</button>
+          <button type="button" class="captaincy-btn vice${p.is_vice_captain ? ' active' : ''}" data-role="vice">Sub-Capitão</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  box.querySelectorAll('.captaincy-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const row = btn.closest('.captaincy-row');
+      const playerId = Number(row.dataset.id);
+      const makeActive = !btn.classList.contains('active');
+      setCaptaincy(playerId, btn.dataset.role, makeActive);
+    });
+  });
+}
+
+async function setCaptaincy(playerId, role, makeActive){
+  const box = el('captaincyList');
+  box.querySelectorAll('.captaincy-btn').forEach((b) => { b.disabled = true; });
+
+  const field = role === 'captain' ? 'is_captain' : 'is_vice_captain';
+  const otherField = role === 'captain' ? 'is_vice_captain' : 'is_captain';
+
+  try{
+    const tasks = [];
+
+    if(makeActive){
+      // Tira o papel a quem o tinha antes — só pode haver um de cada.
+      box.querySelectorAll('.captaincy-row').forEach((row) => {
+        const id = Number(row.dataset.id);
+        if(id === playerId) return;
+        const otherBtn = row.querySelector(`.captaincy-btn[data-role="${role}"]`);
+        if(otherBtn && otherBtn.classList.contains('active')){
+          tasks.push(fetch(`/api/players/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ [field]: false }),
+          }));
+        }
+      });
+      // Atribui o papel a este jogador, e tira-lhe o outro papel (não pode
+      // ser capitão e sub-capitão ao mesmo tempo).
+      tasks.push(fetch(`/api/players/${playerId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: true, [otherField]: false }),
+      }));
+    }else{
+      tasks.push(fetch(`/api/players/${playerId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: false }),
+      }));
+    }
+
+    await Promise.all(tasks);
+  }catch(err){
+    // se falhar, recarrega para repor o estado real do servidor
+  }finally{
+    await loadCaptaincy();
+  }
+}
+
+/* Lembrete no início de nova época: se, depois da renovação de época, o
+   plantel ainda não tiver capitão escolhido, avisa o utilizador (só uma vez
+   por sessão) a ir escolher em Meu Clube — ver handleSeasonRolloverPopups. */
+let captaincyReminderShown = false;
+
+async function maybeRemindCaptaincy(){
+  if(captaincyReminderShown) return;
+  try{
+    const res = await fetch(`/api/players?team_id=${teamId}`);
+    if(!res.ok) return;
+    const players = await res.json();
+    if(!players.length || players.some((p) => p.is_captain)) return;
+    captaincyReminderShown = true;
+    showCaptaincyReminder();
+  }catch(err){
+    // sem drama — o utilizador escolhe quando quiser em Meu Clube
+  }
+}
+
+function showCaptaincyReminder(){
+  const toast = el('captaincyToast');
+  toast.textContent = '🎖️ Nova época — escolhe o capitão e o sub-capitão em Meu Clube';
+  toast.classList.remove('hidden');
+  clearTimeout(showCaptaincyReminder._t);
+  showCaptaincyReminder._t = setTimeout(() => toast.classList.add('hidden'), 8000);
+}
+
+el('captaincyToast').addEventListener('click', () => {
+  el('captaincyToast').classList.add('hidden');
+  document.querySelector('.tab[data-tab="meuClube"]')?.click();
+});
+
 /* ---------- Visão Geral: próximo jogo, posição na tabela, resumo do plantel ---------- */
 function renderOverviewNextMatch(list){
   const box = el('overviewNextMatch');
@@ -383,6 +522,7 @@ document.querySelectorAll('.tab').forEach((tab) => {
     tab.classList.add('active');
     el(`panel-${tab.dataset.tab}`).classList.remove('hidden');
     if (tab.dataset.tab === 'minhaEquipa') loadSquad();
+    if (tab.dataset.tab === 'meuClube') loadCaptaincy();
     if (tab.dataset.tab === 'inscritos') loadInscritos();
     if (tab.dataset.tab === 'tatica') loadTactics();
     if (tab.dataset.tab === 'mercado') { loadMarketNews(); loadWindowSummary(); }
@@ -721,6 +861,7 @@ document.addEventListener('click', (e) => {
 });
 
 loadClub();
+loadCaptaincy();
 
 /* ---------- Caixa de entrada (duas colunas: lista + detalhe, como o FM) ---------- */
 let knownMessageIds = new Set();
@@ -2185,6 +2326,8 @@ let galaShownForMsgId = null;
 let pendingGalaData = null;
 
 async function handleSeasonRolloverPopups(rolloverMsgId){
+  maybeRemindCaptaincy();
+
   if(ceremonyShownForMsgId === rolloverMsgId && galaShownForMsgId === rolloverMsgId) return; // já mostrado nesta sessão
 
   let awardsData = null;
@@ -2619,6 +2762,25 @@ let bench = new Array(8).fill(null); // 8 posições fixas, null quando vazias
 let squadPlayers = [];        // plantel completo do clube (para o pool e para resolver ids)
 let tacticsLoaded = false;
 
+/* Seleção por toque: alternativa ao arrastar (drag-and-drop nativo do rato
+   não funciona em ecrãs táteis). Toca numa origem para a selecionar e depois
+   toca no destino para a mover — funciona em paralelo com o arrastar normal. */
+let tacticsSelection = null; // { playerId, source: 'pitch'|'bench'|'pool', sourceKey }
+
+function selectTacticsSource(source, sourceKey, playerId){
+  tacticsSelection = { playerId, source, sourceKey };
+  tacticsRenderAll();
+}
+function clearTacticsSelection(){
+  tacticsSelection = null;
+}
+function isTacticsSelected(source, key){
+  return !!(tacticsSelection && tacticsSelection.source === source && String(tacticsSelection.sourceKey) === String(key));
+}
+function isPoolSelected(playerId){
+  return !!(tacticsSelection && tacticsSelection.source === 'pool' && tacticsSelection.playerId === playerId);
+}
+
 function slotAvatarHtml(player){
   return player.photo_path ? `<img src="${player.photo_path}" alt="">` : '🧑';
 }
@@ -2693,7 +2855,8 @@ function renderPitch(){
          <button class="slot-remove" data-remove-pitch="${slotId}">×</button>
          <span class="slot-label">${player.name.split(' ')[0]}</span>`
       : `<div class="slot-avatar-wrap"><div class="slot-circle">${slotDef.code}</div></div><span class="slot-label">${slotDef.code}</span>`;
-    return `<div class="pitch-slot${player ? ' filled' : ''}" data-slot-id="${slotId}"
+    const selectedClass = isTacticsSelected('pitch', slotId) ? ' selected-for-move' : '';
+    return `<div class="pitch-slot${player ? ' filled' : ''}${selectedClass}" data-slot-id="${slotId}"
                 style="left:${slotDef.x}%;top:${slotDef.y}%;" draggable="${player ? 'true' : 'false'}">${inner}</div>`;
   }).join('');
 
@@ -2716,11 +2879,27 @@ function renderPitch(){
       });
     }
 
+    /* Toque: selecionar / largar (alternativa ao arrastar, para telemóvel) */
+    slotEl.addEventListener('click', (e) => {
+      if (e.target.closest('.slot-remove')) return;
+      if (tacticsSelection) {
+        const data = tacticsSelection;
+        const isSelf = data.source === 'pitch' && String(data.sourceKey) === String(slotId);
+        clearTacticsSelection();
+        if (isSelf) { tacticsRenderAll(); return; }
+        handleDrop('pitch', slotId, data);
+        return;
+      }
+      const currentPlayer = lineup[slotId];
+      if (currentPlayer) selectTacticsSource('pitch', slotId, currentPlayer.id);
+    });
+
     const removeBtn = slotEl.querySelector('[data-remove-pitch]');
     if (removeBtn) {
       removeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         delete lineup[slotId];
+        clearTacticsSelection();
         tacticsRenderAll();
       });
     }
@@ -2731,8 +2910,9 @@ function renderBench(){
   const container = el('benchSlots');
 
   container.innerHTML = bench.map((player, i) => {
-    if (!player) return `<div class="bench-slot" data-bench-index="${i}"></div>`;
-    return `<div class="bench-slot filled" data-bench-index="${i}" draggable="true">
+    const selectedClass = isTacticsSelected('bench', i) ? ' selected-for-move' : '';
+    if (!player) return `<div class="bench-slot${selectedClass}" data-bench-index="${i}"></div>`;
+    return `<div class="bench-slot filled${selectedClass}" data-bench-index="${i}" draggable="true">
       <div class="slot-avatar-wrap bench">
         <div class="squad-avatar">${slotAvatarHtml(player)}</div>
         <span class="slot-jersey small">${player.jersey_number || ''}</span>
@@ -2764,9 +2944,25 @@ function renderBench(){
       slotEl.querySelector('[data-remove-bench]').addEventListener('click', (e) => {
         e.stopPropagation();
         bench[idx] = null;
+        clearTacticsSelection();
         tacticsRenderAll();
       });
     }
+
+    /* Toque: selecionar / largar (alternativa ao arrastar, para telemóvel) */
+    slotEl.addEventListener('click', (e) => {
+      if (e.target.closest('.slot-remove')) return;
+      if (tacticsSelection) {
+        const data = tacticsSelection;
+        const isSelf = data.source === 'bench' && String(data.sourceKey) === String(idx);
+        clearTacticsSelection();
+        if (isSelf) { tacticsRenderAll(); return; }
+        handleDrop('bench', idx, data);
+        return;
+      }
+      const currentPlayer = bench[idx];
+      if (currentPlayer) selectTacticsSource('bench', idx, currentPlayer.id);
+    });
   });
 }
 
@@ -2787,7 +2983,7 @@ function renderSquadPool(){
   }
 
   container.innerHTML = available.map((p) => `
-    <div class="pool-chip" data-player-id="${p.id}" draggable="true">
+    <div class="pool-chip${isPoolSelected(p.id) ? ' selected-for-move' : ''}" data-player-id="${p.id}" draggable="true">
       <div class="squad-avatar">${slotAvatarHtml(p)}</div>
       <div class="pool-chip-info">
         <div class="pool-chip-name">${p.name}</div>
@@ -2799,6 +2995,22 @@ function renderSquadPool(){
   container.querySelectorAll('.pool-chip').forEach((chip) => {
     chip.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('text/plain', JSON.stringify({ playerId: Number(chip.dataset.playerId), source: 'pool', sourceKey: null }));
+    });
+
+    /* Toque: selecionar este jogador, ou largar aqui a seleção atual
+       (largar no plantel desatribui, tal como acontece ao arrastar). */
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const playerId = Number(chip.dataset.playerId);
+      if (tacticsSelection) {
+        const data = tacticsSelection;
+        const isSelf = data.source === 'pool' && data.playerId === playerId;
+        clearTacticsSelection();
+        if (!isSelf && data.source !== 'pool') clearSource(data.source, data.sourceKey);
+        tacticsRenderAll();
+        return;
+      }
+      selectTacticsSource('pool', null, playerId);
     });
   });
 }
@@ -2822,6 +3034,15 @@ el('squadPool').addEventListener('drop', (e) => {
   clearSource(data.source, data.sourceKey);
   tacticsRenderAll();
 });
+/* Toque na área vazia do pool (fora de um chip específico) — desatribui a
+   seleção atual, tal como largar por arrastar. */
+el('squadPool').addEventListener('click', (e) => {
+  if (!tacticsSelection || e.target.closest('.pool-chip')) return;
+  const data = tacticsSelection;
+  clearTacticsSelection();
+  if (data.source !== 'pool') clearSource(data.source, data.sourceKey);
+  tacticsRenderAll();
+});
 
 /* ---------- Trocar de formação ---------- */
 document.querySelectorAll('.formation-btn').forEach((btn) => {
@@ -2829,6 +3050,7 @@ document.querySelectorAll('.formation-btn').forEach((btn) => {
     if (btn.dataset.formation === currentFormation) return;
     currentFormation = btn.dataset.formation;
     lineup = {}; // as posições da formação anterior deixam de fazer sentido
+    clearTacticsSelection();
     renderFormationButtons();
     renderPitch();
     renderSquadPool();
