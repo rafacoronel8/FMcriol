@@ -1547,7 +1547,7 @@ db.PERSONALITY_TIERS = PERSONALITY_TIERS;
    automaticamente, ver routes/game.js). Os efeitos de cada cargo estão em
    routes/morale.js (Adjunto) e routes/activities.js (Fisioterapeuta,
    Preparador Físico). */
-const STAFF_ROLES = ['Adjunto', 'Fisioterapeuta', 'Preparador Físico'];
+const STAFF_ROLES = ['Adjunto', 'Fisioterapeuta', 'Preparador Físico', 'Olheiro'];
 db.STAFF_ROLES = STAFF_ROLES;
 
 /* ---------- Época: reinício automático + palmarés ----------
@@ -1744,6 +1744,33 @@ CREATE TABLE IF NOT EXISTS staff (
 );
 CREATE INDEX IF NOT EXISTS idx_staff_team ON staff(team_id);
 `);
+
+/* ---------- Migração: novo cargo "Olheiro" ----------
+   O CHECK original da tabela staff não incluía 'Olheiro'. SQLite não deixa
+   alterar um CHECK já existente com ALTER TABLE, por isso reconstrói-se a
+   tabela (mesma receita já usada noutras migrações deste ficheiro) — só
+   quando for mesmo preciso, sem tocar nos dados já lá guardados. */
+const staffTableDef = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='staff'").get();
+if (staffTableDef && !staffTableDef.sql.includes('Olheiro')) {
+  db.exec(`
+    CREATE TABLE staff_fixed (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      team_id           INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+      name              TEXT NOT NULL,
+      role              TEXT NOT NULL CHECK (role IN ('Adjunto','Fisioterapeuta','Preparador Físico','Olheiro')),
+      quality_stars     REAL NOT NULL DEFAULT 2.5,
+      nationality_code  TEXT,
+      wage_text         TEXT,
+      hire_fee          REAL NOT NULL DEFAULT 0,
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT INTO staff_fixed SELECT * FROM staff;
+    DROP TABLE staff;
+    ALTER TABLE staff_fixed RENAME TO staff;
+    CREATE INDEX IF NOT EXISTS idx_staff_team ON staff(team_id);
+  `);
+}
 
 
   return db;

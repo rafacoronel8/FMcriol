@@ -20,6 +20,8 @@ const leagueRouter = require('./routes/league');
 const cupRouter = require('./routes/cup');
 const moraleRouter = require('./routes/morale');
 const staffRouter = require('./routes/staff');
+const scoutRouter = require('./routes/scout');
+
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -59,6 +61,7 @@ app.use('/api/league', leagueRouter);
 app.use('/api/cup', cupRouter);
 app.use('/api/morale', moraleRouter);
 app.use('/api/staff', staffRouter);
+app.use('/api/scout', scoutRouter);
 
 /* Verificação rápida de que o servidor + base de dados estão a funcionar */
 app.get('/api/health', (req, res) => {

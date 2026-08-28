@@ -407,6 +407,32 @@ body{
 .msg-potm-stat b{font-size:16px;color:var(--text-0);line-height:1.1;}
 .msg-potm-stat span{font-size:10px;color:var(--text-2);text-transform:uppercase;letter-spacing:.3px;}
 
+/* ---------- Relatório do Olheiro (indicação de jogador na caixa de entrada) ---------- */
+.msg-scout-box{
+  display:flex;align-items:flex-start;gap:16px;
+  background:linear-gradient(135deg, rgba(124,92,255,.12), var(--bg-2));
+  border:1px solid #392f5c;border-radius:var(--radius-m);
+  padding:14px 16px;margin-bottom:16px;
+}
+.msg-scout-photo{
+  width:56px;height:56px;border-radius:50%;flex-shrink:0;overflow:hidden;
+  background:var(--bg-3);border:2px solid var(--accent);
+  display:flex;align-items:center;justify-content:center;font-size:22px;
+}
+.msg-scout-photo img{width:100%;height:100%;object-fit:cover;}
+.msg-scout-info{min-width:0;flex:1;}
+.msg-scout-name{font-size:15px;font-weight:800;color:var(--text-0);}
+.msg-scout-meta{font-size:11.5px;color:var(--text-2);margin:2px 0 8px;}
+.msg-scout-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;}
+.msg-scout-chip{
+  font-size:11px;font-weight:700;padding:3px 9px;border-radius:10px;
+  background:var(--bg-3);color:var(--text-1);
+}
+.msg-scout-chip.chip-good{color:var(--green);}
+.msg-scout-chip.chip-neutral{color:var(--text-1);}
+.msg-scout-chip.chip-bad{color:var(--red);}
+.msg-scout-value{font-size:12.5px;font-weight:700;color:var(--gold);}
+
 @media (max-width:900px){
   .inbox-layout{grid-template-columns:1fr;height:auto;}
   .inbox-list-col{height:340px;}
@@ -480,6 +506,29 @@ body{
 }
 .staff-hire-action{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;}
 .staff-hire-fee{font-size:11px;color:var(--text-2);}
+.staff-role-pill.role-olheiro{color:var(--accent-2);}
+
+/* ============ RECOMENDAÇÕES DO OLHEIRO ============ */
+.scout-list{display:flex;flex-direction:column;gap:8px;}
+.scout-row{
+  display:flex;align-items:center;gap:12px;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-m);
+  padding:10px 14px;cursor:pointer;transition:border-color .15s ease;
+}
+.scout-row:hover{border-color:var(--accent);}
+.scout-avatar{
+  width:36px;height:36px;border-radius:50%;flex-shrink:0;
+  background:var(--bg-3);border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;font-size:15px;overflow:hidden;
+}
+.scout-avatar img{width:100%;height:100%;object-fit:cover;}
+.scout-info{flex:1;min-width:0;}
+.scout-name{font-size:13.5px;font-weight:700;color:var(--text-0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.scout-meta{font-size:11.5px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.scout-reason{font-size:11px;color:var(--accent);margin-top:2px;}
+.scout-side{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;}
+.scout-value{font-size:12.5px;font-weight:700;color:var(--text-0);}
+.scout-stars{font-size:11px;color:var(--gold);}
 
 /* ============ MINHA EQUIPA (SQUAD) ============ */
 .squad-count-badge{

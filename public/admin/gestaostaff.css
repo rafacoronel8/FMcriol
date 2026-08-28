@@ -188,4 +188,5 @@ body{
 .staff-role-pill.role-adjunto{color:var(--accent);}
 .staff-role-pill.role-fisioterapeuta{color:var(--green);}
 .staff-role-pill.role-preparador{color:var(--amber);}
+.staff-role-pill.role-olheiro{color:var(--accent-2);}
 .staff-stars{color:var(--gold);font-size:12px;flex-shrink:0;}

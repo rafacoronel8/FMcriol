@@ -9,11 +9,13 @@ const ROLE_CLASS = {
   'Adjunto': 'role-adjunto',
   'Fisioterapeuta': 'role-fisioterapeuta',
   'Preparador Físico': 'role-preparador',
+  'Olheiro': 'role-olheiro',
 };
 const ROLE_ICON = {
   'Adjunto': '🧠',
   'Fisioterapeuta': '💉',
   'Preparador Físico': '🏋️',
+  'Olheiro': '🔎',
 };
 
 function showToast(message, type = 'ok'){

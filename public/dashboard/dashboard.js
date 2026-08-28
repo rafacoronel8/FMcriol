@@ -199,11 +199,13 @@ const STAFF_ROLE_CLASS = {
   'Adjunto': 'role-adjunto',
   'Fisioterapeuta': 'role-fisioterapeuta',
   'Preparador Físico': 'role-preparador',
+  'Olheiro': 'role-olheiro',
 };
 const STAFF_ROLE_ICON = {
   'Adjunto': '🧠',
   'Fisioterapeuta': '💉',
   'Preparador Físico': '🏋️',
+  'Olheiro': '🔎',
 };
 
 function staffStars(value){
@@ -223,6 +225,65 @@ async function loadStaffPanels(){
     renderStaffAvailable(available);
   }catch(err){
     // mantém o estado anterior se falhar
+  }
+  loadScoutRecommendations();
+}
+
+/* ---------- Recomendações do Olheiro ----------
+   Só aparece alguma coisa se o clube tiver um Olheiro contratado E o
+   mercado de transferências estiver aberto (ver routes/scout.js). Clicar
+   numa recomendação leva ao perfil do jogador, onde já é possível fazer
+   uma proposta a sério. */
+async function loadScoutRecommendations(){
+  const list = el('scoutRecommendations');
+  const emptyMsg = el('scoutEmpty');
+  const noScoutMsg = el('scoutNoScout');
+  const closedMsg = el('scoutMarketClosed');
+  if(!list) return;
+
+  [emptyMsg, noScoutMsg, closedMsg].forEach((box) => box.classList.add('hidden'));
+  list.innerHTML = '';
+
+  try{
+    const res = await fetch(`/api/scout/${teamId}/recommendations`);
+    if(!res.ok) throw new Error();
+    const data = await res.json();
+
+    if(!data.has_scout){
+      noScoutMsg.classList.remove('hidden');
+      return;
+    }
+    if(!data.market_open){
+      closedMsg.classList.remove('hidden');
+      return;
+    }
+    if(!data.recommendations.length){
+      emptyMsg.classList.remove('hidden');
+      return;
+    }
+
+    list.innerHTML = data.recommendations.map((r) => `
+      <div class="scout-row" data-id="${r.player_id}">
+        <div class="scout-avatar">${r.photo_path ? `<img src="${r.photo_path}" alt="">` : '🧑'}</div>
+        <div class="scout-info">
+          <div class="scout-name">${r.name}</div>
+          <div class="scout-meta">${r.position_tag || 'Posição não definida'} · ${r.team_name}</div>
+          <div class="scout-reason">${r.need_reason}</div>
+        </div>
+        <div class="scout-side">
+          <span class="scout-value">${fmtMoney(r.estimated_value)}</span>
+          <span class="scout-stars">${staffStars(r.current_ability_stars)}</span>
+        </div>
+      </div>`).join('');
+
+    list.querySelectorAll('.scout-row').forEach((row) => {
+      row.addEventListener('click', () => {
+        window.location.href = `/jogador/perfilJogador.html?id=${row.dataset.id}`;
+      });
+    });
+  }catch(err){
+    emptyMsg.textContent = 'Não foi possível carregar as recomendações do olheiro.';
+    emptyMsg.classList.remove('hidden');
   }
 }
 
@@ -747,6 +808,7 @@ const MESSAGE_ICONS = {
   loan_returned: '↩️',
   match_day: '⚽',
   player_of_match: '⭐',
+  scout_tip: '🔎',
 };
 
 function truncateText(text, n){
@@ -808,6 +870,39 @@ function renderPotmStatsBox(m){
           <div class="msg-potm-stat"><b>${stats.a}</b><span>Assist.</span></div>
           <div class="msg-potm-stat"><b>${stats.media}</b><span>Média</span></div>
         </div>
+      </div>
+    </div>`;
+}
+
+/* ---------- Relatório do Olheiro (indicação na caixa de entrada) ----------
+   messages.extra_json guarda { scout_report: { photo_path, name,
+   position_tag, team_name, quality_stars, specialization, personality,
+   estimated_value, description } } — ver routes/scout.js. */
+function renderScoutTipBox(m){
+  if(m.type !== 'scout_tip' || !m.extra_json) return '';
+  let extra;
+  try{ extra = JSON.parse(m.extra_json); }catch(err){ return ''; }
+  const r = extra && extra.scout_report;
+  if(!r) return '';
+
+  const personalityClass = {
+    'Muito Fiel': 'chip-good', 'Fiel': 'chip-good',
+    'Normal': 'chip-neutral',
+    'Problemático': 'chip-bad', 'Muito Problemático': 'chip-bad',
+  }[r.personality] || 'chip-neutral';
+
+  return `
+    <div class="msg-scout-box">
+      <div class="msg-scout-photo">${r.photo_path ? `<img src="${r.photo_path}" alt="">` : '🧑'}</div>
+      <div class="msg-scout-info">
+        <div class="msg-scout-name">${r.name}</div>
+        <div class="msg-scout-meta">${r.position_tag || 'Posição não definida'} · ${r.team_name || ''}</div>
+        <div class="msg-scout-chips">
+          <span class="msg-scout-chip">${staffStars(r.quality_stars)}</span>
+          <span class="msg-scout-chip">${r.specialization}</span>
+          <span class="msg-scout-chip ${personalityClass}">${r.personality}</span>
+        </div>
+        <div class="msg-scout-value">💰 Valor estimado: ${fmtMoney(r.estimated_value)}</div>
       </div>
     </div>`;
 }
@@ -965,6 +1060,7 @@ function renderMessageDetail(m){
     ${banner}
     ${highlight}
     ${renderPotmStatsBox(m)}
+    ${renderScoutTipBox(m)}
     <div class="inbox-detail-body">${m.body}</div>
     ${renderMessageGauges(m)}
     ${actions}
