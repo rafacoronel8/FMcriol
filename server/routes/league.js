@@ -731,18 +731,23 @@ function runSeasonRolloverIfDue(nextDateStr) {
   }
 }
 
-/* ---------- Prémios em dinheiro de fim de época do Campeonato ----------
-   Campeão: £420.000. Último classificado: £30.000 (ver
-   db.awardLeagueSeasonPrizeMoney em db/database.js, que já trata da
-   proteção contra pagamentos em duplicado). Pagos sempre no dia 1 de
-   Junho — NUNCA ligados ao fim real da última jornada (que pode calhar
-   mais cedo ou mais tarde) nem ao "rollover" da época (sempre 1 de
-   Agosto seguinte, ver runSeasonRolloverIfDue) — para o dinheiro estar
-   disponível bem antes da janela de mercado de pré-época (1 a 31 de
-   Julho). Só paga quando a divisão tiver mesmo o Campeonato todo
-   disputado (senão "último classificado" ainda nem faz sentido); se 1 de
+/* ---------- Prémios em dinheiro de fim de época do Campeonato + Taça ----------
+   Pagos sempre no dia 1 de Junho — NUNCA ligados ao fim real da última
+   jornada (que pode calhar mais cedo ou mais tarde) nem ao "rollover" da
+   época (sempre 1 de Agosto seguinte, ver runSeasonRolloverIfDue) — para o
+   dinheiro estar disponível bem antes da janela de mercado de pré-época (1
+   a 31 de Julho). Só paga quando a divisão tiver mesmo o Campeonato todo
+   disputado (senão a classificação final ainda nem faz sentido); se 1 de
    Junho passar sem isso acontecer, os prémios saem assim que a última
-   jornada em atraso for resolvida. */
+   jornada em atraso for resolvida.
+
+   TODAS as equipas da divisão recebem, conforme a posição final (1º lugar
+   450.000£, último lugar 25.000£, com as posições a meio distribuídas de
+   forma linear entre os dois — ver db.awardLeagueSeasonPrizeMoney em
+   db/database.js) — mais o prémio da Taça São Vicente (50.000£ por ronda
+   avançada, +100.000£ para o campeão), tudo somado numa única entrada no
+   orçamento de transferências. db.awardLeagueSeasonPrizeMoney já trata da
+   proteção contra pagamentos em duplicado. */
 function awardLeagueSeasonPrizeMoneyIfDue(nextDateStr) {
   const seasonStart = getCurrentSeasonStart();
   const prizeDate = juneFirstOfSeason(seasonStart);
@@ -761,11 +766,7 @@ function awardLeagueSeasonPrizeMoneyIfDue(nextDateStr) {
     const standings = buildStandings(teams, fixtures);
     if (!standings.length) return;
 
-    db.awardLeagueSeasonPrizeMoney({
-      champion_team_id: standings[0].team_id,
-      last_place_team_id: standings[standings.length - 1].team_id,
-      season_label: seasonLabel,
-    });
+    db.awardLeagueSeasonPrizeMoney({ standings, season_label: seasonLabel });
   });
 }
 

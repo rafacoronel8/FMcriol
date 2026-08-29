@@ -1452,103 +1452,112 @@ db.syncLeagueFixtureFromFriendly = syncLeagueFixtureFromFriendly;
    (routes/liveMatch.js). Se estivesse só em routes/cup.js:runCupTick (que
    só trata jogos entre equipas geridas pelo jogo), o utilizador nunca
    receberia prémio nenhum pelos SEUS próprios jogos da Taça. */
+/* ---------- Prémio por ronda da Taça — SUBSTITUÍDO por um prémio único no
+   fim da época ----------
+   Antes, cada ronda vencida dava logo dinheiro ao saldo. Passou a fazer-se
+   tudo de uma vez, a 1 de junho, junto com o prémio do Campeonato — ver
+   awardLeagueSeasonPrizeMoney logo abaixo, chamada a partir de
+   routes/league.js:awardLeagueSeasonPrizeMoneyIfDue, que já sabe quantas
+   rondas cada equipa avançou a partir de cup_fixtures. Esta função
+   mantém-se (chamada nos mesmos sítios de antes) só para não obrigar a
+   mexer em routes/cup.js e db/database.js:syncCupFixtureFromFriendly —
+   mas já não credita dinheiro nem manda mensagem nenhuma, para não pagar
+   a dobrar. */
 const CUP_ROUND_ADVANCE_PRIZE = 50000;
 const CUP_CHAMPION_BONUS_PRIZE = 100000;
 
 function awardCupPrizeMoney(fixture) {
-  if (!fixture || !fixture.winner_team_id || fixture.is_bye) return;
-
-  const grantPrize = (teamId, amount, type, title, body) => {
-    db.prepare("UPDATE teams SET balance = balance + ?, updated_at = datetime('now') WHERE id = ?").run(amount, teamId);
-    const team = db.prepare('SELECT is_user_controlled FROM teams WHERE id = ?').get(teamId);
-    if (team && team.is_user_controlled) {
-      db.prepare('INSERT INTO messages (team_id, type, title, body) VALUES (?, ?, ?, ?)').run(teamId, type, title, body);
-    }
-  };
-
-  const winnerTeam = db.prepare('SELECT name FROM teams WHERE id = ?').get(fixture.winner_team_id);
-  const winnerName = winnerTeam ? winnerTeam.name : 'A equipa';
-  const prizeFmt = `£${CUP_ROUND_ADVANCE_PRIZE.toLocaleString('pt-PT')}`;
-  grantPrize(
-    fixture.winner_team_id, CUP_ROUND_ADVANCE_PRIZE, 'cup_prize_money',
-    `💰 Prémio da Taça: ${prizeFmt}`,
-    `O ${winnerName} apurou-se para a ronda seguinte da Taça São Vicente e recebeu ${prizeFmt} em prémios.`,
-  );
-
-  if (fixture.round_name === 'Final') {
-    const bonusFmt = `£${CUP_CHAMPION_BONUS_PRIZE.toLocaleString('pt-PT')}`;
-    grantPrize(
-      fixture.winner_team_id, CUP_CHAMPION_BONUS_PRIZE, 'cup_champion_prize',
-      `🏆 Prémio de Campeão: ${bonusFmt}`,
-      `O ${winnerName} conquistou a Taça São Vicente e recebeu mais ${bonusFmt} em prémios pelo título.`,
-    );
-  }
+  // Sem efeito de propósito — ver comentário acima. O dinheiro entra a 1
+  // de junho, de uma só vez, em awardLeagueSeasonPrizeMoney.
+  return;
 }
 db.awardCupPrizeMoney = awardCupPrizeMoney;
 
-/* ---------- Prémios em dinheiro do Campeonato (Campeão + Lanterna-vermelha) ----------
-   Ao contrário dos prémios da Taça (creditados jogo a jogo, logo acima —
-   há sempre um vencedor por eliminatória), o Campeonato só tem UMA tabela
-   classificativa por época, por isso o prémio não pode ser distribuído aos
-   poucos: só existe mesmo no fim, quando a classificação final está
-   fechada. Pagos SEMPRE no dia 1 de Junho de cada época (data fixa,
-   independente de quando a última jornada calhou ter sido jogada — ver
-   awardLeagueSeasonPrizeMoney em routes/league.js, chamada a partir de
-   runLeagueTick), para o dinheiro já estar disponível bem antes da janela
-   de mercado de pré-época (1 a 31 de Julho, ver MARKET_WINDOW_MONTH) e dar
-   tempo ao utilizador (e à IA) de planear contratações com essa folga.
+/* ---------- Prémios de fim de época: Campeonato + Taça, tudo junto ----------
+   Chamado por routes/league.js:awardLeagueSeasonPrizeMoneyIfDue, sempre a
+   1 de junho, já com a classificação final da divisão (`standings`, cada
+   linha com `team_id` e `position`). Campeonato: 1º lugar 450.000£,
+   último lugar 25.000£, com as posições a meio distribuídas de forma
+   linear entre os dois extremos. Taça São Vicente: 50.000£ por cada
+   ronda avançada (vitórias e "byes" — não conta a ronda em que foi
+   eliminado) + 100.000£ de bónus para quem for campeão (ver tabela
+   trophies). Tudo somado entra de uma vez no ORÇAMENTO DE TRANSFERÊNCIAS
+   de cada equipa (nunca no saldo). Todas as equipas recebem, mas só o
+   clube do utilizador vê mensagem na caixa de entrada — as outras não têm
+   caixa de entrada (mesmo critério do resto do jogo). */
+const LEAGUE_TOP_PRIZE = 450000;
+const LEAGUE_BOTTOM_PRIZE = 25000;
 
-   Campeão: £420.000. Último classificado: £30.000 — uma "rede de
-   segurança" para as equipas mais fracas não ficarem sem hipótese nenhuma
-   de reforçar o plantel na janela seguinte.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS season_prize_payments (
+    team_id       INTEGER NOT NULL,
+    season_label  TEXT NOT NULL,
+    paid_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (team_id, season_label)
+  )
+`);
 
-   Guardado em season_prizes com UNIQUE(team_id, prize_type, season_label)
-   para nunca pagar em duplicado, mesmo que runLeagueTick corra mais que
-   uma vez depois de 1 de Junho para a mesma época (ex: dois avanços de dia
-   seguidos, ou um pedido repetido) — mesma proteção usada em
-   runSeasonRolloverIfDue para os troféus. Só o clube do utilizador recebe
-   mensagem na caixa de entrada; as outras equipas só veem o saldo mudar. */
-const LEAGUE_CHAMPION_PRIZE = 420000;
-const LEAGUE_LAST_PLACE_PRIZE = 30000;
-
-function grantSeasonPrize(teamId, prizeType, amount, seasonLabel, title, body) {
-  const already = db.prepare(`
-    SELECT 1 FROM season_prizes WHERE team_id = ? AND prize_type = ? AND season_label = ?
-  `).get(teamId, prizeType, seasonLabel);
-  if (already) return;
-
-  db.prepare("UPDATE teams SET balance = balance + ?, updated_at = datetime('now') WHERE id = ?").run(amount, teamId);
-  db.prepare(`
-    INSERT INTO season_prizes (team_id, prize_type, season_label, amount) VALUES (?, ?, ?, ?)
-  `).run(teamId, prizeType, seasonLabel, amount);
-
-  const team = db.prepare('SELECT is_user_controlled FROM teams WHERE id = ?').get(teamId);
-  if (team && team.is_user_controlled) {
-    db.prepare('INSERT INTO messages (team_id, type, title, body) VALUES (?, ?, ?, ?)').run(teamId, prizeType, title, body);
-  }
+function leaguePrizeForPosition(position, totalTeams) {
+  if (totalTeams <= 1) return LEAGUE_TOP_PRIZE;
+  const step = (LEAGUE_TOP_PRIZE - LEAGUE_BOTTOM_PRIZE) / (totalTeams - 1);
+  return Math.round((LEAGUE_TOP_PRIZE - step * (position - 1)) / 1000) * 1000;
 }
 
-function awardLeagueSeasonPrizeMoney({ champion_team_id, last_place_team_id, season_label }) {
-  if (champion_team_id) {
-    const team = db.prepare('SELECT name FROM teams WHERE id = ?').get(champion_team_id);
-    const name = team ? team.name : 'A equipa';
-    const fmt = `£${LEAGUE_CHAMPION_PRIZE.toLocaleString('pt-PT')}`;
-    grantSeasonPrize(
-      champion_team_id, 'league_champion', LEAGUE_CHAMPION_PRIZE, season_label,
-      `💰 Prémio de Campeão: ${fmt}`,
-      `O ${name} sagrou-se Campeão e recebeu ${fmt} em prémios monetários pelo título — já a tempo do mercado de pré-época.`,
-    );
-  }
-  if (last_place_team_id && last_place_team_id !== champion_team_id) {
-    const team = db.prepare('SELECT name FROM teams WHERE id = ?').get(last_place_team_id);
-    const name = team ? team.name : 'A equipa';
-    const fmt = `£${LEAGUE_LAST_PLACE_PRIZE.toLocaleString('pt-PT')}`;
-    grantSeasonPrize(
-      last_place_team_id, 'league_last_place', LEAGUE_LAST_PLACE_PRIZE, season_label,
-      `💰 Prémio monetário: ${fmt}`,
-      `O ${name} terminou o Campeonato no último lugar, mas ainda assim recebeu ${fmt} em prémios monetários — já a tempo do mercado de pré-época.`,
-    );
-  }
+/* Rondas avançadas = vitórias + "byes" (apuramento automático) registados
+   em cup_fixtures — não conta a ronda em que a equipa foi eliminada. */
+function computeCupPrizeForTeam(teamId, seasonLabel) {
+  const roundsWon = db.prepare(`
+    SELECT COUNT(*) AS n FROM cup_fixtures
+    WHERE (winner_team_id = ?) OR (is_bye = 1 AND home_team_id = ?)
+  `).get(teamId, teamId).n;
+  const isChampion = !!db.prepare(`
+    SELECT 1 FROM trophies WHERE team_id = ? AND competition = 'cup' AND season_label = ?
+  `).get(teamId, seasonLabel);
+  return { amount: roundsWon * CUP_ROUND_ADVANCE_PRIZE + (isChampion ? CUP_CHAMPION_BONUS_PRIZE : 0), roundsWon, isChampion };
+}
+
+function awardLeagueSeasonPrizeMoney({ standings, season_label: seasonLabel }) {
+  if (!Array.isArray(standings) || !standings.length) return;
+  const totalTeams = standings.length;
+
+  standings.forEach((row) => {
+    /* Proteção contra pagamentos em duplicado — cada clube só pode
+       receber o prémio desta época UMA VEZ, mesmo que esta função corra
+       mais que uma vez no mesmo dia 1 de junho (ex: jornadas em atraso
+       resolvidas em dias diferentes a fazer o gatilho disparar de novo). */
+    const alreadyPaid = db.prepare(`
+      SELECT 1 FROM season_prize_payments WHERE team_id = ? AND season_label = ?
+    `).get(row.team_id, seasonLabel);
+    if (alreadyPaid) return;
+
+    const leaguePrize = leaguePrizeForPosition(row.position, totalTeams);
+    const cup = computeCupPrizeForTeam(row.team_id, seasonLabel);
+    const total = leaguePrize + cup.amount;
+
+    db.prepare(`
+      UPDATE teams SET transfer_budget = transfer_budget + ?, updated_at = datetime('now') WHERE id = ?
+    `).run(total, row.team_id);
+    db.prepare('INSERT INTO season_prize_payments (team_id, season_label) VALUES (?, ?)').run(row.team_id, seasonLabel);
+
+    const team = db.prepare('SELECT is_user_controlled FROM teams WHERE id = ?').get(row.team_id);
+    if (!team || !team.is_user_controlled) return;
+
+    const cupBits = [];
+    if (cup.roundsWon > 0) {
+      cupBits.push(`${cup.roundsWon} ronda${cup.roundsWon === 1 ? '' : 's'} avançada${cup.roundsWon === 1 ? '' : 's'} na Taça São Vicente (${(cup.roundsWon * CUP_ROUND_ADVANCE_PRIZE).toLocaleString('pt-PT')}£)`);
+    }
+    if (cup.isChampion) cupBits.push(`campeão da Taça São Vicente (${CUP_CHAMPION_BONUS_PRIZE.toLocaleString('pt-PT')}£ de bónus)`);
+    const cupLine = cupBits.length ? ` ${cupBits.join(', ')}.` : ' Sem prémios da Taça esta época.';
+
+    db.prepare(`
+      INSERT INTO messages (team_id, type, title, body)
+      VALUES (@team_id, 'season_prize_money', @title, @body)
+    `).run({
+      team_id: row.team_id,
+      title: `💰 Prémios da época: ${total.toLocaleString('pt-PT')}£ para o orçamento de transferências`,
+      body: `Terminaste em ${row.position}º lugar (de ${totalTeams}) no Campeonato, o que vale ${leaguePrize.toLocaleString('pt-PT')}£.${cupLine} No total, o clube recebe ${total.toLocaleString('pt-PT')}£, já somados ao orçamento de transferências.`,
+    });
+  });
 }
 db.awardLeagueSeasonPrizeMoney = awardLeagueSeasonPrizeMoney;
 
@@ -1658,17 +1667,6 @@ CREATE TABLE IF NOT EXISTS player_awards (
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_player_awards_player ON player_awards(player_id);
-
-CREATE TABLE IF NOT EXISTS season_prizes (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  team_id       INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  prize_type    TEXT NOT NULL CHECK (prize_type IN ('league_champion','league_last_place')),
-  season_label  TEXT NOT NULL,
-  amount        INTEGER NOT NULL,
-  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(team_id, prize_type, season_label)
-);
-CREATE INDEX IF NOT EXISTS idx_season_prizes_team ON season_prizes(team_id);
 `);
 
 /* ---------- Migração segura: alarga o CHECK de award_key ----------
