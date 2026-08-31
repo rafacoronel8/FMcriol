@@ -60,10 +60,19 @@ router.post('/', (req, res) => {
   // no molde (para os saves futuros) — ver db/database.js: withEveryDatabase.
   // Sem isto, o membro só ficava visível no save/dispositivo que estava a
   // usar este formulário no momento da criação.
-  const newId = db.withEveryDatabase((conn) => conn.prepare(`
-    INSERT INTO staff (name, role, team_id, quality_stars, nationality_code, wage_text, hire_fee)
-    VALUES (@name, @role, @team_id, @quality_stars, @nationality_code, @wage_text, @hire_fee)
-  `).run(payload).lastInsertRowid);
+  const newId = db.withEveryDatabase((conn) => {
+    // Mesma proteção do players.js: se a equipa não existir num
+    // dispositivo mais antigo (ex: "legacy"), cria sem equipa aí em vez
+    // de falhar essa ligação toda por causa da foreign key.
+    const localPayload = { ...payload };
+    if (localPayload.team_id && !conn.prepare('SELECT id FROM teams WHERE id = ?').get(localPayload.team_id)) {
+      localPayload.team_id = null;
+    }
+    return conn.prepare(`
+      INSERT INTO staff (name, role, team_id, quality_stars, nationality_code, wage_text, hire_fee)
+      VALUES (@name, @role, @team_id, @quality_stars, @nationality_code, @wage_text, @hire_fee)
+    `).run(localPayload).lastInsertRowid;
+  });
 
   res.status(201).json(db.prepare('SELECT * FROM staff WHERE id = ?').get(newId));
 });

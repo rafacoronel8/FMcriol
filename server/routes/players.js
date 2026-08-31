@@ -408,17 +408,7 @@ router.post('/', (req, res) => {
 
   const isGK = isGoalkeeperPosition(position_code);
 
-  const stmt = db.prepare(`
-    INSERT INTO players (
-      team_id, original_team_id, name, jersey_number, position_tag, position_code, nationality_code, birth_date,
-      club_status, wage_text, personality, technical_json, set_pieces_json, mental_json, physical_json, goalkeeping_json, season_stats_json
-    ) VALUES (
-      @team_id, @original_team_id, @name, @jersey_number, @position_tag, @position_code, @nationality_code, @birth_date,
-      @club_status, @wage_text, @personality, @technical_json, @set_pieces_json, @mental_json, @physical_json, @goalkeeping_json, @season_stats_json
-    )
-  `);
-
-  const info = stmt.run({
+  const payload = {
     team_id: team ? team.id : null,
     original_team_id: team ? team.id : null,
     name: name.trim(), jersey_number, position_tag, position_code, nationality_code, birth_date,
@@ -431,11 +421,46 @@ router.post('/', (req, res) => {
     physical_json: JSON.stringify(DEFAULT_PHYSICAL),
     goalkeeping_json: JSON.stringify(isGK ? DEFAULT_GOALKEEPING : []),
     season_stats_json: JSON.stringify(DEFAULT_SEASON_STATS),
+  };
+
+  /* Cria o jogador em TODOS os saves já existentes neste servidor e também
+     no molde (para os saves futuros) — ver db/database.js: withEveryDatabase.
+     Mesma ideia usada em routes/staff.js: sem isto, o jogador só ficava
+     visível no save/dispositivo que estava a usar este formulário de admin
+     no momento da criação. `conn.captureBaseline` já vem anexado a cada
+     ligação por initializeSchema, por isso funciona corretamente ligação a
+     ligação, cada uma com o seu próprio id (os ids de jogadores DIVERGEM
+     naturalmente entre saves à medida que o jogo avança — isso é normal e
+     não é um problema, porque nada depende de o mesmo jogador ter o mesmo
+     id em saves diferentes). */
+  const newId = db.withEveryDatabase((conn) => {
+    // Em dispositivos mais antigos (ex: "legacy") a tabela teams pode não
+    // ter esta mesma equipa (ids diferentes/equipas diferentes) — em vez
+    // de falhar essa ligação toda por causa da foreign key, cria o
+    // jogador sem equipa nesse dispositivo específico (fica como Jogador
+    // Livre só ali; nos outros dispositivos onde a equipa existe, fica
+    // normalmente atribuído a ela).
+    const localPayload = { ...payload };
+    if (localPayload.team_id && !conn.prepare('SELECT id FROM teams WHERE id = ?').get(localPayload.team_id)) {
+      localPayload.team_id = null;
+      localPayload.original_team_id = null;
+      localPayload.club_status = 'Jogador Livre';
+    }
+
+    const info = conn.prepare(`
+      INSERT INTO players (
+        team_id, original_team_id, name, jersey_number, position_tag, position_code, nationality_code, birth_date,
+        club_status, wage_text, personality, technical_json, set_pieces_json, mental_json, physical_json, goalkeeping_json, season_stats_json
+      ) VALUES (
+        @team_id, @original_team_id, @name, @jersey_number, @position_tag, @position_code, @nationality_code, @birth_date,
+        @club_status, @wage_text, @personality, @technical_json, @set_pieces_json, @mental_json, @physical_json, @goalkeeping_json, @season_stats_json
+      )
+    `).run(localPayload);
+    conn.captureBaseline(info.lastInsertRowid);
+    return info.lastInsertRowid;
   });
 
-  const created = db.prepare('SELECT * FROM players WHERE id = ?').get(info.lastInsertRowid);
-  db.captureBaseline(created.id);
-  res.status(201).json(deserialize(db.prepare('SELECT * FROM players WHERE id = ?').get(created.id)));
+  res.status(201).json(deserialize(db.prepare('SELECT * FROM players WHERE id = ?').get(newId)));
 });
 
 /* ---------- PUT /api/players/:id — guardar qualquer campo do perfil (autosave) ---------- */
