@@ -50,16 +50,22 @@ router.post('/', (req, res) => {
     if (!team) return res.status(404).json({ error: 'Equipa não encontrada' });
   }
 
-  const info = db.prepare(`
-    INSERT INTO staff (name, role, team_id, quality_stars, nationality_code, wage_text, hire_fee)
-    VALUES (@name, @role, @team_id, @quality_stars, @nationality_code, @wage_text, @hire_fee)
-  `).run({
+  const payload = {
     name: name.trim(), role, team_id: team_id || null,
     quality_stars: Number(quality_stars) || 2.5,
     nationality_code, wage_text, hire_fee: Number(hire_fee) || 0,
-  });
+  };
 
-  res.status(201).json(db.prepare('SELECT * FROM staff WHERE id = ?').get(info.lastInsertRowid));
+  // Cria o membro em TODOS os saves já existentes neste servidor e também
+  // no molde (para os saves futuros) — ver db/database.js: withEveryDatabase.
+  // Sem isto, o membro só ficava visível no save/dispositivo que estava a
+  // usar este formulário no momento da criação.
+  const newId = db.withEveryDatabase((conn) => conn.prepare(`
+    INSERT INTO staff (name, role, team_id, quality_stars, nationality_code, wage_text, hire_fee)
+    VALUES (@name, @role, @team_id, @quality_stars, @nationality_code, @wage_text, @hire_fee)
+  `).run(payload).lastInsertRowid);
+
+  res.status(201).json(db.prepare('SELECT * FROM staff WHERE id = ?').get(newId));
 });
 
 /* ---------- PUT /api/staff/:id — editar (admin) ---------- */
@@ -79,10 +85,18 @@ router.put('/:id', (req, res) => {
   if (!Object.keys(updates).length) return res.json(existing);
 
   const setClause = Object.keys(updates).map((f) => `${f} = @${f}`).join(', ');
-  db.prepare(`UPDATE staff SET ${setClause}, updated_at = datetime('now') WHERE id = @id`)
-    .run({ ...updates, id: req.params.id });
+  const id = req.params.id;
 
-  res.json(db.prepare('SELECT * FROM staff WHERE id = ?').get(req.params.id));
+  // Mesma ideia da criação — aplica a edição a todos os saves (ver
+  // db/database.js: withEveryDatabase). Assume que o id se mantém igual em
+  // todos os saves, o que é garantido enquanto todas as criações de staff
+  // passarem por este ficheiro (a criação também usa withEveryDatabase).
+  db.withEveryDatabase((conn) => {
+    conn.prepare(`UPDATE staff SET ${setClause}, updated_at = datetime('now') WHERE id = @id`)
+      .run({ ...updates, id });
+  });
+
+  res.json(db.prepare('SELECT * FROM staff WHERE id = ?').get(id));
 });
 
 /* ---------- PUT /api/staff/:id/hire — contratar (jogo, não admin) ----------
@@ -166,8 +180,14 @@ router.put('/:id/task', (req, res) => {
 
 /* ---------- DELETE /api/staff/:id (admin) ---------- */
 router.delete('/:id', (req, res) => {
-  const info = db.prepare('DELETE FROM staff WHERE id = ?').run(req.params.id);
-  if (info.changes === 0) return res.status(404).json({ error: 'Membro da comissão técnica não encontrado' });
+  const existing = db.prepare('SELECT id FROM staff WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Membro da comissão técnica não encontrado' });
+
+  const id = req.params.id;
+  db.withEveryDatabase((conn) => {
+    conn.prepare('DELETE FROM staff WHERE id = ?').run(id);
+  });
+
   res.status(204).end();
 });
 

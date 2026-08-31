@@ -1920,6 +1920,72 @@ function getOrCreateDeviceConnection(deviceId) {
   return conn;
 }
 
+/* ---------- Aplica uma alteração a TODOS os saves (para o admin) ----------
+   O admin (routes/staff.js, e no futuro outras rotas de admin) precisa que
+   o que cria/edita/apaga fique visível em QUALQUER save já criado — não só
+   no dispositivo/browser que estava a usar o admin no momento do pedido.
+   Sem isto, um Olheiro criado em gestaoStaff.html só aparecia no ficheiro
+   .db do dispositivo que fez esse pedido (ver comentário grande no topo
+   deste ficheiro sobre "um save por dispositivo").
+
+   `fn(conn)` recebe a ligação SQLite crua de cada save (não o proxy `db`)
+   e é chamada para:
+     1) o dispositivo do pedido atual (o resultado deste é o devolvido),
+     2) todos os outros dispositivos que já têm um ficheiro .db criado,
+     3) o ficheiro-molde (fmcriol.db), para que os saves QUE AINDA NÃO
+        EXISTEM também já nasçam com esta alteração.
+
+   Importante: isto só alcança os ficheiros .db que estão no disco DESTE
+   servidor. Localhost e Render (ou qualquer outro deploy) têm discos
+   completamente separados — uma alteração feita a correr localmente nunca
+   chega ao Render sozinha. Para aparecer nos dois sítios é preciso usar o
+   admin em cada um deles (ver README/aviso em routes/staff.js). */
+function withEveryDatabase(fn) {
+  let currentResult;
+  let ranCurrent = false;
+
+  if (currentConnection) {
+    currentResult = fn(currentConnection);
+    ranCurrent = true;
+  }
+
+  const files = fs.existsSync(DB_DIR)
+    ? fs.readdirSync(DB_DIR).filter((f) => /^fmcriol_.*\.db$/.test(f))
+    : [];
+
+  for (const file of files) {
+    const deviceId = file.replace(/^fmcriol_/, '').replace(/\.db$/, '');
+    const already = connectionsByDevice.get(deviceId);
+    if (already && already === currentConnection) continue; // já tratado acima
+
+    let conn = already;
+    if (!conn) {
+      conn = openConnection(path.join(DB_DIR, file));
+      initializeSchema(conn);
+      connectionsByDevice.set(deviceId, conn);
+    }
+    try {
+      fn(conn);
+    } catch (err) {
+      console.error(`⚠️  Falha ao aplicar alteração de admin ao dispositivo ${deviceId}:`, err.message);
+    }
+  }
+
+  if (fs.existsSync(LEGACY_DB_PATH)) {
+    const legacyConn = openConnection(LEGACY_DB_PATH);
+    initializeSchema(legacyConn);
+    try {
+      fn(legacyConn);
+    } catch (err) {
+      console.error('⚠️  Falha ao aplicar alteração de admin ao molde (fmcriol.db):', err.message);
+    } finally {
+      legacyConn.close();
+    }
+  }
+
+  return ranCurrent ? currentResult : undefined;
+}
+
 /* Ligação usada AGORA (durante o pedido HTTP em curso). Ver aviso no
    comentário grande acima sobre a garantia de sincronismo. */
 let currentConnection = null;
@@ -2004,6 +2070,7 @@ function attachDeviceContext(req, res, next) {
 const db = new Proxy({}, {
   get(_target, prop, receiver) {
     if (prop === 'attachDeviceContext') return attachDeviceContext;
+    if (prop === 'withEveryDatabase') return withEveryDatabase;
     if (!currentConnection) {
       throw new Error(
         'db acedido antes de attachDeviceContext correr — confirma que ' +
