@@ -130,6 +130,40 @@ router.put('/:id/release', (req, res) => {
   res.json({ ok: true });
 });
 
+/* ---------- PUT /api/staff/:id/task — definir o que o Olheiro deve procurar ----------
+   Só faz sentido para role='Olheiro'. Qualquer campo pode ficar em
+   branco/null (sem restrição nessa dimensão) — ver routes/scout.js, que
+   aplica estes filtros às recomendações e às indicações da caixa de
+   entrada. `position` usa as mesmas siglas do resto do jogo: GR, DEF,
+   MED, MO, PL. */
+const TASK_POSITIONS = ['GR', 'DEF', 'MED', 'MO', 'PL'];
+
+router.put('/:id/task', (req, res) => {
+  const staff = db.prepare('SELECT * FROM staff WHERE id = ?').get(req.params.id);
+  if (!staff) return res.status(404).json({ error: 'Membro da comissão técnica não encontrado' });
+  if (staff.role !== 'Olheiro') return res.status(400).json({ error: 'Só se pode dar esta tarefa a um Olheiro' });
+  if (!staff.team_id) return res.status(400).json({ error: 'Este Olheiro ainda não está contratado por nenhum clube' });
+
+  const { min_age, max_age, position, max_price } = req.body;
+
+  if (position != null && position !== '' && !TASK_POSITIONS.includes(position)) {
+    return res.status(400).json({ error: 'Posição inválida' });
+  }
+  const minAge = min_age === '' || min_age == null ? null : Number(min_age);
+  const maxAge = max_age === '' || max_age == null ? null : Number(max_age);
+  if (minAge != null && maxAge != null && minAge > maxAge) {
+    return res.status(400).json({ error: 'A idade mínima não pode ser maior do que a máxima' });
+  }
+  const maxPrice = max_price === '' || max_price == null ? null : Number(max_price);
+
+  db.prepare(`
+    UPDATE staff SET task_min_age = ?, task_max_age = ?, task_position = ?, task_max_price = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(minAge, maxAge, position || null, maxPrice, staff.id);
+
+  res.json(db.prepare('SELECT * FROM staff WHERE id = ?').get(staff.id));
+});
+
 /* ---------- DELETE /api/staff/:id (admin) ---------- */
 router.delete('/:id', (req, res) => {
   const info = db.prepare('DELETE FROM staff WHERE id = ?').run(req.params.id);

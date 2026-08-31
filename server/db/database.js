@@ -1542,6 +1542,25 @@ function awardLeagueSeasonPrizeMoney({ standings, season_label: seasonLabel }) {
     const team = db.prepare('SELECT is_user_controlled FROM teams WHERE id = ?').get(row.team_id);
     if (!team || !team.is_user_controlled) return;
 
+    /* ---------- Detalhe estruturado (para o cartão bonito na caixa de
+       entrada — ver renderSeasonPrizeBox em public/dashboard.js) ----------
+       Uma linha por fonte de dinheiro, com ícone, para o utilizador ver
+       de imediato de onde veio cada parte do total, em vez de um
+       parágrafo corrido só com texto. */
+    const breakdown = [
+      { icon: '🏆', label: `${row.position}º lugar no Campeonato (de ${totalTeams})`, amount: leaguePrize },
+    ];
+    if (cup.roundsWon > 0) {
+      breakdown.push({
+        icon: '🎖️',
+        label: `${cup.roundsWon} ronda${cup.roundsWon === 1 ? '' : 's'} avançada${cup.roundsWon === 1 ? '' : 's'} na Taça São Vicente`,
+        amount: cup.roundsWon * CUP_ROUND_ADVANCE_PRIZE,
+      });
+    }
+    if (cup.isChampion) {
+      breakdown.push({ icon: '👑', label: 'Campeão da Taça São Vicente (bónus)', amount: CUP_CHAMPION_BONUS_PRIZE });
+    }
+
     const cupBits = [];
     if (cup.roundsWon > 0) {
       cupBits.push(`${cup.roundsWon} ronda${cup.roundsWon === 1 ? '' : 's'} avançada${cup.roundsWon === 1 ? '' : 's'} na Taça São Vicente (${(cup.roundsWon * CUP_ROUND_ADVANCE_PRIZE).toLocaleString('pt-PT')}£)`);
@@ -1550,12 +1569,13 @@ function awardLeagueSeasonPrizeMoney({ standings, season_label: seasonLabel }) {
     const cupLine = cupBits.length ? ` ${cupBits.join(', ')}.` : ' Sem prémios da Taça esta época.';
 
     db.prepare(`
-      INSERT INTO messages (team_id, type, title, body)
-      VALUES (@team_id, 'season_prize_money', @title, @body)
+      INSERT INTO messages (team_id, type, title, body, extra_json)
+      VALUES (@team_id, 'season_prize_money', @title, @body, @extra_json)
     `).run({
       team_id: row.team_id,
       title: `💰 Prémios da época: ${total.toLocaleString('pt-PT')}£ para o orçamento de transferências`,
       body: `Terminaste em ${row.position}º lugar (de ${totalTeams}) no Campeonato, o que vale ${leaguePrize.toLocaleString('pt-PT')}£.${cupLine} No total, o clube recebe ${total.toLocaleString('pt-PT')}£, já somados ao orçamento de transferências.`,
+      extra_json: JSON.stringify({ prize_breakdown: { total, season_label: seasonLabel, items: breakdown } }),
     });
   });
 }
@@ -1846,6 +1866,22 @@ if (staffTableDef && !staffTableDef.sql.includes('Olheiro')) {
     CREATE INDEX IF NOT EXISTS idx_staff_team ON staff(team_id);
   `);
 }
+
+/* ---------- Migração: tarefa do Olheiro ----------
+   Idade mínima/máxima, posição alvo e preço máximo que o utilizador pode
+   definir para orientar as recomendações — ver PUT /api/staff/:id/task
+   (routes/staff.js) e routes/scout.js (aplica o filtro). Todas ficam a
+   NULL por omissão, que routes/scout.js trata como "sem restrição". */
+const STAFF_TASK_COLUMNS = [
+  ['task_min_age', 'INTEGER'],
+  ['task_max_age', 'INTEGER'],
+  ['task_position', 'TEXT'],
+  ['task_max_price', 'REAL'],
+];
+const staffCols = db.prepare("PRAGMA table_info(staff)").all().map((c) => c.name);
+STAFF_TASK_COLUMNS.forEach(([colName, colDef]) => {
+  if (!staffCols.includes(colName)) db.exec(`ALTER TABLE staff ADD COLUMN ${colName} ${colDef}`);
+});
 
 
   return db;

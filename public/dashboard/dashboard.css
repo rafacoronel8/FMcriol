@@ -21,17 +21,13 @@
 *{box-sizing:border-box;}
 .hidden{display:none !important;}
 
-html{overflow-x:hidden;width:100%;}
 body{
   margin:0;
   background:radial-gradient(circle at 15% 0%, #16203350 0%, transparent 55%), var(--bg-0);
   color:var(--text-0);
   font-family:"Segoe UI","Inter",-apple-system,BlinkMacSystemFont,sans-serif;
   min-height:100vh;
-  overflow-x:hidden;
-  width:100%;
 }
-img{max-width:100%;}
 
 /* ============ TOPBAR ============ */
 .topbar{
@@ -150,12 +146,7 @@ img{max-width:100%;}
   padding:0 28px;
   border-bottom:1px solid var(--line);
   background:var(--bg-0);
-  overflow-x:auto;
-  overflow-y:hidden;
-  -webkit-overflow-scrolling:touch;
-  scrollbar-width:none;
 }
-.tabs::-webkit-scrollbar{display:none;}
 .tab{
   background:none;
   border:none;
@@ -165,8 +156,6 @@ img{max-width:100%;}
   cursor:pointer;
   border-bottom:2px solid transparent;
   font-family:inherit;
-  white-space:nowrap;
-  flex-shrink:0;
 }
 .tab.active{color:var(--text-0);border-bottom-color:var(--accent);font-weight:700;}
 .tab:hover:not(.active){color:var(--text-1);}
@@ -280,6 +269,19 @@ img{max-width:100%;}
 .msg-btn-reject{background:var(--bg-3);color:var(--red);border:1px solid #4a1f26;}
 .msg-btn-reject:hover{border-color:var(--red);}
 .msg-btn-neutral{background:var(--bg-3);color:var(--text-0);border:1px solid var(--line);}
+
+/* ---------- Escolha do Capitão ---------- */
+.msg-actions-captain{display:flex;flex-direction:column;gap:8px;}
+.captain-pick-btn{
+  display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-s);
+  padding:10px 14px;cursor:pointer;font-family:inherit;text-align:left;
+  transition:border-color .15s ease, background .15s ease;
+}
+.captain-pick-btn:hover{border-color:var(--accent);background:rgba(124,92,255,.08);}
+.captain-pick-btn:disabled{opacity:.5;cursor:not-allowed;}
+.captain-pick-name{font-size:13.5px;font-weight:700;color:var(--text-0);}
+.captain-pick-meta{font-size:11.5px;color:var(--text-2);}
 .msg-btn-neutral:hover{border-color:var(--accent);}
 .msg-btn:disabled{opacity:.5;cursor:not-allowed;}
 .msg-actions-question{flex-direction:column;align-items:stretch;}
@@ -443,6 +445,25 @@ img{max-width:100%;}
 .msg-scout-chip.chip-neutral{color:var(--text-1);}
 .msg-scout-chip.chip-bad{color:var(--red);}
 .msg-scout-value{font-size:12.5px;font-weight:700;color:var(--gold);}
+
+/* ---------- Prémios de fim de época (Campeonato + Taça) ---------- */
+.msg-prize-box{
+  background:linear-gradient(160deg, rgba(242,193,78,.10), var(--bg-2));
+  border:1px solid #4a3e1f;border-radius:var(--radius-m);
+  padding:16px;margin-bottom:16px;
+}
+.msg-prize-total{
+  display:flex;align-items:baseline;justify-content:space-between;
+  padding-bottom:12px;margin-bottom:12px;border-bottom:1px solid #4a3e1f;
+}
+.msg-prize-total-label{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text-2);}
+.msg-prize-total-value{font-size:22px;font-weight:800;color:var(--gold);}
+.msg-prize-items{display:flex;flex-direction:column;gap:9px;}
+.msg-prize-item{display:flex;align-items:center;gap:10px;}
+.msg-prize-item-icon{font-size:15px;flex-shrink:0;width:20px;text-align:center;}
+.msg-prize-item-label{flex:1;font-size:13px;color:var(--text-1);}
+.msg-prize-item-amount{font-size:13px;font-weight:700;color:var(--green);flex-shrink:0;}
+.msg-prize-footnote{font-size:11px;color:var(--text-2);margin:12px 0 0;padding-top:10px;border-top:1px solid #4a3e1f;}
 
 @media (max-width:900px){
   .inbox-layout{grid-template-columns:1fr;height:auto;}
@@ -916,6 +937,26 @@ img{max-width:100%;}
   margin-top:12px;
   line-height:1.5;
 }
+.activity-result.ok{color:var(--green);border-color:var(--green-dim);}
+.activity-result.err{color:var(--red);border-color:#4a1f26;}
+
+/* ---------- Tarefa do Olheiro ---------- */
+.scout-task-form{
+  background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-m);
+  padding:14px;margin-bottom:14px;display:flex;flex-direction:column;gap:10px;
+}
+.scout-task-title{font-size:12px;font-weight:700;color:var(--text-1);}
+.scout-task-row{display:flex;gap:10px;}
+.scout-task-row label{
+  flex:1;display:flex;flex-direction:column;gap:4px;
+  font-size:11px;color:var(--text-2);
+}
+.scout-task-row input, .scout-task-row select{
+  background:var(--bg-3);border:1px solid var(--line);color:var(--text-0);
+  border-radius:var(--radius-s);padding:7px 9px;font-size:12.5px;font-family:inherit;
+  outline:none;
+}
+.scout-task-row input:focus, .scout-task-row select:focus{border-color:var(--accent);}
 
 /* ---- Marcar amigável ---- */
 .friendly-form{display:flex;flex-direction:column;gap:12px;}
@@ -2222,135 +2263,4 @@ img{max-width:100%;}
 @media (max-width:760px){
   .squad-table{font-size:12px;}
   .squad-table thead th, .squad-table td{padding:6px 6px;}
-}
-/* ==========================================================
-   Seleção por toque (alternativa ao arrastar, para telemóvel)
-   — usada na Tática: tocar numa origem e depois no destino
-   ========================================================== */
-.pitch-slot.selected-for-move .slot-circle{
-  box-shadow:0 0 0 3px var(--accent-2), 0 0 14px rgba(155,61,255,.6);
-}
-.bench-slot.selected-for-move,
-.pool-chip.selected-for-move{
-  border-color:var(--accent-2);
-  box-shadow:0 0 0 2px rgba(155,61,255,.35);
-}
-.tactics-touch-hint{
-  font-size:11px;
-  color:var(--text-2);
-  margin:6px 0 0;
-  line-height:1.4;
-}
-
-/* ==========================================================
-   AJUSTES GERAIS PARA TELEMÓVEL
-   ========================================================== */
-@media (max-width:640px){
-  :root{font-size:14px;}
-
-  .topbar{
-    padding:12px 14px;
-    gap:10px;
-    row-gap:10px;
-  }
-  .brand{font-size:15px;}
-  .club-chip{padding-left:12px;gap:8px;}
-  .chip-shield{width:32px;height:32px;font-size:14px;}
-  .chip-name{font-size:12.5px;}
-  .chip-manager{font-size:10.5px;}
-  .topbar-date{font-size:11px;padding:5px 11px;order:2;}
-  .topbar-advance-btn{order:4;flex:1 1 auto;}
-  .search-wrap{order:5;}
-
-  .tabs{padding:0 10px;}
-  .tab{padding:12px 13px;font-size:12.5px;}
-
-  .content{padding:16px 14px 44px;}
-
-  .card{padding:14px;}
-
-  .club-hero{flex-direction:column;text-align:center;padding:20px 16px;gap:12px;}
-  .club-hero-meta{justify-content:center;flex-wrap:wrap;}
-
-  .squad-grid{grid-template-columns:repeat(auto-fill, minmax(150px, 1fr));gap:10px;}
-  .squad-pool{grid-template-columns:repeat(2, 1fr) !important;}
-
-  .msg-actions,
-  .decision-modal-actions,
-  .team-talk-buttons{flex-direction:column;align-items:stretch;}
-  .msg-actions button,
-  .decision-modal-actions button,
-  .team-talk-buttons button{width:100%;}
-
-  .friendly-item{flex-direction:column;align-items:stretch;text-align:center;}
-  .friendly-teams{min-width:0;justify-content:center;}
-
-  .news-modal{padding:22px 16px 20px;max-width:94vw;}
-  .decision-modal-stepper{flex-wrap:wrap;}
-
-  .ceremony-modal,.gala-modal{max-width:94vw;}
-}
-
-@media (max-width:400px){
-  .chip-manager{display:none;}
-  .squad-pool{grid-template-columns:1fr !important;}
-  .activity-btn{padding:10px 11px;}
-}
-
-/* ==========================================================
-   Capitania — escolher capitão e sub-capitão do plantel
-   ========================================================== */
-.captaincy-list{display:flex;flex-direction:column;gap:8px;}
-.captaincy-row{
-  display:flex;
-  align-items:center;
-  gap:12px;
-  background:var(--bg-2);
-  border:1px solid var(--line);
-  border-radius:var(--radius-m);
-  padding:10px 12px;
-  flex-wrap:wrap;
-}
-.captaincy-avatar{
-  width:38px;height:38px;flex-shrink:0;
-  border-radius:50%;
-  background:var(--bg-3);
-  border:1px solid var(--line);
-  display:flex;align-items:center;justify-content:center;
-  font-size:16px;overflow:hidden;
-}
-.captaincy-avatar img{width:100%;height:100%;object-fit:cover;}
-.captaincy-info{flex:1;min-width:120px;}
-.captaincy-name{font-size:13px;font-weight:700;color:var(--text-0);}
-.captaincy-position{font-size:11px;color:var(--text-2);margin-top:1px;}
-.captaincy-actions{display:flex;gap:6px;flex-shrink:0;}
-.captaincy-btn{
-  background:var(--bg-3);
-  border:1px solid var(--line);
-  color:var(--text-1);
-  border-radius:var(--radius-s);
-  padding:6px 11px;
-  font-size:11.5px;
-  font-weight:700;
-  cursor:pointer;
-  font-family:inherit;
-  transition:border-color .15s ease, color .15s ease, background .15s ease;
-}
-.captaincy-btn:hover:not(:disabled){border-color:var(--accent);color:var(--text-0);}
-.captaincy-btn:disabled{opacity:.6;cursor:not-allowed;}
-.captaincy-btn.captain.active{background:var(--gold);border-color:var(--gold);color:#3a2c0e;}
-.captaincy-btn.vice.active{background:var(--accent);border-color:var(--accent);color:#fff;}
-
-/* Segundo toast (lembrete de capitania) — fica logo abaixo do de mensagens */
-.captaincy-toast{
-  top:auto;
-  bottom:20px;
-  border-color:var(--gold);
-}
-.captaincy-toast:hover{border-color:var(--accent);}
-
-@media (max-width:640px){
-  .captaincy-row{justify-content:space-between;}
-  .captaincy-actions{width:100%;}
-  .captaincy-btn{flex:1;}
 }

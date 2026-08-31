@@ -123,6 +123,19 @@ router.post('/reset', (req, res) => {
     db.prepare('DELETE FROM messages').run();
     db.prepare('DELETE FROM contract_offers').run();
     db.prepare('DELETE FROM transfer_offers').run();
+    /* transfer_clauses guarda as cláusulas já FECHADAS (prestações, prémio
+       por golos, percentagem de revenda — ver materializeClauses em
+       db/database.js) de negócios de saves anteriores. Tinha ficado de
+       fora deste reset, por isso um "Novo Jogo" continuava a mostrar
+       cláusulas de clubes e jogadores que já nem existiam nesse save. */
+    db.prepare('DELETE FROM transfer_clauses').run();
+    /* season_prize_payments só serve para impedir pagar o prémio de fim de
+       época duas vezes NA MESMA época (ver
+       db/database.js:awardLeagueSeasonPrizeMoney). Como o calendário de
+       um "Novo Jogo" volta sempre a começar no mesmo ano (2026), sem isto
+       o jogo pensava que a época "2026/2027" já tinha sido paga num save
+       anterior e saltava o prémio no novo save. */
+    db.prepare('DELETE FROM season_prize_payments').run();
     /* market_news alimenta a tab "Mercado" (jornal de notícias) — tinha ficado
        de fora, por isso as notícias de uma partida anterior continuavam a
        aparecer mesmo depois de "apagar jogo guardado". */
@@ -285,17 +298,33 @@ router.post('/claim-team', (req, res) => {
       db.prepare('UPDATE game_state SET welcome_sent = 1 WHERE id = 1').run();
     }
 
-    /* Capitão e sub-capitão — só mexe se este plantel ainda não tiver
-       nenhum dos dois definidos (ver assignCaptaincy em routes/players.js);
+    /* Capitão e sub-capitão — o utilizador é quem escolhe (ver PUT
+       /api/players/captain/:teamId), não é atribuído automaticamente.
+       Só manda a mensagem "Escolhe o capitão" se este plantel ainda não
+       tiver capitão nenhum E ainda não tiver sido perguntado antes —
        claim-team corre sempre que o dashboard carrega, não faz sentido
-       reavaliar a cada vez. */
-    const capResult = players.assignCaptaincy(team_id);
-    if (capResult && capResult.captain) {
-      const { title, body } = players.describeCaptaincyAnnouncement(capResult.captain, capResult.vice);
-      db.prepare(`
-        INSERT INTO messages (team_id, type, title, body, player_id)
-        VALUES (@team_id, 'captain_announced', @title, @body, @player_id)
-      `).run({ team_id: team.id, player_id: capResult.captain.id, title, body });
+       repetir a pergunta a cada vez. */
+    const hasCaptain = db.prepare('SELECT 1 FROM players WHERE team_id = ? AND is_captain = 1').get(team_id);
+    if (!hasCaptain) {
+      const alreadyAsked = db.prepare("SELECT 1 FROM messages WHERE team_id = ? AND type = 'choose_captain'").get(team_id);
+      if (!alreadyAsked) {
+        const candidates = players.getCaptaincyCandidates(team_id);
+        if (candidates.length) {
+          db.prepare(`
+            INSERT INTO messages (team_id, type, title, body, extra_json)
+            VALUES (@team_id, 'choose_captain', @title, @body, @extra_json)
+          `).run({
+            team_id: team.id,
+            title: '🎖️ Escolhe o capitão da equipa',
+            body: 'Como treinador, cabe-te a ti escolher quem veste a braçadeira de capitão. O sub-capitão fica automaticamente com o segundo melhor em Liderança.',
+            extra_json: JSON.stringify({
+              captain_candidates: candidates.map((c) => ({
+                player_id: c.id, name: c.name, position_tag: c.position_tag, leadership: c.leadership,
+              })),
+            }),
+          });
+        }
+      }
     }
   });
   claim();

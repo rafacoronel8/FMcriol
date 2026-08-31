@@ -647,20 +647,35 @@ function runSeasonRolloverIfDue(nextDateStr) {
   regenerateSeasonFixtures(rolloverDate);
 
   /* ---------- Capitão e sub-capitão da nova época ----------
-     Reavaliados para TODAS as equipas (mesmo as geridas pelo jogo, para o
-     efeito em db.getCaptainFactor e os perfis dos jogadores mostrarem
-     sempre a braçadeira certa) — ver assignCaptaincy em routes/players.js.
-     Só o clube do utilizador recebe mensagem na caixa de entrada. */
+     As equipas geridas pelo jogo continuam a ter capitão atribuído
+     automaticamente (mesmo critério de sempre — mais Liderança do
+     plantel), para o efeito em db.getCaptainFactor não faltar a
+     ninguém. O clube do utilizador passa a ESCOLHER: fica sem capitão
+     definido até responder à mensagem "Escolhe o capitão da equipa" na
+     caixa de entrada (ver PUT /api/players/captain/:teamId). */
   const allTeamsForCaptaincy = db.prepare('SELECT id, is_user_controlled FROM teams').all();
   allTeamsForCaptaincy.forEach((t) => {
-    const result = players.assignCaptaincy(t.id, { force: true });
-    if (t.is_user_controlled && result && result.captain) {
-      const { title, body } = players.describeCaptaincyAnnouncement(result.captain, result.vice, seasonLabelFor(rolloverDate));
-      db.prepare(`
-        INSERT INTO messages (team_id, type, title, body, player_id)
-        VALUES (@team_id, 'captain_announced', @title, @body, @player_id)
-      `).run({ team_id: t.id, player_id: result.captain.id, title, body });
+    if (t.is_user_controlled) {
+      db.prepare('UPDATE players SET is_captain = 0, is_vice_captain = 0 WHERE team_id = ?').run(t.id);
+      const candidates = players.getCaptaincyCandidates(t.id);
+      if (candidates.length) {
+        db.prepare(`
+          INSERT INTO messages (team_id, type, title, body, extra_json)
+          VALUES (@team_id, 'choose_captain', @title, @body, @extra_json)
+        `).run({
+          team_id: t.id,
+          title: '🎖️ Escolhe o capitão da equipa',
+          body: `Uma nova época começa — escolhe quem veste a braçadeira de capitão para a época ${seasonLabelFor(rolloverDate)}. O sub-capitão fica automaticamente com o segundo melhor em Liderança.`,
+          extra_json: JSON.stringify({
+            captain_candidates: candidates.map((c) => ({
+              player_id: c.id, name: c.name, position_tag: c.position_tag, leadership: c.leadership,
+            })),
+          }),
+        });
+      }
+      return;
     }
+    players.assignCaptaincy(t.id, { force: true });
   });
 
   /* Notifica o treinador — uma mensagem por cada troféu/prémio que o SEU

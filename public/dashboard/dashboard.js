@@ -239,10 +239,12 @@ async function loadScoutRecommendations(){
   const emptyMsg = el('scoutEmpty');
   const noScoutMsg = el('scoutNoScout');
   const closedMsg = el('scoutMarketClosed');
+  const taskForm = el('scoutTaskForm');
   if(!list) return;
 
   [emptyMsg, noScoutMsg, closedMsg].forEach((box) => box.classList.add('hidden'));
   list.innerHTML = '';
+  taskForm.classList.add('hidden');
 
   try{
     const res = await fetch(`/api/scout/${teamId}/recommendations`);
@@ -253,6 +255,17 @@ async function loadScoutRecommendations(){
       noScoutMsg.classList.remove('hidden');
       return;
     }
+
+    // A partir daqui já há Olheiro contratado — mostra sempre o formulário
+    // da tarefa, mesmo com o mercado fechado, para dar para preparar com
+    // antecedência o que ele deve procurar assim que a janela abrir.
+    taskForm.dataset.scoutId = data.scout_id;
+    el('scoutTaskMinAge').value = data.task?.min_age ?? '';
+    el('scoutTaskMaxAge').value = data.task?.max_age ?? '';
+    el('scoutTaskPosition').value = data.task?.position ?? '';
+    el('scoutTaskMaxPrice').value = data.task?.max_price ?? '';
+    taskForm.classList.remove('hidden');
+
     if(!data.market_open){
       closedMsg.classList.remove('hidden');
       return;
@@ -286,6 +299,44 @@ async function loadScoutRecommendations(){
     emptyMsg.classList.remove('hidden');
   }
 }
+
+el('scoutTaskForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const resultBox = el('scoutTaskResult');
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const scoutId = form.dataset.scoutId;
+  if(!scoutId) return;
+
+  submitBtn.disabled = true;
+  resultBox.classList.add('hidden');
+
+  try{
+    const res = await fetch(`/api/staff/${scoutId}/task`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        min_age: el('scoutTaskMinAge').value || null,
+        max_age: el('scoutTaskMaxAge').value || null,
+        position: el('scoutTaskPosition').value || null,
+        max_price: el('scoutTaskMaxPrice').value || null,
+      }),
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Não foi possível guardar a tarefa');
+
+    resultBox.textContent = 'Tarefa guardada — o olheiro passa a procurar dentro destes critérios.';
+    resultBox.className = 'activity-result ok';
+    resultBox.classList.remove('hidden');
+    loadScoutRecommendations();
+  }catch(err){
+    resultBox.textContent = err.message;
+    resultBox.className = 'activity-result err';
+    resultBox.classList.remove('hidden');
+  }finally{
+    submitBtn.disabled = false;
+  }
+});
 
 function renderStaffHired(list){
   const box = el('staffHired');
@@ -810,6 +861,7 @@ const MESSAGE_ICONS = {
   player_of_match: '⭐',
   scout_tip: '🔎',
   season_prize_money: '💰',
+  choose_captain: '🎖️',
 };
 
 function truncateText(text, n){
@@ -875,6 +927,37 @@ function renderPotmStatsBox(m){
     </div>`;
 }
 
+/* ---------- Prémios de fim de época (Campeonato + Taça) ----------
+   messages.extra_json guarda { prize_breakdown: { total, season_label,
+   items: [{ icon, label, amount }] } } — ver
+   db/database.js:awardLeagueSeasonPrizeMoney. Mostra o total em destaque
+   e depois uma linha por cada fonte de dinheiro (posição no Campeonato,
+   rondas da Taça, bónus de campeão), em vez de só um parágrafo corrido. */
+function renderSeasonPrizeBox(m){
+  if(m.type !== 'season_prize_money' || !m.extra_json) return '';
+  let extra;
+  try{ extra = JSON.parse(m.extra_json); }catch(err){ return ''; }
+  const p = extra && extra.prize_breakdown;
+  if(!p || !Array.isArray(p.items) || !p.items.length) return '';
+
+  return `
+    <div class="msg-prize-box">
+      <div class="msg-prize-total">
+        <span class="msg-prize-total-label">Total recebido</span>
+        <span class="msg-prize-total-value">${fmtMoney(p.total)}</span>
+      </div>
+      <div class="msg-prize-items">
+        ${p.items.map((item) => `
+          <div class="msg-prize-item">
+            <span class="msg-prize-item-icon">${item.icon || '💰'}</span>
+            <span class="msg-prize-item-label">${item.label}</span>
+            <span class="msg-prize-item-amount">+${fmtMoney(item.amount)}</span>
+          </div>`).join('')}
+      </div>
+      <p class="msg-prize-footnote">Já somado ao orçamento de transferências.</p>
+    </div>`;
+}
+
 /* ---------- Relatório do Olheiro (indicação na caixa de entrada) ----------
    messages.extra_json guarda { scout_report: { photo_path, name,
    position_tag, team_name, quality_stars, specialization, personality,
@@ -908,12 +991,25 @@ function renderScoutTipBox(m){
     </div>`;
 }
 
+/* ---------- Escolha do Capitão (início de época) ----------
+   messages.extra_json guarda { captain_candidates: [{ player_id, name,
+   position_tag, leadership }], resolved: true/undefined } — ver
+   routes/league.js (envia a mensagem) e routes/players.js (PUT
+   /captain/:teamId, que reescreve a mensagem já resolvida). */
+function captainChoiceCandidates(m){
+  try{ return JSON.parse(m.extra_json || '{}').captain_candidates || []; }catch(err){ return []; }
+}
+function captainChoiceResolved(m){
+  try{ return !!JSON.parse(m.extra_json || '{}').resolved; }catch(err){ return false; }
+}
+
 function messageNeedsResponse(m){
   return (m.type === 'incoming_offer_pending' && m.offer_status === 'pending')
     || (m.type === 'player_incident' && m.incident_status === 'pending')
     || (m.type === 'manager_question' && m.question_status === 'pending')
     || (m.type === 'transfer_meeting' && m.meeting_status === 'pending')
-    || (m.type === 'match_day' && m.friendly_status === 'accepted');
+    || (m.type === 'match_day' && m.friendly_status === 'accepted')
+    || (m.type === 'choose_captain' && !captainChoiceResolved(m) && captainChoiceCandidates(m).length > 0);
 }
 
 function messageSmallAvatar(m){
@@ -1048,6 +1144,15 @@ function renderMessageDetail(m){
          <button class="msg-btn msg-btn-neutral" data-action="play">▶ Jogar</button>
          <button class="msg-btn msg-btn-neutral" data-action="simulate">⏭ Simular</button>
        </div>`;
+  }else if(m.type === 'choose_captain' && !captainChoiceResolved(m) && captainChoiceCandidates(m).length){
+    const candidates = captainChoiceCandidates(m);
+    actions = `<div class="msg-actions msg-actions-captain" data-message-id="${m.id}">
+         ${candidates.map((c) => `
+           <button class="captain-pick-btn" data-player-id="${c.player_id}">
+             <span class="captain-pick-name">${c.name}</span>
+             <span class="captain-pick-meta">${c.position_tag || 'Posição não definida'} · Liderança ${c.leadership}</span>
+           </button>`).join('')}
+       </div>`;
   }
 
   box.innerHTML = `
@@ -1062,6 +1167,7 @@ function renderMessageDetail(m){
     ${highlight}
     ${renderPotmStatsBox(m)}
     ${renderScoutTipBox(m)}
+    ${renderSeasonPrizeBox(m)}
     <div class="inbox-detail-body">${m.body}</div>
     ${renderMessageGauges(m)}
     ${actions}
@@ -1102,6 +1208,10 @@ function renderMessageDetail(m){
           }
         });
       });
+    }else if(actionsBox.dataset.messageId){
+      actionsBox.querySelectorAll('.captain-pick-btn').forEach((btn) => {
+        btn.addEventListener('click', () => respondToCaptainChoice(actionsBox.dataset.messageId, btn.dataset.playerId, actionsBox));
+      });
     }
   }
 }
@@ -1140,6 +1250,26 @@ async function respondToOffer(offerId, accept, actionsBox){
   }catch(err){
     actionsBox.querySelectorAll('.msg-btn').forEach((b) => (b.disabled = false));
     actionsBox.insertAdjacentHTML('afterend', '<p class="msg-decision-note">Não foi possível responder à proposta.</p>');
+  }
+}
+
+/* ---------- Escolher o capitão (início de época) ---------- */
+async function respondToCaptainChoice(messageId, playerId, actionsBox){
+  actionsBox.querySelectorAll('.captain-pick-btn').forEach((b) => (b.disabled = true));
+  try{
+    const res = await fetch(`/api/players/captain/${teamId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ player_id: Number(playerId), message_id: Number(messageId) }),
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Não foi possível escolher o capitão');
+    actionsBox.insertAdjacentHTML('afterend', `<p class="msg-decision-note">${data.body}</p>`);
+    actionsBox.remove();
+    await loadMessages();
+  }catch(err){
+    actionsBox.querySelectorAll('.captain-pick-btn').forEach((b) => (b.disabled = false));
+    actionsBox.insertAdjacentHTML('afterend', `<p class="msg-decision-note">${err.message}</p>`);
   }
 }
 

@@ -176,13 +176,6 @@
     </div>
 
     <div class="card">
-      <div class="card-title no-margin">🎖️ Capitania</div>
-      <p class="market-hint">Escolhe o capitão e o sub-capitão da equipa — normalmente no início de cada época. Aparecem destacados no plantel e no perfil de cada jogador.</p>
-      <div id="captaincyList" class="captaincy-list"></div>
-      <p class="placeholder-text hidden" id="captaincyEmpty">Ainda não tens jogadores no plantel.</p>
-    </div>
-
-    <div class="card">
       <div class="card-title no-margin">Comissão Técnica</div>
       <div id="staffHired" class="staff-hired-grid"></div>
       <p class="placeholder-text hidden" id="staffHiredEmpty">Ainda não contrataste ninguém para a comissão técnica.</p>
@@ -196,8 +189,42 @@
 
     <div class="card">
       <div class="card-title no-margin">🔎 Recomendações do Olheiro</div>
+
+      <form id="scoutTaskForm" class="scout-task-form hidden">
+        <div class="scout-task-title">Diz ao olheiro o que procurar</div>
+        <div class="scout-task-row">
+          <label>
+            <span>Idade mín.</span>
+            <input type="number" id="scoutTaskMinAge" min="14" max="45" placeholder="Sem limite">
+          </label>
+          <label>
+            <span>Idade máx.</span>
+            <input type="number" id="scoutTaskMaxAge" min="14" max="45" placeholder="Sem limite">
+          </label>
+        </div>
+        <div class="scout-task-row">
+          <label>
+            <span>Posição</span>
+            <select id="scoutTaskPosition">
+              <option value="">Qualquer</option>
+              <option value="GR">Guarda-Redes</option>
+              <option value="DEF">Defesa</option>
+              <option value="MED">Médio</option>
+              <option value="MO">Médio Ofensivo</option>
+              <option value="PL">Avançado</option>
+            </select>
+          </label>
+          <label>
+            <span>Preço máx. (£)</span>
+            <input type="number" id="scoutTaskMaxPrice" min="0" step="1000" placeholder="Sem limite">
+          </label>
+        </div>
+        <button type="submit" class="btn-advance small">Guardar Tarefa</button>
+        <p id="scoutTaskResult" class="activity-result hidden"></p>
+      </form>
+
       <div id="scoutRecommendations" class="scout-list"></div>
-      <p class="placeholder-text hidden" id="scoutEmpty">O olheiro não encontrou nenhuma boa oportunidade de momento.</p>
+      <p class="placeholder-text hidden" id="scoutEmpty">O olheiro não encontrou nenhuma boa oportunidade com os critérios atuais.</p>
       <p class="placeholder-text hidden" id="scoutNoScout">Contrata um Olheiro na Gestão de Comissão Técnica para começares a receber recomendações de jogadores durante o mercado.</p>
       <p class="placeholder-text hidden" id="scoutMarketClosed">O mercado de transferências está fechado — o olheiro só recomenda jogadores durante a janela de transferências.</p>
     </div>
@@ -264,7 +291,7 @@
       </div>
 
       <div class="squad-pool-card">
-        <div class="card-title no-margin">Plantel <span class="squad-pool-hint">arrasta para o campo ou para os suplentes — no telemóvel, toca no jogador e depois no destino</span></div>
+        <div class="card-title no-margin">Plantel <span class="squad-pool-hint">arrasta para o campo ou para os suplentes</span></div>
         <div class="squad-pool" id="squadPool"><!-- gerado via JS --></div>
       </div>
 
@@ -439,7 +466,6 @@
 </main>
 
 <div id="newMsgToast" class="new-msg-toast hidden"></div>
-<div id="captaincyToast" class="new-msg-toast captaincy-toast hidden"></div>
 
 <div id="friendlyModalOverlay" class="news-modal-overlay hidden">
   <div class="news-modal">

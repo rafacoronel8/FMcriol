@@ -156,6 +156,20 @@ function daysBetweenIsoDates(fromStr, toStr) {
    critério de preço/qualidade/necessidade usado em GET /recommendations —
    usado tanto ali como no runScoutTick abaixo, para as duas vias nunca
    discordarem sobre o que é "uma boa indicação". */
+/* Aplica a tarefa definida pelo utilizador (idade mín/máx, posição,
+   preço máximo — ver PUT /api/staff/:id/task) a um candidato. Qualquer
+   campo em branco/null significa "sem restrição nessa dimensão". */
+function matchesScoutTask(scout, player, code, value) {
+  if (scout.task_position && scout.task_position !== code) return false;
+  if (scout.task_max_price != null && value > scout.task_max_price) return false;
+  if (scout.task_min_age != null || scout.task_max_age != null) {
+    const age = ageFromBirthDate(player.birth_date);
+    if (scout.task_min_age != null && age < scout.task_min_age) return false;
+    if (scout.task_max_age != null && age > scout.task_max_age) return false;
+  }
+  return true;
+}
+
 function findScoutCandidates(team, scout, excludeIds) {
   const needs = computeSquadNeeds(team.id);
   const budget = team.transfer_budget || 0;
@@ -176,7 +190,11 @@ function findScoutCandidates(team, scout, excludeIds) {
       const code = classifyPositionCode(p.position_code);
       const quality = p.current_ability_stars ?? 2.5;
       const value = Math.round(estimateMarketValue(p) * scoutSharpness);
-      if (value > budget * 1.15) return null;
+      if (!matchesScoutTask(scout, p, code, value)) return null;
+      /* Sem tarefa de preço definida, continua a respeitar o orçamento do
+         clube como antes; com tarefa de preço definida, essa passa a ser
+         o único teto (o utilizador pediu explicitamente esse limite). */
+      if (scout.task_max_price == null && value > budget * 1.15) return null;
       if (quality < teamLevel - 1.4) return null;
       if (quality > teamLevel + 1.6) return null;
 
@@ -208,7 +226,14 @@ router.get('/:teamId/recommendations', (req, res) => {
 
   const marketOpen = db.isMarketWindowOpen();
   if (!marketOpen) {
-    return res.json({ has_scout: true, market_open: false, scout_name: scout.name, recommendations: [] });
+    return res.json({
+      has_scout: true, market_open: false, scout_name: scout.name, scout_id: scout.id,
+      task: {
+        min_age: scout.task_min_age, max_age: scout.task_max_age,
+        position: scout.task_position, max_price: scout.task_max_price,
+      },
+      recommendations: [],
+    });
   }
 
   const scored = findScoutCandidates(team, scout, new Set()).map(({ player: p, code, quality, value, fitScore, needScore }) => ({
@@ -220,7 +245,11 @@ router.get('/:teamId/recommendations', (req, res) => {
   }));
 
   res.json({
-    has_scout: true, market_open: true, scout_name: scout.name,
+    has_scout: true, market_open: true, scout_name: scout.name, scout_id: scout.id,
+    task: {
+      min_age: scout.task_min_age, max_age: scout.task_max_age,
+      position: scout.task_position, max_price: scout.task_max_price,
+    },
     recommendations: scored.slice(0, 8),
   });
 });

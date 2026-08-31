@@ -584,7 +584,66 @@ function describeCaptaincyAnnouncement(captain, vice, seasonLabel) {
   };
 }
 
+/* ---------- Escolha do capitão pelo utilizador ----------
+   No início de época, as equipas geridas pelo jogo continuam a ter
+   capitão atribuído automaticamente (assignCaptaincy acima) — mas o
+   clube do utilizador passa a ESCOLHER, através de uma mensagem na caixa
+   de entrada (ver routes/league.js). getCaptaincyCandidates dá a lista
+   ordenada por Liderança para a mensagem mostrar; setCaptain aplica a
+   escolha (o sub-capitão continua automático: o segundo melhor em
+   Liderança, agora excluindo quem foi escolhido como capitão). */
+function getCaptaincyCandidates(teamId, limit = 8) {
+  const squad = db.prepare('SELECT id, name, position_tag, mental_json FROM players WHERE team_id = ?').all(teamId);
+  return squad
+    .map((p) => ({ ...p, leadership: leadershipValue(p) }))
+    .sort((a, b) => b.leadership - a.leadership)
+    .slice(0, limit);
+}
+
+function setCaptain(teamId, playerId) {
+  const captain = db.prepare('SELECT id, name, mental_json FROM players WHERE id = ? AND team_id = ?').get(playerId, teamId);
+  if (!captain) return null;
+
+  const rest = db.prepare('SELECT id, name, mental_json FROM players WHERE team_id = ? AND id != ?').all(teamId, playerId);
+  const vice = rest
+    .map((p) => ({ ...p, leadership: leadershipValue(p) }))
+    .sort((a, b) => b.leadership - a.leadership)[0] || null;
+
+  db.prepare('UPDATE players SET is_captain = 0, is_vice_captain = 0 WHERE team_id = ?').run(teamId);
+  db.prepare('UPDATE players SET is_captain = 1 WHERE id = ?').run(captain.id);
+  if (vice) db.prepare('UPDATE players SET is_vice_captain = 1 WHERE id = ?').run(vice.id);
+
+  return { captain: { ...captain, leadership: leadershipValue(captain) }, vice };
+}
+
+/* ---------- PUT /api/players/captain/:teamId — o utilizador escolhe o capitão ----------
+   Chamado a partir da mensagem "Escolhe o capitão da equipa" (ver
+   routes/league.js). Se vier `message_id`, a própria mensagem é
+   reescrita com o anúncio (e marcada como resolvida em extra_json), para
+   não voltar a mostrar a escolha se for reaberta mais tarde. */
+router.put('/captain/:teamId', (req, res) => {
+  const { player_id, message_id } = req.body;
+  const team = db.prepare('SELECT id FROM teams WHERE id = ?').get(req.params.teamId);
+  if (!team) return res.status(404).json({ error: 'Equipa não encontrada' });
+
+  const result = setCaptain(team.id, player_id);
+  if (!result) return res.status(400).json({ error: 'Jogador inválido para esta equipa' });
+
+  const { title, body } = describeCaptaincyAnnouncement(result.captain, result.vice, null);
+
+  if (message_id) {
+    db.prepare(`
+      UPDATE messages SET title = ?, body = ?, extra_json = ?, player_id = ?
+      WHERE id = ? AND team_id = ?
+    `).run(title, body, JSON.stringify({ resolved: true }), result.captain.id, message_id, team.id);
+  }
+
+  res.json({ ok: true, captain: result.captain, vice: result.vice, title, body });
+});
+
 module.exports = router;
 module.exports.assignCaptaincy = assignCaptaincy;
 module.exports.describeCaptaincyAnnouncement = describeCaptaincyAnnouncement;
 module.exports.leadershipValue = leadershipValue;
+module.exports.getCaptaincyCandidates = getCaptaincyCandidates;
+module.exports.setCaptain = setCaptain;
