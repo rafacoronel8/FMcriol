@@ -528,80 +528,264 @@ function squadGeneralStats(seasonStatsJson){
   }
 }
 
+/* ---------- Minha Equipa — grupos de posição, filtros, pesquisa e
+   ordenação por coluna (substitui o antigo botão "Gerar Valores
+   Automáticos", que agora foi removido do painel). ---------- */
+const POSITION_ORDER = ['GR', 'DD', 'DC', 'DE', 'MCD', 'MC', 'MD', 'ME', 'ED', 'PL', 'EE'];
+
+function squadPosGroup(code){
+  const c = String(code || '').toUpperCase();
+  if(c === 'GR') return 'GR';
+  if(c === 'DD' || c === 'DC' || c === 'DE') return 'DEF';
+  if(c === 'MCD' || c === 'MC' || c === 'MD' || c === 'ME') return 'MED';
+  if(c === 'ED' || c === 'PL' || c === 'EE') return 'AVA';
+  return 'OUTRO';
+}
+
+const POS_GROUP_LABEL = { GR: 'Guarda-Redes', DEF: 'Defesa', MED: 'Médio', AVA: 'Avançado', OUTRO: '—' };
+
+/* Converte texto de dinheiro (ex: "£1.250.000" ou "£12.500/sem", no
+   formato pt-PT usado por fmtMoney) num número, só para permitir
+   ordenar as colunas VM e Salário. */
+function squadMoneyToNumber(text){
+  if(!text) return -1;
+  const cleaned = String(text).replace(/[^\d,.\-]/g, '');
+  if(!cleaned) return -1;
+  const normalized = cleaned.replace(/\./g, '').replace(',', '.');
+  const n = parseFloat(normalized);
+  return Number.isFinite(n) ? n : -1;
+}
+
+let squadPlayersData = [];
+let squadFilterPos = 'all';
+let squadSearchTerm = '';
+let squadSortKey = null;
+let squadSortDir = 'desc';
+
 async function loadSquad(){
   const tbody = el('squadTableBody');
   const empty = el('squadEmpty');
+  const noMatch = el('squadNoMatch');
   try{
     const res = await fetch(`/api/players?team_id=${teamId}`);
     if(!res.ok) throw new Error();
     const players = await res.json();
 
     el('squadCount').textContent = players.length;
+    noMatch.classList.add('hidden');
 
     if(!players.length){
       tbody.innerHTML = '';
+      squadPlayersData = [];
+      el('squadHighlights').classList.add('hidden');
       empty.classList.remove('hidden');
       return;
     }
     empty.classList.add('hidden');
 
-    tbody.innerHTML = players.map((p) => {
-      const avatar = p.photo_path ? `<img src="${p.photo_path}" alt="">` : '🧑';
-      const isStoodDown = p.stood_down_until && p.stood_down_until >= currentGameDate;
+    /* Enriquece cada jogador uma única vez, para filtrar/ordenar sem
+       ter de voltar a somar as estatísticas da época a cada clique. */
+    squadPlayersData = players.map((p) => {
       const stats = squadGeneralStats(p.season_stats_json);
-      return `
-        <tr class="${isStoodDown ? 'squad-row-standdown' : ''}" data-id="${p.id}">
-          <td><div class="squad-row-photo">${avatar}</div></td>
-          <td>
-            <div class="squad-row-name-cell">
-              <span class="squad-row-name">${p.name}${isStoodDown ? '<span class="squad-row-standdown-pill">🚫 Afastado</span>' : ''}</span>
-              <span class="squad-row-jersey">#${p.jersey_number || '00'}</span>
-            </div>
-          </td>
-          <td><span class="squad-row-pos">${p.position_code || p.position_tag || '—'}</span></td>
-          <td>${calcAgeFromBirth(p.birth_date)}</td>
-          <td>${stats.j ?? 0}</td>
-          <td>${stats.g ?? 0}</td>
-          <td>${stats.a ?? 0}</td>
-          <td>${stats.am ?? 0}</td>
-          <td>${stats.verm ?? 0}</td>
-          <td>${stats.tk ?? 0}</td>
-          <td>${stats.pp ?? '-'}</td>
-          <td class="${(stats.media && stats.media !== '-') ? ratingClass(stats.media) : ''}">${stats.media ?? '-'}</td>
-          <td>${p.market_value_text || '—'}</td>
-          <td>${p.wage_text || '—'}</td>
-        </tr>`;
-    }).join('');
-
-    tbody.querySelectorAll('tr').forEach((row) => {
-      row.addEventListener('click', () => {
-        window.location.href = `/jogador/perfilJogador.html?id=${row.dataset.id}`;
-      });
+      const mediaNum = parseFloat(stats.media);
+      const ppNum = parseFloat(stats.pp);
+      return {
+        raw: p,
+        id: p.id,
+        name: p.name,
+        jersey: p.jersey_number || '00',
+        posCode: p.position_code || p.position_tag || '—',
+        posGroup: squadPosGroup(p.position_code),
+        age: calcAgeFromBirth(p.birth_date),
+        isStoodDown: !!(p.stood_down_until && p.stood_down_until >= currentGameDate),
+        photo: p.photo_path || '',
+        j: stats.j ?? 0,
+        g: stats.g ?? 0,
+        a: stats.a ?? 0,
+        am: stats.am ?? 0,
+        verm: stats.verm ?? 0,
+        tk: stats.tk ?? 0,
+        pp: stats.pp ?? '-',
+        ppNum: Number.isFinite(ppNum) ? ppNum : -1,
+        media: stats.media ?? '-',
+        mediaNum: Number.isFinite(mediaNum) ? mediaNum : -1,
+        vmText: p.market_value_text || '—',
+        vmNum: squadMoneyToNumber(p.market_value_text),
+        wageText: p.wage_text || '—',
+        wageNum: squadMoneyToNumber(p.wage_text),
+      };
     });
+
+    renderSquadHighlights(squadPlayersData);
+    renderSquadTable();
   }catch(err){
     tbody.innerHTML = '';
+    squadPlayersData = [];
+    el('squadHighlights').classList.add('hidden');
     empty.textContent = 'Não foi possível carregar o plantel.';
     empty.classList.remove('hidden');
   }
 }
 
-/* ---------- Botão "Gerar Valores Automáticos" — valor de mercado e
-   salário de todo o plantel, a partir dos atributos e da idade. ---------- */
-el('generateSquadValuesBtn').addEventListener('click', async () => {
-  const btn = el('generateSquadValuesBtn');
-  const originalLabel = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'A gerar...';
-  try{
-    const res = await fetch(`/api/players/generate-values?team_id=${teamId}`, { method: 'PUT' });
-    if(!res.ok) throw new Error();
-    await loadSquad();
-  }catch(err){
-    // sem feedback especial — a tabela simplesmente não muda
-  }finally{
-    btn.disabled = false;
-    btn.textContent = originalLabel;
+/* Cartões de destaque no topo do separador — melhor marcador, melhor
+   assistente e melhor média da época, só a partir de jogadores que já
+   têm jogos disputados. */
+function renderSquadHighlights(players){
+  const box = el('squadHighlights');
+  const withGames = players.filter((p) => p.j > 0);
+  if(!withGames.length){
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
   }
+
+  const topGoals = withGames.reduce((best, p) => (p.g > best.g ? p : best), withGames[0]);
+  const topAssists = withGames.reduce((best, p) => (p.a > best.a ? p : best), withGames[0]);
+  const topRating = withGames.filter((p) => p.mediaNum >= 0)
+    .reduce((best, p) => (!best || p.mediaNum > best.mediaNum ? p : best), null);
+
+  const cardHtml = (p, cls, kickerIcon, kickerText, value, valueLabel) => {
+    if(!p) return '';
+    const avatar = p.photo ? `<img src="${p.photo}" alt="">` : '🧑';
+    return `
+      <div class="squad-highlight-card ${cls}" data-id="${p.id}">
+        <div class="squad-highlight-photo">${avatar}</div>
+        <div class="squad-highlight-body">
+          <div class="squad-highlight-kicker">${kickerIcon} ${kickerText}</div>
+          <div class="squad-highlight-name">${p.name}</div>
+          <div class="squad-highlight-sub">${POS_GROUP_LABEL[p.posGroup] || p.posCode}</div>
+        </div>
+        <div class="squad-highlight-value">${value}<small>${valueLabel}</small></div>
+      </div>`;
+  };
+
+  box.innerHTML = [
+    cardHtml(topGoals, 'squad-highlight-goals', '⚽', 'Melhor Marcador', topGoals.g, 'golos'),
+    cardHtml(topAssists, 'squad-highlight-assists', '🎯', 'Melhor Assistente', topAssists.a, 'assist.'),
+    topRating ? cardHtml(topRating, 'squad-highlight-rating', '⭐', 'Melhor Média', topRating.media, 'média') : '',
+  ].join('');
+
+  box.classList.remove('hidden');
+
+  box.querySelectorAll('.squad-highlight-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      window.location.href = `/jogador/perfilJogador.html?id=${card.dataset.id}`;
+    });
+  });
+}
+
+/* Aplica o filtro de posição + pesquisa + ordenação escolhidos e
+   volta a desenhar as linhas da tabela. */
+function renderSquadTable(){
+  const tbody = el('squadTableBody');
+  const noMatch = el('squadNoMatch');
+
+  let list = squadPlayersData.slice();
+
+  if(squadFilterPos !== 'all'){
+    list = list.filter((p) => p.posGroup === squadFilterPos);
+  }
+  if(squadSearchTerm){
+    const term = squadSearchTerm.toLowerCase();
+    list = list.filter((p) => p.name.toLowerCase().includes(term));
+  }
+
+  if(squadSortKey){
+    const dir = squadSortDir === 'asc' ? 1 : -1;
+    list.sort((x, y) => {
+      let vx, vy;
+      switch(squadSortKey){
+        case 'name': vx = x.name.toLowerCase(); vy = y.name.toLowerCase(); return vx.localeCompare(vy) * dir;
+        case 'pos': vx = POSITION_ORDER.indexOf(x.posCode); vy = POSITION_ORDER.indexOf(y.posCode);
+          if(vx === -1) vx = 99; if(vy === -1) vy = 99;
+          return (vx - vy) * dir;
+        case 'age': vx = Number(x.age) || 0; vy = Number(y.age) || 0; return (vx - vy) * dir;
+        case 'j': return (x.j - y.j) * dir;
+        case 'g': return (x.g - y.g) * dir;
+        case 'a': return (x.a - y.a) * dir;
+        case 'am': return (x.am - y.am) * dir;
+        case 'verm': return (x.verm - y.verm) * dir;
+        case 'tk': return (x.tk - y.tk) * dir;
+        case 'pp': return (x.ppNum - y.ppNum) * dir;
+        case 'media': return (x.mediaNum - y.mediaNum) * dir;
+        case 'vm': return (x.vmNum - y.vmNum) * dir;
+        case 'wage': return (x.wageNum - y.wageNum) * dir;
+        default: return 0;
+      }
+    });
+  }
+
+  document.querySelectorAll('.squad-th-sortable').forEach((th) => {
+    th.classList.toggle('squad-sort-active', th.dataset.sort === squadSortKey);
+    th.querySelector('.squad-sort-arrow').textContent = th.dataset.sort === squadSortKey
+      ? (squadSortDir === 'asc' ? '▲' : '▼')
+      : '';
+  });
+
+  if(!list.length){
+    tbody.innerHTML = '';
+    noMatch.classList.remove('hidden');
+    return;
+  }
+  noMatch.classList.add('hidden');
+
+  tbody.innerHTML = list.map((p) => {
+    const avatar = p.photo ? `<img src="${p.photo}" alt="">` : '🧑';
+    return `
+      <tr class="${p.isStoodDown ? 'squad-row-standdown' : ''}" data-id="${p.id}">
+        <td><div class="squad-row-photo pos-ring-${p.posGroup}">${avatar}</div></td>
+        <td>
+          <div class="squad-row-name-cell">
+            <span class="squad-row-name">${p.name}${p.isStoodDown ? '<span class="squad-row-standdown-pill">🚫 Afastado</span>' : ''}</span>
+            <span class="squad-row-jersey">#${p.jersey}</span>
+          </div>
+        </td>
+        <td><span class="squad-row-pos pos-tag-${p.posGroup}">${p.posCode}</span></td>
+        <td>${p.age}</td>
+        <td>${p.j}</td>
+        <td>${p.g}</td>
+        <td>${p.a}</td>
+        <td>${p.am}</td>
+        <td>${p.verm}</td>
+        <td>${p.tk}</td>
+        <td>${p.pp}</td>
+        <td class="${p.mediaNum >= 0 ? ratingClass(p.media) : ''}">${p.media}</td>
+        <td>${p.vmText}</td>
+        <td>${p.wageText}</td>
+      </tr>`;
+  }).join('');
+
+  tbody.querySelectorAll('tr').forEach((row) => {
+    row.addEventListener('click', () => {
+      window.location.href = `/jogador/perfilJogador.html?id=${row.dataset.id}`;
+    });
+  });
+}
+
+document.querySelectorAll('.squad-th-sortable').forEach((th) => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    if(squadSortKey === key){
+      squadSortDir = squadSortDir === 'asc' ? 'desc' : 'asc';
+    }else{
+      squadSortKey = key;
+      squadSortDir = (key === 'name' || key === 'pos') ? 'asc' : 'desc';
+    }
+    renderSquadTable();
+  });
+});
+
+el('squadPosFilter').addEventListener('click', (ev) => {
+  const chip = ev.target.closest('.squad-chip');
+  if(!chip) return;
+  squadFilterPos = chip.dataset.pos;
+  el('squadPosFilter').querySelectorAll('.squad-chip').forEach((c) => c.classList.toggle('active', c === chip));
+  renderSquadTable();
+});
+
+el('squadSearchInput').addEventListener('input', (ev) => {
+  squadSearchTerm = ev.target.value.trim();
+  renderSquadTable();
 });
 
 /* ---------- Inscritos: números da camisola ---------- */
