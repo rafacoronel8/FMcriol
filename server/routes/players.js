@@ -634,8 +634,22 @@ router.delete('/template/:id', (req, res) => {
 
 /* ---------- DELETE /api/players/:id ---------- */
 router.delete('/:id', (req, res) => {
-  const info = db.prepare('DELETE FROM players WHERE id = ?').run(req.params.id);
-  if (info.changes === 0) return res.status(404).json({ error: 'Jogador não encontrado' });
+  const existing = db.prepare('SELECT id, admin_uid FROM players WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Jogador não encontrado' });
+
+  if (existing.admin_uid) {
+    // Jogador criado pelo admin (ver POST /) — tem uma cópia em cada save
+    // deste servidor (e no molde). Apaga todas, para não deixar cópias
+    // "órfãs" nos outros saves depois de o removeres num deles.
+    db.withEveryDatabase((conn) => {
+      conn.prepare('DELETE FROM players WHERE admin_uid = ?').run(existing.admin_uid);
+    });
+  } else {
+    // Jogador normal do jogo (scouting, IA, gerado durante uma partida,
+    // etc.) — só existe neste save, apaga-se só aqui.
+    db.prepare('DELETE FROM players WHERE id = ?').run(req.params.id);
+  }
+
   res.status(204).end();
 });
 
