@@ -347,6 +347,34 @@ function deserialize(row) {
   return out;
 }
 
+/* ---------- GET /api/players/export-seed (manutenção) ----------
+   Escreve em db/seeds/players.json todos os jogadores criados pelo admin
+   neste dispositivo (têm admin_uid — ver POST / mais abaixo). Corre isto
+   em localhost sempre que adicionares jogadores novos pelo admin; depois
+   `git add db/seeds/players.json`, commit e push — no arranque seguinte
+   do servidor (Render incluído), applyPlayerSeeds (db/database.js) cria
+   automaticamente quem ainda não existir, no molde e em todos os saves
+   já criados. Não sobrescreve jogadores já existentes (procurados por
+   admin_uid), por isso é seguro correr isto várias vezes. */
+router.get('/export-seed', (req, res) => {
+  const rows = db.prepare(`
+    SELECT p.admin_uid, p.name, p.jersey_number, p.position_tag, p.position_code, p.nationality_code, p.birth_date,
+           p.club_status, p.wage_text, p.personality,
+           p.technical_json, p.set_pieces_json, p.mental_json, p.physical_json, p.goalkeeping_json, p.season_stats_json,
+           t.name AS team_name
+    FROM players p
+    LEFT JOIN teams t ON t.id = p.team_id
+    WHERE p.admin_uid IS NOT NULL
+    ORDER BY p.name ASC
+  `).all();
+
+  const seedPath = db.PLAYER_SEED_PATH;
+  fs.mkdirSync(path.dirname(seedPath), { recursive: true });
+  fs.writeFileSync(seedPath, JSON.stringify(rows, null, 2));
+
+  res.json({ written: seedPath, count: rows.length, players: rows.map((r) => r.name) });
+});
+
 /* ---------- GET /api/players?team_id=X — listar jogadores (resumo) ---------- */
 router.get('/', (req, res) => {
   const { team_id, q, free_agents } = req.query;
@@ -580,6 +608,28 @@ router.put('/:id/transfer-list', (req, res) => {
     .run(isListed, askingPrice, req.params.id);
 
   res.json({ id: player.id, is_listed: isListed, asking_price: askingPrice });
+});
+
+/* ---------- DELETE /api/players/template/:id (TEMPORÁRIO) ----------
+   Apaga um jogador diretamente do MOLDE (fmcriol.db) — o ficheiro que
+   qualquer dispositivo NOVO (ex: abrir o jogo pela primeira vez no
+   telemóvel) copia para começar o seu save. Serve para limpar duplicados
+   que ficaram lá depois de testes de admin (criação + geração de
+   atributos + foto propagam para o molde também, de propósito — ver
+   POST /).
+
+   ⚠️ REMOVER ESTA ROTA depois de a usares. Não tem autenticação nenhuma e
+   mexe no ficheiro base de que todos os saves futuros nascem — não deve
+   ficar exposta permanentemente num servidor público. */
+router.delete('/template/:id', (req, res) => {
+  const result = db.withTemplateDatabase((conn) => {
+    const existing = conn.prepare('SELECT id, name FROM players WHERE id = ?').get(req.params.id);
+    if (!existing) return null;
+    conn.prepare('DELETE FROM players WHERE id = ?').run(req.params.id);
+    return existing;
+  });
+  if (!result) return res.status(404).json({ error: 'Jogador não encontrado no molde' });
+  res.json({ deletedFromTemplate: result });
 });
 
 /* ---------- DELETE /api/players/:id ---------- */

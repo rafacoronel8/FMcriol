@@ -36,6 +36,18 @@ const DEVICE_COOKIE_MAX_AGE_MS = 10 * 365 * 24 * 60 * 60 * 1000; // ~10 anos
 
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 
+/* ---------- Seed de jogadores/staff criados pelo admin (git) ----------
+   Ao contrário de data/ (bases de dados reais, com progresso de jogo —
+   NÃO deve ir para o git), esta pasta É para ser versionada. Contém uma
+   lista de jogadores criados pelo admin (identificados por admin_uid,
+   ver routes/players.js) para que, depois de um `git pull`/deploy, o
+   servidor os recrie automaticamente em todo o lado onde ainda não
+   existam — molde incluído — sem teres de repetir o trabalho manualmente
+   no Render. Ver applyPlayerSeeds mais abaixo. */
+const SEED_DIR = path.join(__dirname, 'seeds');
+const PLAYER_SEED_PATH = path.join(SEED_DIR, 'players.json');
+if (!fs.existsSync(SEED_DIR)) fs.mkdirSync(SEED_DIR, { recursive: true });
+
 function devicePathFor(deviceId) {
   return path.join(DB_DIR, `fmcriol_${deviceId}.db`);
 }
@@ -1996,6 +2008,126 @@ function withEveryDatabase(fn) {
   return ranCurrent ? currentResult : undefined;
 }
 
+/* ---------- Aplica uma alteração SÓ ao molde (fmcriol.db) ----------
+   Para correções pontuais de admin que precisam de mexer diretamente no
+   ficheiro que os dispositivos NOVOS copiam ao nascer — sem tocar em
+   nenhum save já em jogo. Usado por rotas temporárias de manutenção (ver
+   aviso em routes/players.js: /template/:id). */
+function withTemplateDatabase(fn) {
+  if (!fs.existsSync(LEGACY_DB_PATH)) return undefined;
+  const conn = openConnection(LEGACY_DB_PATH);
+  initializeSchema(conn);
+  try {
+    return fn(conn);
+  } finally {
+    conn.close();
+  }
+}
+
+/* ---------- Aplica db/seeds/players.json a UMA ligação ----------
+   Só insere quem ainda não existir (procurado por admin_uid) — nunca
+   sobrescreve um jogador já existente, para não apagar edições feitas
+   depois em jogo (moral, forma, lesões, etc.). */
+function applyPlayerSeedsToConnection(conn, seeds) {
+  let applied = 0;
+  for (const seed of seeds) {
+    if (!seed || !seed.admin_uid || !seed.name) continue;
+    const exists = conn.prepare('SELECT id FROM players WHERE admin_uid = ?').get(seed.admin_uid);
+    if (exists) continue;
+
+    let teamId = null;
+    if (seed.team_name) {
+      const team = conn.prepare('SELECT id FROM teams WHERE name = ?').get(seed.team_name);
+      if (team) teamId = team.id;
+    }
+
+    conn.prepare(`
+      INSERT INTO players (
+        admin_uid, team_id, original_team_id, name, jersey_number, position_tag, position_code, nationality_code, birth_date,
+        club_status, wage_text, personality, technical_json, set_pieces_json, mental_json, physical_json, goalkeeping_json, season_stats_json
+      ) VALUES (
+        @admin_uid, @team_id, @team_id, @name, @jersey_number, @position_tag, @position_code, @nationality_code, @birth_date,
+        @club_status, @wage_text, @personality, @technical_json, @set_pieces_json, @mental_json, @physical_json, @goalkeeping_json, @season_stats_json
+      )
+    `).run({
+      admin_uid: seed.admin_uid,
+      team_id: teamId,
+      name: seed.name,
+      jersey_number: seed.jersey_number || '00',
+      position_tag: seed.position_tag || '',
+      position_code: seed.position_code || '',
+      nationality_code: seed.nationality_code || '',
+      birth_date: seed.birth_date || null,
+      club_status: teamId ? (seed.club_status || 'Titular Regular') : 'Jogador Livre',
+      wage_text: seed.wage_text || '',
+      personality: seed.personality || 'Normal',
+      technical_json: seed.technical_json || '[]',
+      set_pieces_json: seed.set_pieces_json || '[]',
+      mental_json: seed.mental_json || '[]',
+      physical_json: seed.physical_json || '[]',
+      goalkeeping_json: seed.goalkeeping_json || '[]',
+      season_stats_json: seed.season_stats_json || '[]',
+    });
+
+    const row = conn.prepare('SELECT id FROM players WHERE admin_uid = ?').get(seed.admin_uid);
+    if (row && typeof conn.captureBaseline === 'function') conn.captureBaseline(row.id);
+    applied++;
+  }
+  return applied;
+}
+
+/* ---------- Lê db/seeds/players.json e aplica ao molde + a todos os
+   dispositivos já existentes. Corre uma vez, no arranque do servidor
+   (ver chamada mais abaixo) — não precisa de pedido HTTP nenhum. */
+function applyPlayerSeeds() {
+  if (!fs.existsSync(PLAYER_SEED_PATH)) return;
+
+  let seeds;
+  try {
+    seeds = JSON.parse(fs.readFileSync(PLAYER_SEED_PATH, 'utf8'));
+  } catch (err) {
+    console.error('⚠️  Não foi possível ler db/seeds/players.json:', err.message);
+    return;
+  }
+  if (!Array.isArray(seeds) || seeds.length === 0) return;
+
+  let totalApplied = 0;
+
+  if (fs.existsSync(LEGACY_DB_PATH)) {
+    const legacyConn = openConnection(LEGACY_DB_PATH);
+    initializeSchema(legacyConn);
+    try {
+      totalApplied += applyPlayerSeedsToConnection(legacyConn, seeds);
+    } catch (err) {
+      console.error('⚠️  Falha ao aplicar seed de jogadores ao molde:', err.message);
+    } finally {
+      legacyConn.close();
+    }
+  }
+
+  const files = fs.existsSync(DB_DIR)
+    ? fs.readdirSync(DB_DIR).filter((f) => /^fmcriol_.*\.db$/.test(f))
+    : [];
+  for (const file of files) {
+    const deviceId = file.replace(/^fmcriol_/, '').replace(/\.db$/, '');
+    let conn = connectionsByDevice.get(deviceId);
+    if (!conn) {
+      conn = openConnection(path.join(DB_DIR, file));
+      initializeSchema(conn);
+      connectionsByDevice.set(deviceId, conn);
+    }
+    try {
+      totalApplied += applyPlayerSeedsToConnection(conn, seeds);
+    } catch (err) {
+      console.error(`⚠️  Falha ao aplicar seed de jogadores ao dispositivo ${deviceId}:`, err.message);
+    }
+  }
+
+  if (totalApplied > 0) {
+    console.log(`🌱 Seed de jogadores: ${totalApplied} jogador(es) criados a partir de db/seeds/players.json`);
+  }
+}
+
 /* Ligação usada AGORA (durante o pedido HTTP em curso). Ver aviso no
    comentário grande acima sobre a garantia de sincronismo. */
 let currentConnection = null;
@@ -2081,6 +2213,8 @@ const db = new Proxy({}, {
   get(_target, prop, receiver) {
     if (prop === 'attachDeviceContext') return attachDeviceContext;
     if (prop === 'withEveryDatabase') return withEveryDatabase;
+    if (prop === 'withTemplateDatabase') return withTemplateDatabase;
+    if (prop === 'PLAYER_SEED_PATH') return PLAYER_SEED_PATH;
     if (!currentConnection) {
       throw new Error(
         'db acedido antes de attachDeviceContext correr — confirma que ' +
@@ -2100,3 +2234,9 @@ const db = new Proxy({}, {
 });
 
 module.exports = db;
+
+/* Aplica o seed de jogadores (db/seeds/players.json) já no arranque do
+   servidor, ao molde e a todos os saves já existentes — ver
+   applyPlayerSeeds acima. Corre depois de `db` estar definido, mas não
+   depende dele (usa ligações próprias, sem passar pelo proxy). */
+applyPlayerSeeds();
