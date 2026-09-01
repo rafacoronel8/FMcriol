@@ -1,5 +1,24 @@
 [
   {
+    "admin_uid": "0d76c262-1799-4a9c-b768-bc7cf7b31b89",
+    "name": "Dantsi",
+    "jersey_number": "21",
+    "position_tag": "Defesa Direita / Médio Direito / Ala Direita",
+    "position_code": "DD/MD/AD",
+    "nationality_code": "CPV",
+    "birth_date": "2004-05-10",
+    "club_status": "Titular Regular",
+    "wage_text": "£1680 p/s",
+    "personality": "Normal",
+    "technical_json": "[[\"Cruzamento\",15],[\"Drible\",13],[\"Finalização\",11],[\"Primeiro Toque\",14],[\"Cabeceamento\",6],[\"Remates de Longe\",15],[\"Marcação\",10],[\"Passe\",13],[\"Desarme\",11],[\"Técnica\",13]]",
+    "set_pieces_json": "[[\"Cantos\",15],[\"Livres\",13],[\"Lançamentos Longos\",11],[\"Grandes Penalidades\",6]]",
+    "mental_json": "[[\"Agressividade\",7],[\"Antecipação\",9],[\"Coragem\",11],[\"Compostura\",11],[\"Concentração\",15],[\"Decisões\",12],[\"Determinação\",12],[\"Classe\",10],[\"Liderança\",11],[\"Fora de Bola\",7],[\"Posicionamento\",15],[\"Trabalho de Equipa\",11],[\"Visão\",7],[\"Ritmo de Jogo\",7]]",
+    "physical_json": "[[\"Aceleração\",13],[\"Agilidade\",16],[\"Equilíbrio\",11],[\"Alcance de Cabeceamento\",10],[\"Condição Natural\",10],[\"Velocidade\",13],[\"Resistência\",12],[\"Força\",9]]",
+    "goalkeeping_json": "[]",
+    "season_stats_json": "[{\"competition\":\"Geral (Clube)\",\"j\":0,\"g\":0,\"a\":0,\"xg\":0,\"pen\":0,\"mdp\":0,\"am\":0,\"verm\":0,\"tk\":0,\"pp\":\"-\",\"media\":\"-\"}]",
+    "team_name": "Farense"
+  },
+  {
     "admin_uid": "0079f726-12eb-4ab1-b5bf-99195aa0a51d",
     "name": "Elvin",
     "jersey_number": "1",
@@ -17,6 +36,25 @@
     "goalkeeping_json": "[[\"Alcance Aéreo\",14],[\"Comando de Área\",14],[\"Comunicação\",11],[\"Excentricidade\",8],[\"Primeiro Toque\",11],[\"Manejo\",15],[\"Pontapé\",9],[\"Um Contra Um\",16],[\"Passe\",10],[\"Soco (Tendência)\",8],[\"Reflexos\",15],[\"Saída da Baliza (Tendência)\",8],[\"Lançamento\",9]]",
     "season_stats_json": "[{\"competition\":\"Geral (Clube)\",\"j\":0,\"g\":0,\"a\":0,\"xg\":0,\"pen\":0,\"mdp\":0,\"am\":0,\"verm\":0,\"tk\":0,\"pp\":\"-\",\"media\":\"-\"}]",
     "team_name": "Castilho"
+  },
+  {
+    "admin_uid": "83ea7680-f57e-4569-9f8d-ec503d9c9365",
+    "name": "Leo Cavera",
+    "jersey_number": "10",
+    "position_tag": "Médio Centro Ofensivo / Médio Centro",
+    "position_code": "MCO/MC",
+    "nationality_code": "CPV",
+    "birth_date": "1999-09-11",
+    "club_status": "Titular Regular",
+    "wage_text": "£1900 p/s",
+    "personality": "Normal",
+    "technical_json": "[[\"Cruzamento\",13],[\"Drible\",15],[\"Finalização\",11],[\"Primeiro Toque\",15],[\"Cabeceamento\",7],[\"Remates de Longe\",12],[\"Marcação\",4],[\"Passe\",15],[\"Desarme\",7],[\"Técnica\",16]]",
+    "set_pieces_json": "[[\"Cantos\",12],[\"Livres\",13],[\"Lançamentos Longos\",7],[\"Grandes Penalidades\",11]]",
+    "mental_json": "[[\"Agressividade\",3],[\"Antecipação\",11],[\"Coragem\",10],[\"Compostura\",13],[\"Concentração\",10],[\"Decisões\",13],[\"Determinação\",11],[\"Classe\",15],[\"Liderança\",9],[\"Fora de Bola\",12],[\"Posicionamento\",9],[\"Trabalho de Equipa\",11],[\"Visão\",16],[\"Ritmo de Jogo\",12]]",
+    "physical_json": "[[\"Aceleração\",13],[\"Agilidade\",13],[\"Equilíbrio\",12],[\"Alcance de Cabeceamento\",6],[\"Condição Natural\",7],[\"Velocidade\",13],[\"Resistência\",11],[\"Força\",8]]",
+    "goalkeeping_json": "[]",
+    "season_stats_json": "[{\"competition\":\"Geral (Clube)\",\"j\":0,\"g\":0,\"a\":0,\"xg\":0,\"pen\":0,\"mdp\":0,\"am\":0,\"verm\":0,\"tk\":0,\"pp\":\"-\",\"media\":\"-\"}]",
+    "team_name": "Farense"
   },
   {
     "admin_uid": "f27be2a4-67e8-4c6b-b55d-cddec4feb2df",
@@ -112,6 +150,25 @@
     "goalkeeping_json": "[]",
     "season_stats_json": "[{\"competition\":\"Geral (Clube)\",\"j\":0,\"g\":0,\"a\":0,\"xg\":0,\"pen\":0,\"mdp\":0,\"am\":0,\"verm\":0,\"tk\":0,\"pp\":\"-\",\"media\":\"-\"}]",
     "team_name": "Castilho"
+  },
+  {
+    "admin_uid": "61b28f23-58c1-491c-ad23-4ab8ea260782",
+    "name": "Txeps",
+    "jersey_number": "8",
+    "position_tag": "Médio Direito / Médio Ofensivo Direito",
+    "position_code": "MD/MOD",
+    "nationality_code": "CPV",
+    "birth_date": "2003-03-13",
+    "club_status": "Titular Regular",
+    "wage_text": "£1950 p/s",
+    "personality": "Problemático",
+    "technical_json": "[[\"Cruzamento\",10],[\"Drible\",11],[\"Finalização\",13],[\"Primeiro Toque\",12],[\"Cabeceamento\",9],[\"Remates de Longe\",10],[\"Marcação\",13],[\"Passe\",15],[\"Desarme\",14],[\"Técnica\",13]]",
+    "set_pieces_json": "[[\"Cantos\",10],[\"Livres\",11],[\"Lançamentos Longos\",9],[\"Grandes Penalidades\",8]]",
+    "mental_json": "[[\"Agressividade\",17],[\"Antecipação\",12],[\"Coragem\",11],[\"Compostura\",12],[\"Concentração\",12],[\"Decisões\",15],[\"Determinação\",12],[\"Classe\",11],[\"Liderança\",10],[\"Fora de Bola\",9],[\"Posicionamento\",12],[\"Trabalho de Equipa\",15],[\"Visão\",14],[\"Ritmo de Jogo\",10]]",
+    "physical_json": "[[\"Aceleração\",11],[\"Agilidade\",11],[\"Equilíbrio\",11],[\"Alcance de Cabeceamento\",9],[\"Condição Natural\",11],[\"Velocidade\",12],[\"Resistência\",16],[\"Força\",16]]",
+    "goalkeeping_json": "[]",
+    "season_stats_json": "[{\"competition\":\"Geral (Clube)\",\"j\":0,\"g\":0,\"a\":0,\"xg\":0,\"pen\":0,\"mdp\":0,\"am\":0,\"verm\":0,\"tk\":0,\"pp\":\"-\",\"media\":\"-\"}]",
+    "team_name": "Farense"
   },
   {
     "admin_uid": "8fdbf713-474d-4e29-88db-6c4a8fe5ce8e",
