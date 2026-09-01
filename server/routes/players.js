@@ -5,6 +5,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const crypto = require('crypto');
 const db = require('../db/database');
 
 const router = express.Router();
@@ -266,20 +267,40 @@ router.put('/:id/generate-attributes', (req, res) => {
     ? generateAttrList(DEFAULT_GOALKEEPING.map(([n]) => n), ATTR_WEIGHTS.goalkeeping.GR, overall)
     : [];
 
-  db.prepare(`
-    UPDATE players SET
-      technical_json = @technical_json, set_pieces_json = @set_pieces_json,
-      mental_json = @mental_json, physical_json = @physical_json, goalkeeping_json = @goalkeeping_json,
-      updated_at = datetime('now')
-    WHERE id = @id
-  `).run({
-    id: player.id,
+  const updatePayload = {
+    admin_uid: player.admin_uid || null,
     technical_json: JSON.stringify(technical_json),
     set_pieces_json: JSON.stringify(set_pieces_json),
     mental_json: JSON.stringify(mental_json),
     physical_json: JSON.stringify(physical_json),
     goalkeeping_json: JSON.stringify(goalkeeping_json),
-  });
+  };
+
+  if (player.admin_uid) {
+    // Jogador criado pelo admin (ver POST /) — tem uma cópia em cada save
+    // deste servidor, cada uma com o seu PRÓPRIO id (ver comentário em
+    // POST /). Por isso a atualização procura pelo admin_uid partilhado
+    // em vez do id, para acertar na cópia certa em cada dispositivo.
+    db.withEveryDatabase((conn) => {
+      conn.prepare(`
+        UPDATE players SET
+          technical_json = @technical_json, set_pieces_json = @set_pieces_json,
+          mental_json = @mental_json, physical_json = @physical_json, goalkeeping_json = @goalkeeping_json,
+          updated_at = datetime('now')
+        WHERE admin_uid = @admin_uid
+      `).run(updatePayload);
+    });
+  } else {
+    // Jogador normal do jogo (scouting, IA, etc.) — só existe neste save,
+    // atualiza-se só aqui mesmo.
+    db.prepare(`
+      UPDATE players SET
+        technical_json = @technical_json, set_pieces_json = @set_pieces_json,
+        mental_json = @mental_json, physical_json = @physical_json, goalkeeping_json = @goalkeeping_json,
+        updated_at = datetime('now')
+      WHERE id = @id
+    `).run({ ...updatePayload, id: player.id });
+  }
 
   const updated = db.prepare('SELECT * FROM players WHERE id = ?').get(player.id);
   res.json(deserialize(updated));
@@ -407,8 +428,10 @@ router.post('/', (req, res) => {
   }
 
   const isGK = isGoalkeeperPosition(position_code);
+  const adminUid = crypto.randomUUID();
 
   const payload = {
+    admin_uid: adminUid,
     team_id: team ? team.id : null,
     original_team_id: team ? team.id : null,
     name: name.trim(), jersey_number, position_tag, position_code, nationality_code, birth_date,
@@ -427,12 +450,16 @@ router.post('/', (req, res) => {
      no molde (para os saves futuros) — ver db/database.js: withEveryDatabase.
      Mesma ideia usada em routes/staff.js: sem isto, o jogador só ficava
      visível no save/dispositivo que estava a usar este formulário de admin
-     no momento da criação. `conn.captureBaseline` já vem anexado a cada
-     ligação por initializeSchema, por isso funciona corretamente ligação a
-     ligação, cada uma com o seu próprio id (os ids de jogadores DIVERGEM
-     naturalmente entre saves à medida que o jogo avança — isso é normal e
-     não é um problema, porque nada depende de o mesmo jogador ter o mesmo
-     id em saves diferentes). */
+     no momento da criação.
+
+     IMPORTANTE: o "id" numérico DIVERGE entre saves (cada um já tinha um
+     número diferente de jogadores antes desta criação, por isso o mesmo
+     INSERT pode gerar ids diferentes em cada ficheiro .db). Isso não é
+     problema para o registo em si, mas SERIA um problema para ações
+     seguintes como "gerar atributos" ou "enviar foto" (mais abaixo neste
+     ficheiro), que precisam de encontrar "o mesmo jogador" outra vez nos
+     outros dispositivos — por isso guardamos `admin_uid`, que é o MESMO
+     valor em todas as cópias e nunca muda. */
   const newId = db.withEveryDatabase((conn) => {
     // Em dispositivos mais antigos (ex: "legacy") a tabela teams pode não
     // ter esta mesma equipa (ids diferentes/equipas diferentes) — em vez
@@ -449,10 +476,10 @@ router.post('/', (req, res) => {
 
     const info = conn.prepare(`
       INSERT INTO players (
-        team_id, original_team_id, name, jersey_number, position_tag, position_code, nationality_code, birth_date,
+        admin_uid, team_id, original_team_id, name, jersey_number, position_tag, position_code, nationality_code, birth_date,
         club_status, wage_text, personality, technical_json, set_pieces_json, mental_json, physical_json, goalkeeping_json, season_stats_json
       ) VALUES (
-        @team_id, @original_team_id, @name, @jersey_number, @position_tag, @position_code, @nationality_code, @birth_date,
+        @admin_uid, @team_id, @original_team_id, @name, @jersey_number, @position_tag, @position_code, @nationality_code, @birth_date,
         @club_status, @wage_text, @personality, @technical_json, @set_pieces_json, @mental_json, @physical_json, @goalkeeping_json, @season_stats_json
       )
     `).run(localPayload);
@@ -515,8 +542,20 @@ function wireImageUpload(kind, column) {
 
     const folder = kind === 'photo' ? 'players' : kind === 'flag' ? 'flags' : 'club-overrides';
     const relPath = `/uploads/${folder}/${req.file.filename}`;
-    db.prepare(`UPDATE players SET ${column} = ?, updated_at = datetime('now') WHERE id = ?`)
-      .run(relPath, req.params.id);
+
+    if (player.admin_uid) {
+      // Mesma ideia do generate-attributes: o ficheiro da imagem já fica
+      // gravado no disco DESTE servidor (acessível a todos os saves aqui),
+      // só falta apontar o photo_path/flag_path/club_logo_path de cada
+      // cópia do jogador para lá — encontrada pelo admin_uid partilhado.
+      db.withEveryDatabase((conn) => {
+        conn.prepare(`UPDATE players SET ${column} = @path, updated_at = datetime('now') WHERE admin_uid = @admin_uid`)
+          .run({ path: relPath, admin_uid: player.admin_uid });
+      });
+    } else {
+      db.prepare(`UPDATE players SET ${column} = ?, updated_at = datetime('now') WHERE id = ?`)
+        .run(relPath, req.params.id);
+    }
 
     res.json({ [column]: relPath });
   });

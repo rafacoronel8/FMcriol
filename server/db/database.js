@@ -105,6 +105,16 @@ for (const [colName, colDef] of TEAM_COLUMNS) {
    Isto permite atualizar uma base de dados já criada (ex: no teu PC) sem perder
    dados — corre sempre que o servidor arranca e só adiciona o que falta. */
 const PLAYER_COLUMNS = [
+  // Identificador estável partilhado entre TODAS as cópias de um jogador
+  // criado pelo admin (gestaoJogadores.html) — uma por dispositivo/save,
+  // ver withEveryDatabase. Necessário porque o "id" numérico DIVERGE
+  // naturalmente entre saves (cada um já tinha um número diferente de
+  // jogadores antes desta criação), por isso não dá para usar o id para
+  // encontrar "o mesmo jogador" nos outros dispositivos depois — ex: ao
+  // gerar atributos ou enviar uma foto (ver routes/players.js). Fica a
+  // NULL para jogadores gerados durante o jogo normal (scouting, IA,
+  // etc.) — esses são mesmo só daquele save, nunca devem ser propagados.
+  ['admin_uid', 'TEXT'],
   // Clube de origem do jogador (nunca muda depois de definido). Usado para repor
   // corretamente os jogadores nos seus clubes quando o jogo é reiniciado —
   // independentemente de como foram transferidos (proposta manual, IA a IA,
