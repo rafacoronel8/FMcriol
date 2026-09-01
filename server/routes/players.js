@@ -639,15 +639,27 @@ router.delete('/:id', (req, res) => {
 
   if (existing.admin_uid) {
     // Jogador criado pelo admin (ver POST /) — tem uma cópia em cada save
-    // deste servidor (e no molde). Apaga todas, para não deixar cópias
-    // "órfãs" nos outros saves depois de o removeres num deles.
+    // deste servidor (e no molde), todas com o MESMO admin_uid. Apaga
+    // todas, para não deixar cópias "órfãs" nos outros saves.
     db.withEveryDatabase((conn) => {
       conn.prepare('DELETE FROM players WHERE admin_uid = ?').run(existing.admin_uid);
     });
   } else {
-    // Jogador normal do jogo (scouting, IA, gerado durante uma partida,
-    // etc.) — só existe neste save, apaga-se só aqui.
-    db.prepare('DELETE FROM players WHERE id = ?').run(req.params.id);
+    // Jogador sem admin_uid (criado antes desta migração, ou parte do
+    // plantel inicial de uma equipa) — não há uma chave partilhada segura
+    // para o encontrar nos outros saves, por isso usa-se o id. Isto
+    // funciona bem para jogadores que vieram do MOLDE (o id é igual em
+    // todo o lado, porque cada save nasce como cópia exata dele) — que é
+    // o caso mais comum ao apagar pelo painel admin. O único risco: se um
+    // save já tiver muitos jogadores gerados durante o próprio jogo
+    // (scouting, transferências) e esse id já estiver ocupado por OUTRO
+    // jogador nesse save específico, esse outro jogador seria apagado por
+    // engano. Isto é aceitável para uso do admin (baixo volume, fácil de
+    // notar e corrigir), mas não seria seguro fazer isto a partir do jogo
+    // normal — só esta rota (usada só pelo admin) se comporta assim.
+    db.withEveryDatabase((conn) => {
+      conn.prepare('DELETE FROM players WHERE id = ?').run(existing.id);
+    });
   }
 
   res.status(204).end();
