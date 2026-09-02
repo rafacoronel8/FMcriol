@@ -235,17 +235,19 @@
 
     <div class="squad-highlights hidden" id="squadHighlights"><!-- gerado via JS --></div>
 
+    <div class="squad-meta-strip hidden" id="squadMetaStrip"><!-- gerado via JS --></div>
+
     <div class="card squad-card">
       <div class="squad-header-row">
         <div class="card-title no-margin">Plantel <span id="squadCount" class="squad-count-badge">0</span></div>
 
         <div class="squad-controls">
           <div class="squad-filter-chips" id="squadPosFilter">
-            <button type="button" class="squad-chip active" data-pos="all">Todos</button>
-            <button type="button" class="squad-chip" data-pos="GR">Guarda-Redes</button>
-            <button type="button" class="squad-chip" data-pos="DEF">Defesas</button>
-            <button type="button" class="squad-chip" data-pos="MED">Médios</button>
-            <button type="button" class="squad-chip" data-pos="AVA">Avançados</button>
+            <button type="button" class="squad-chip active" data-pos="all">Todos <span class="squad-chip-count" data-count="all">0</span></button>
+            <button type="button" class="squad-chip" data-pos="GR">Guarda-Redes <span class="squad-chip-count" data-count="GR">0</span></button>
+            <button type="button" class="squad-chip" data-pos="DEF">Defesas <span class="squad-chip-count" data-count="DEF">0</span></button>
+            <button type="button" class="squad-chip" data-pos="MED">Médios <span class="squad-chip-count" data-count="MED">0</span></button>
+            <button type="button" class="squad-chip" data-pos="AVA">Avançados <span class="squad-chip-count" data-count="AVA">0</span></button>
           </div>
 
           <label class="squad-search-field">
@@ -255,7 +257,7 @@
         </div>
       </div>
 
-      <p class="squad-sort-hint">Toca no nome de uma coluna para organizares o plantel por essa estatística.</p>
+      <p class="squad-sort-hint">Toca no nome de uma coluna para organizares o plantel por essa estatística. Os filtros agrupam automaticamente cada posição — ex: lateral-direito ou lateral-esquerdo contam como Defesa, médio ofensivo conta como Médio.</p>
 
       <div class="squad-table-wrap">
         <table class="squad-table">
@@ -280,8 +282,14 @@
           <tbody id="squadTableBody"></tbody>
         </table>
       </div>
-      <p class="placeholder-text hidden" id="squadEmpty">Ainda não tens jogadores. Cria o teu plantel na Gestão de Jogadores.</p>
-      <p class="placeholder-text hidden" id="squadNoMatch">Nenhum jogador corresponde a este filtro.</p>
+      <div class="squad-empty-state hidden" id="squadEmpty">
+        <span class="squad-empty-icon">👕</span>
+        <p class="placeholder-text">Ainda não tens jogadores. Cria o teu plantel na Gestão de Jogadores.</p>
+      </div>
+      <div class="squad-empty-state hidden" id="squadNoMatch">
+        <span class="squad-empty-icon">🔍</span>
+        <p class="placeholder-text">Nenhum jogador corresponde a este filtro.</p>
+      </div>
     </div>
   </section>
 

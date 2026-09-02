@@ -531,15 +531,51 @@ function squadGeneralStats(seasonStatsJson){
 /* ---------- Minha Equipa — grupos de posição, filtros, pesquisa e
    ordenação por coluna (substitui o antigo botão "Gerar Valores
    Automáticos", que agora foi removido do painel). ---------- */
-const POSITION_ORDER = ['GR', 'DD', 'DC', 'DE', 'MCD', 'MC', 'MD', 'ME', 'ED', 'PL', 'EE'];
+const POSITION_ORDER = ['GR', 'DD', 'DC', 'DE', 'LD', 'LE', 'L', 'MCD', 'MC', 'MD', 'ME', 'MOD', 'MCO', 'MOE', 'VOL', 'AD', 'AE', 'ED', 'PL', 'EE'];
 
+/* Cada código de posição individual (defesa, médio ou avançado) e o
+   grupo largo a que pertence — ex: laterais DD/DE/LD/LE contam como
+   Defesa, qualquer médio (incluindo os ofensivos MOD/MCO/MOE) conta
+   como Médio, extremos AD/AE/ED/EE contam como Avançado. */
+const POS_CODE_GROUP = {
+  GR: 'GR',
+  DD: 'DEF', DC: 'DEF', DE: 'DEF', LD: 'DEF', LE: 'DEF', L: 'DEF',
+  MCD: 'MED', MC: 'MED', MD: 'MED', ME: 'MED', MOD: 'MED', MCO: 'MED', MOE: 'MED', VOL: 'MED', MAD: 'MED', MAE: 'MED',
+  ED: 'AVA', PL: 'AVA', EE: 'AVA', AD: 'AVA', AE: 'AVA', SA: 'AVA',
+};
+
+/* Separa um campo de posições tipo "MOE/MCO/MOD/ME/AD/AE" ou
+   "MCD / DD" nos códigos individuais que o compõem. */
+function squadParsePositions(raw){
+  return String(raw || '')
+    .toUpperCase()
+    .split('/')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/* Agrupa um único código de posição no respetivo grupo largo
+   GR / DEF / MED / AVA. Códigos desconhecidos caem por heurística
+   (primeira letra) em vez de ficarem de fora dos filtros. */
 function squadPosGroup(code){
-  const c = String(code || '').toUpperCase();
-  if(c === 'GR') return 'GR';
-  if(c === 'DD' || c === 'DC' || c === 'DE') return 'DEF';
-  if(c === 'MCD' || c === 'MC' || c === 'MD' || c === 'ME') return 'MED';
-  if(c === 'ED' || c === 'PL' || c === 'EE') return 'AVA';
+  const c = String(code || '').toUpperCase().trim();
+  if(POS_CODE_GROUP[c]) return POS_CODE_GROUP[c];
+  if(c.startsWith('G')) return 'GR';
+  if(c.startsWith('D') || c.startsWith('L')) return 'DEF';
+  if(c.startsWith('M') || c.startsWith('V')) return 'MED';
+  if(c.startsWith('A') || c.startsWith('E') || c.startsWith('P') || c.startsWith('S')) return 'AVA';
   return 'OUTRO';
+}
+
+/* Um jogador pode jogar em várias posições (ex: "DE/MCD/ME/AE"), e deve
+   contar em CADA grupo correspondente — basta jogar numa posição de
+   Defesa, por exemplo, para aparecer no filtro "Defesas", mesmo que
+   também jogue a Médio. Devolve a lista de grupos únicos do jogador. */
+function squadPosGroups(rawPositionField){
+  const tokens = squadParsePositions(rawPositionField);
+  const groups = tokens.map(squadPosGroup).filter((g) => g && g !== 'OUTRO');
+  const unique = Array.from(new Set(groups));
+  return unique.length ? unique : ['OUTRO'];
 }
 
 const POS_GROUP_LABEL = { GR: 'Guarda-Redes', DEF: 'Defesa', MED: 'Médio', AVA: 'Avançado', OUTRO: '—' };
@@ -578,6 +614,8 @@ async function loadSquad(){
       tbody.innerHTML = '';
       squadPlayersData = [];
       el('squadHighlights').classList.add('hidden');
+      el('squadMetaStrip').classList.add('hidden');
+      renderSquadFilterCounts([]);
       empty.classList.remove('hidden');
       return;
     }
@@ -595,7 +633,8 @@ async function loadSquad(){
         name: p.name,
         jersey: p.jersey_number || '00',
         posCode: p.position_code || p.position_tag || '—',
-        posGroup: squadPosGroup(p.position_code),
+        posGroup: squadPosGroup(squadParsePositions(p.position_code)[0]),
+        posGroups: squadPosGroups(p.position_code),
         age: calcAgeFromBirth(p.birth_date),
         isStoodDown: !!(p.stood_down_until && p.stood_down_until >= currentGameDate),
         photo: p.photo_path || '',
@@ -617,14 +656,79 @@ async function loadSquad(){
     });
 
     renderSquadHighlights(squadPlayersData);
+    renderSquadMetaStrip(squadPlayersData);
+    renderSquadFilterCounts(squadPlayersData);
     renderSquadTable();
   }catch(err){
     tbody.innerHTML = '';
     squadPlayersData = [];
     el('squadHighlights').classList.add('hidden');
-    empty.textContent = 'Não foi possível carregar o plantel.';
+    el('squadMetaStrip').classList.add('hidden');
+    renderSquadFilterCounts([]);
+    empty.querySelector('p').textContent = 'Não foi possível carregar o plantel.';
     empty.classList.remove('hidden');
   }
+}
+
+/* Atualiza os números dentro de cada "chip" de filtro (Todos / Guarda-Redes
+   / Defesas / Médios / Avançados). Um jogador com várias posições (ex:
+   "DE/MCD/AE") conta em CADA grupo a que pertence — daí somar mais do
+   que o total de "Todos" quando há jogadores polivalentes. */
+function renderSquadFilterCounts(players){
+  const counts = { all: players.length, GR: 0, DEF: 0, MED: 0, AVA: 0 };
+  players.forEach((p) => {
+    (p.posGroups || [p.posGroup]).forEach((g) => { if(counts[g] !== undefined) counts[g] += 1; });
+  });
+  document.querySelectorAll('.squad-chip-count').forEach((badge) => {
+    const key = badge.dataset.count;
+    badge.textContent = counts[key] ?? 0;
+  });
+}
+
+/* Tira de resumo por cima da tabela: tamanho do plantel, idade média,
+   valor de mercado total e massa salarial total — dá uma leitura rápida
+   do plantel sem teres de somar a tabela à mão. */
+function renderSquadMetaStrip(players){
+  const box = el('squadMetaStrip');
+  if(!players.length){ box.classList.add('hidden'); box.innerHTML = ''; return; }
+
+  const ages = players.map((p) => Number(p.age)).filter((n) => Number.isFinite(n) && n > 0);
+  const avgAge = ages.length ? (ages.reduce((s, n) => s + n, 0) / ages.length) : null;
+
+  const totalValue = players.reduce((s, p) => s + (p.vmNum > 0 ? p.vmNum : 0), 0);
+  const totalWage = players.reduce((s, p) => s + (p.wageNum > 0 ? p.wageNum : 0), 0);
+
+  const groupCounts = { GR: 0, DEF: 0, MED: 0, AVA: 0 };
+  players.forEach((p) => { if(groupCounts[p.posGroup] !== undefined) groupCounts[p.posGroup] += 1; });
+  const total = players.length || 1;
+  const barsHtml = ['GR', 'DEF', 'MED', 'AVA'].map((g) => {
+    const pct = (groupCounts[g] / total) * 100;
+    return pct > 0 ? `<div class="squad-meta-bar bar-${g}" style="width:${pct}%" title="${POS_GROUP_LABEL[g]}: ${groupCounts[g]}"></div>` : '';
+  }).join('');
+
+  box.innerHTML = `
+    <div class="squad-meta-card" style="animation-delay:.02s">
+      <span class="squad-meta-icon">👥</span>
+      <div class="squad-meta-label">Jogadores</div>
+      <div class="squad-meta-value">${players.length}</div>
+      <div class="squad-meta-bars">${barsHtml}</div>
+    </div>
+    <div class="squad-meta-card" style="animation-delay:.06s">
+      <span class="squad-meta-icon">🎂</span>
+      <div class="squad-meta-label">Idade Média</div>
+      <div class="squad-meta-value">${avgAge !== null ? avgAge.toFixed(1) : '—'}<small>anos</small></div>
+    </div>
+    <div class="squad-meta-card" style="animation-delay:.1s">
+      <span class="squad-meta-icon">💎</span>
+      <div class="squad-meta-label">Valor de Plantel</div>
+      <div class="squad-meta-value">${fmtMoney(totalValue)}</div>
+    </div>
+    <div class="squad-meta-card" style="animation-delay:.14s">
+      <span class="squad-meta-icon">💼</span>
+      <div class="squad-meta-label">Massa Salarial</div>
+      <div class="squad-meta-value">${fmtMoney(totalWage)}<small>/sem</small></div>
+    </div>`;
+  box.classList.remove('hidden');
 }
 
 /* Cartões de destaque no topo do separador — melhor marcador, melhor
@@ -683,7 +787,10 @@ function renderSquadTable(){
   let list = squadPlayersData.slice();
 
   if(squadFilterPos !== 'all'){
-    list = list.filter((p) => p.posGroup === squadFilterPos);
+    /* Um jogador com várias posições aparece em todos os filtros a
+       que pertence (ex: um "DE/MCD/AE" surge em Defesas, Médios e
+       Avançados), não só no grupo da sua primeira posição. */
+    list = list.filter((p) => (p.posGroups || [p.posGroup]).includes(squadFilterPos));
   }
   if(squadSearchTerm){
     const term = squadSearchTerm.toLowerCase();
