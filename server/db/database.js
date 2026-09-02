@@ -2024,16 +2024,41 @@ function withTemplateDatabase(fn) {
   }
 }
 
+/* Campos "de identidade/base" que o seed pode atualizar num jogador que
+   já existe (mesma lista de espírito que ADMIN_BROADCAST_FIELDS em
+   routes/players.js) — nunca equipa, moral, forma, lesões, etc., que são
+   estado de jogo vivo e têm de ficar intactos em cada save. */
+const PLAYER_SEED_UPDATE_FIELDS = [
+  'name', 'jersey_number', 'position_tag', 'position_code', 'nationality_code', 'birth_date',
+  'personality', 'technical_json', 'set_pieces_json', 'mental_json', 'physical_json', 'goalkeeping_json',
+];
+
 /* ---------- Aplica db/seeds/players.json a UMA ligação ----------
-   Só insere quem ainda não existir (procurado por admin_uid) — nunca
-   sobrescreve um jogador já existente, para não apagar edições feitas
-   depois em jogo (moral, forma, lesões, etc.). */
+   Se o admin_uid ainda não existir aí, cria o jogador (como antes). Se já
+   existir, ATUALIZA só os campos de PLAYER_SEED_UPDATE_FIELDS — assim uma
+   correção feita em localhost (ex: mudar a liderança) chega aos saves já
+   criados no Render depois do próximo export-seed + deploy, sem tocar em
+   equipa/moral/forma/lesões desse save. */
 function applyPlayerSeedsToConnection(conn, seeds) {
-  let applied = 0;
+  let created = 0;
+  let updated = 0;
+
   for (const seed of seeds) {
     if (!seed || !seed.admin_uid || !seed.name) continue;
-    const exists = conn.prepare('SELECT id FROM players WHERE admin_uid = ?').get(seed.admin_uid);
-    if (exists) continue;
+    const existing = conn.prepare('SELECT id FROM players WHERE admin_uid = ?').get(seed.admin_uid);
+
+    if (existing) {
+      const fields = {};
+      for (const f of PLAYER_SEED_UPDATE_FIELDS) {
+        if (seed[f] !== undefined && seed[f] !== null) fields[f] = seed[f];
+      }
+      if (Object.keys(fields).length === 0) continue;
+      const setClause = Object.keys(fields).map((f) => `${f} = @${f}`).join(', ');
+      conn.prepare(`UPDATE players SET ${setClause}, updated_at = datetime('now') WHERE id = @id`)
+        .run({ ...fields, id: existing.id });
+      updated++;
+      continue;
+    }
 
     let teamId = null;
     if (seed.team_name) {
@@ -2071,9 +2096,10 @@ function applyPlayerSeedsToConnection(conn, seeds) {
 
     const row = conn.prepare('SELECT id FROM players WHERE admin_uid = ?').get(seed.admin_uid);
     if (row && typeof conn.captureBaseline === 'function') conn.captureBaseline(row.id);
-    applied++;
+    created++;
   }
-  return applied;
+
+  return { created, updated };
 }
 
 /* ---------- Lê db/seeds/players.json e aplica ao molde + a todos os
@@ -2091,13 +2117,16 @@ function applyPlayerSeeds() {
   }
   if (!Array.isArray(seeds) || seeds.length === 0) return;
 
-  let totalApplied = 0;
+  let totalCreated = 0;
+  let totalUpdated = 0;
 
   if (fs.existsSync(LEGACY_DB_PATH)) {
     const legacyConn = openConnection(LEGACY_DB_PATH);
     initializeSchema(legacyConn);
     try {
-      totalApplied += applyPlayerSeedsToConnection(legacyConn, seeds);
+      const { created, updated } = applyPlayerSeedsToConnection(legacyConn, seeds);
+      totalCreated += created;
+      totalUpdated += updated;
     } catch (err) {
       console.error('⚠️  Falha ao aplicar seed de jogadores ao molde:', err.message);
     } finally {
@@ -2117,14 +2146,16 @@ function applyPlayerSeeds() {
       connectionsByDevice.set(deviceId, conn);
     }
     try {
-      totalApplied += applyPlayerSeedsToConnection(conn, seeds);
+      const { created, updated } = applyPlayerSeedsToConnection(conn, seeds);
+      totalCreated += created;
+      totalUpdated += updated;
     } catch (err) {
       console.error(`⚠️  Falha ao aplicar seed de jogadores ao dispositivo ${deviceId}:`, err.message);
     }
   }
 
-  if (totalApplied > 0) {
-    console.log(`🌱 Seed de jogadores: ${totalApplied} jogador(es) criados a partir de db/seeds/players.json`);
+  if (totalCreated > 0 || totalUpdated > 0) {
+    console.log(`🌱 Seed de jogadores: ${totalCreated} criado(s), ${totalUpdated} atualizado(s) a partir de db/seeds/players.json`);
   }
 }
 

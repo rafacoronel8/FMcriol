@@ -665,6 +665,32 @@ router.delete('/template/:id', (req, res) => {
   res.json({ deletedFromTemplate: result });
 });
 
+/* ---------- POST /api/players/:id/backfill-admin-uid (manutenção) ----------
+   Dá um admin_uid a um jogador que já existia antes desta migração (por
+   isso nunca aparecia nas propagações de edição/apagar/seed — ver
+   admin_uid nas outras rotas). Nunca sobrescreve um admin_uid já
+   existente. Usa o id numérico para encontrar a "mesma" linha nos outros
+   dispositivos deste servidor — funciona bem para jogadores que vêm do
+   molde original (id igual em todo o lado), que é o caso mais comum.
+
+   Corre isto UMA VEZ por ambiente (uma vez em localhost, uma vez no
+   Render) para cada jogador antigo que precises de editar/sincronizar —
+   depois disso ele passa a comportar-se como qualquer jogador criado
+   pelo admin. */
+router.post('/:id/backfill-admin-uid', (req, res) => {
+  const player = db.prepare('SELECT id, admin_uid, name FROM players WHERE id = ?').get(req.params.id);
+  if (!player) return res.status(404).json({ error: 'Jogador não encontrado' });
+  if (player.admin_uid) return res.json({ admin_uid: player.admin_uid, name: player.name, alreadyHad: true });
+
+  const newUid = crypto.randomUUID();
+  db.withEveryDatabase((conn) => {
+    conn.prepare('UPDATE players SET admin_uid = ? WHERE id = ? AND admin_uid IS NULL')
+      .run(newUid, player.id);
+  });
+
+  res.json({ admin_uid: newUid, name: player.name, alreadyHad: false });
+});
+
 /* ---------- DELETE /api/players/:id ---------- */
 router.delete('/:id', (req, res) => {
   const existing = db.prepare('SELECT id, admin_uid FROM players WHERE id = ?').get(req.params.id);
