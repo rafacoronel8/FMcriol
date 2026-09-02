@@ -76,6 +76,25 @@
     "team_name": "Castilho"
   },
   {
+    "admin_uid": "b9a2fcaa-2452-4e5e-a1e2-65d71eacc843",
+    "name": "Rafa",
+    "jersey_number": "4",
+    "position_tag": "Defesa Central / Defesa Lateral (Direito) / Médio Defensivo",
+    "position_code": "DC/DD/MCD",
+    "nationality_code": "CPV",
+    "birth_date": "2001-03-12",
+    "club_status": "Titular Regular",
+    "wage_text": "£2160 p/s",
+    "personality": "Muito Fiel",
+    "technical_json": "[[\"Cruzamento\",14],[\"Drible\",9],[\"Finalização\",10],[\"Primeiro Toque\",9],[\"Cabeceamento\",15],[\"Remates de Longe\",12],[\"Marcação\",17],[\"Passe\",11],[\"Desarme\",16],[\"Técnica\",11]]",
+    "set_pieces_json": "[[\"Cantos\",7],[\"Livres\",6],[\"Lançamentos Longos\",11],[\"Grandes Penalidades\",5]]",
+    "mental_json": "[[\"Agressividade\",14],[\"Antecipação\",15],[\"Coragem\",13],[\"Compostura\",10],[\"Concentração\",16],[\"Decisões\",12],[\"Determinação\",13],[\"Classe\",10],[\"Liderança\",18],[\"Fora de Bola\",6],[\"Posicionamento\",16],[\"Trabalho de Equipa\",12],[\"Visão\",7],[\"Ritmo de Jogo\",11]]",
+    "physical_json": "[[\"Aceleração\",16],[\"Agilidade\",11],[\"Equilíbrio\",10],[\"Alcance de Cabeceamento\",14],[\"Condição Natural\",11],[\"Velocidade\",17],[\"Resistência\",12],[\"Força\",16]]",
+    "goalkeeping_json": "[]",
+    "season_stats_json": "[{\"competition\":\"Geral (Clube)\",\"j\":0,\"g\":0,\"a\":0,\"xg\":0,\"pen\":0,\"mdp\":0,\"am\":0,\"verm\":0,\"media\":\"-\"}]",
+    "team_name": "Ribeira Bote"
+  },
+  {
     "admin_uid": "a006135f-8249-491f-8ec3-9437653afdab",
     "name": "Ruby",
     "jersey_number": "1",
