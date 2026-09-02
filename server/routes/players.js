@@ -531,6 +531,20 @@ const UPDATABLE_FIELDS = [
   'career_clubs', 'career_apps', 'career_goals', 'focus_role',
 ];
 
+/* Subconjunto de UPDATABLE_FIELDS que é "identidade/base" do jogador (não
+   muda com o jogo ao vivo) — nome, posição, atributos técnicos/mentais/
+   físicos, etc. Só estes é que fazem sentido propagar a todos os saves
+   quando um jogador criado pelo admin é editado (ver PUT /:id). Tudo o
+   resto (equipa atual, moral, forma, lesões, estatísticas da época...)
+   muda durante o jogo normal e TEM de ficar só no save onde acontece —
+   nunca deve ser propagado, nem para jogadores com admin_uid. */
+const ADMIN_BROADCAST_FIELDS = [
+  'name', 'jersey_number', 'position_tag', 'nationality_code', 'birth_date',
+  'position_code', 'position_caption', 'positions_json', 'roles_possession_json', 'roles_nopossession_json',
+  'technical_json', 'set_pieces_json', 'mental_json', 'physical_json', 'goalkeeping_json',
+  'height_cm', 'reputation_text', 'personality', 'left_foot', 'right_foot', 'traits', 'gk_rating', 'focus_role',
+];
+
 router.put('/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM players WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Jogador não encontrado' });
@@ -556,6 +570,25 @@ router.put('/:id', (req, res) => {
   const setClause = Object.keys(updates).map((f) => `${f} = @${f}`).join(', ');
   db.prepare(`UPDATE players SET ${setClause}, updated_at = datetime('now') WHERE id = @id`)
     .run({ ...updates, id: req.params.id });
+
+  // Se o jogador foi criado pelo admin (tem admin_uid) e esta edição
+  // mexeu em campos de identidade/base (nome, posição, atributos, etc. —
+  // ver ADMIN_BROADCAST_FIELDS), propaga só esses campos aos outros saves
+  // deste servidor + molde. Campos de jogo ao vivo (equipa, moral, forma,
+  // lesões...) nunca são propagados, mesmo que venham na mesma chamada.
+  if (existing.admin_uid) {
+    const broadcastUpdates = {};
+    for (const field of ADMIN_BROADCAST_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(updates, field)) broadcastUpdates[field] = updates[field];
+    }
+    if (Object.keys(broadcastUpdates).length > 0) {
+      const broadcastSetClause = Object.keys(broadcastUpdates).map((f) => `${f} = @${f}`).join(', ');
+      db.withEveryDatabase((conn) => {
+        conn.prepare(`UPDATE players SET ${broadcastSetClause}, updated_at = datetime('now') WHERE admin_uid = @admin_uid`)
+          .run({ ...broadcastUpdates, admin_uid: existing.admin_uid });
+      });
+    }
+  }
 
   const updated = db.prepare('SELECT * FROM players WHERE id = ?').get(req.params.id);
   res.json(deserialize(updated));
