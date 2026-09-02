@@ -1,0 +1,17 @@
+adicionar fotos de jogador que não aparece foto no render
+
+-Adicionar sua foto no localhost
+-Guardar
+-git add .
+-git commit -m "add photo"
+-git push
+-Deploy from latest commit
+
+Adicionar novo atributo/ Subir atributo
+-Entrar no localhost:3000
+-Entrar no perfil do jogador desejado
+-F12
+-Network - fazer refresh para ver o id
+-Console
+-fetch('/api/players/id do jogador/backfill-admin-uid', { method: 'POST' }).then(r => r.json()).then(console.log)-http://localhost:3000/api/players/export-seed
+-git add, commit, push, deploy.

@@ -433,6 +433,8 @@ document.querySelectorAll('.tab').forEach((tab) => {
     document.querySelectorAll('.tab-panel').forEach((p) => p.classList.add('hidden'));
     tab.classList.add('active');
     el(`panel-${tab.dataset.tab}`).classList.remove('hidden');
+    document.querySelector('.content')?.scrollTo({ top: 0, behavior: 'auto' });
+    tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     if (tab.dataset.tab === 'minhaEquipa') loadSquad();
     if (tab.dataset.tab === 'inscritos') loadInscritos();
     if (tab.dataset.tab === 'tatica') loadTactics();

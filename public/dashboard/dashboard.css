@@ -2462,3 +2462,139 @@ body{
   .squad-table{font-size:12px;}
   .squad-table thead th, .squad-table td{padding:6px 6px;}
 }
+/* ==========================================================================
+   MODO TELEMÓVEL — layout tipo "app", com as abas numa barra lateral
+   ========================================================================== */
+@media (max-width:768px){
+  html{
+    -webkit-text-size-adjust:100%;
+  }
+  body{
+    display:grid;
+    grid-template-columns:64px 1fr;
+    grid-template-rows:auto 1fr;
+    grid-template-areas:
+      "topbar topbar"
+      "tabs   main";
+    height:100vh;
+    height:100dvh;
+    overflow:hidden;
+    overscroll-behavior:none;
+  }
+
+  button, .tab, .btn-advance, .msg-btn, .btn-mini, .btn-clear-messages{
+    touch-action:manipulation;
+    -webkit-tap-highlight-color:transparent;
+  }
+
+  /* ---- Topbar compacta ---- */
+  .topbar{
+    grid-area:topbar;
+    flex-wrap:wrap;
+    gap:10px 14px;
+    padding:calc(10px + env(safe-area-inset-top)) 14px 10px calc(14px + env(safe-area-inset-left));
+    row-gap:8px;
+  }
+  .brand{font-size:15px;}
+  .club-chip{padding-left:12px;gap:8px;}
+  .chip-shield{width:32px;height:32px;font-size:14px;}
+  .chip-name{font-size:13px;}
+  .chip-manager{display:none;}
+  .topbar-date{font-size:11px;padding:5px 10px;order:2;}
+  .topbar-advance-btn{order:3;padding:7px 12px !important;font-size:12px !important;}
+  .search-wrap{
+    order:5;
+    width:100%;
+    margin-left:0;
+  }
+  .search-input{font-size:16px;padding:10px 14px;}
+
+  /* ---- Abas em barra lateral (rail) ---- */
+  .tabs{
+    grid-area:tabs;
+    display:flex;
+    flex-direction:column;
+    align-items:stretch;
+    gap:2px;
+    padding:8px 4px calc(10px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left));
+    border-bottom:none;
+    border-right:1px solid var(--line);
+    background:var(--bg-1);
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+    scrollbar-width:none;
+  }
+  .tabs::-webkit-scrollbar{display:none;}
+  .tab{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:3px;
+    width:100%;
+    min-height:56px;
+    padding:8px 2px;
+    border-radius:var(--radius-m);
+    border-bottom:none;
+    border-left:3px solid transparent;
+    text-align:center;
+    transition:background .15s ease, border-color .15s ease, color .15s ease;
+  }
+  .tab .tab-icon{font-size:18px;line-height:1;}
+  .tab .tab-label{
+    font-size:8.5px;
+    font-weight:700;
+    line-height:1.15;
+    letter-spacing:.1px;
+    max-width:100%;
+    overflow-wrap:break-word;
+  }
+  .tab.active{
+    background:rgba(124,92,255,.14);
+    border-left-color:var(--accent);
+    border-bottom-color:transparent;
+  }
+  .tab:active{background:rgba(124,92,255,.22);}
+
+  /* ---- Conteúdo com scroll próprio ---- */
+  .content{
+    grid-area:main;
+    max-width:100%;
+    height:100%;
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+    padding:16px 14px calc(28px + env(safe-area-inset-bottom)) 14px;
+    scroll-behavior:smooth;
+  }
+
+  .card{padding:14px;border-radius:var(--radius-m);}
+  .grid-2col{gap:12px;}
+  .tab-panel{gap:12px;}
+
+  /* ---- Modais quase em ecrã inteiro no telemóvel ---- */
+  .news-modal-overlay{padding:10px;}
+  .news-modal{
+    padding:22px 16px 20px;
+    max-height:88vh;
+    border-radius:var(--radius-m);
+  }
+  .decision-modal, .live-sub-modal{max-height:88vh;}
+  .ceremony-overlay{padding:10px;}
+  .ceremony-modal{padding:24px 16px 22px;}
+
+  /* Ecrã de jogo ao vivo ocupa o ecrã todo de forma fluida */
+  .live-match-modal{
+    max-height:94vh;
+    padding:16px 12px 14px;
+  }
+}
+
+/* Telemóveis muito estreitos — afinações extra */
+@media (max-width:380px){
+  body{grid-template-columns:56px 1fr;}
+  .tab{min-height:50px;padding:6px 2px;}
+  .tab .tab-icon{font-size:16px;}
+  .tab .tab-label{font-size:7.8px;}
+  .content{padding:12px 10px 24px;}
+  .card{padding:12px;}
+}
