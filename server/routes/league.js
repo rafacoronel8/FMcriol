@@ -884,6 +884,126 @@ function buildStandings(divisionTeams, playedFixtures) {
     .map((t, i) => ({ ...t, position: i + 1 }));
 }
 
+/* ---------- Probabilidade de título (Monte Carlo) ----------
+   Simula o resto da época MUITAS vezes, usando o MESMO modelo de golos do
+   motor de jogo real (simulateLeagueGoals, Patrão, capitão — ver
+   runLeagueTick acima), e conta em quantas simulações cada equipa acaba
+   em 1º lugar. Como os pontos já conquistados entram como ponto de
+   partida em TODAS as simulações, isto responde sozinho à evolução da
+   época — uma equipa em grande momento já parte com vantagem.
+
+   A reputação (reputation_stars) só muda no fim da época (ver
+   updateTeamReputations mais acima) — para que o mercado/transferências
+   também pesem já DURANTE a época, como foi pedido, soma-se um pequeno
+   ajuste baseado na qualidade atual do plantel (média das estrelas dos
+   prováveis titulares) face à reputação "oficial" da equipa, mais um
+   ajuste pela forma dos últimos jogos ("momento da equipa"). Isto é só
+   para ESTA estimativa — nunca afeta os resultados reais simulados pelo
+   motor do jogo. */
+const TITLE_ODDS_ITERATIONS = 50;
+/* As diferenças de reputação entre equipas (0.5 a 5 estrelas) são grandes
+   demais para uma época inteira (~28 jornadas) — aplicadas sem ajuste, a
+   equipa mais forte acaba campeã em mais de 80% das simulações, o que não
+   parece um Campeonato a sério. Esta compressão aproxima cada equipa da
+   média da divisão antes de simular, mantendo a ORDEM (quem é mais forte
+   continua favorito) mas suavizando o quanto isso pesa ao longo de uma
+   época toda — dá uma distribuição parecida com a de uma liga real, onde
+   o favorito ronda os 25-30% e não os 80-90%. */
+const STRENGTH_COMPRESSION_FACTOR = 0.15;
+const SQUAD_MARKET_WEIGHT = 0.15; // quanto o plantel atual pesa vs a reputação "oficial"
+const MAX_SQUAD_MARKET_BONUS = 0.35;
+const RECENT_FORM_GAMES = 5;
+const MAX_FORM_BONUS = 0.3;
+
+function computeSquadMarketBonus(teamId, reputationStars) {
+  const squad = db.prepare('SELECT current_ability_stars FROM players WHERE team_id = ?').all(teamId);
+  if (squad.length < 11) return 0; // plantel curto demais para um número fiável
+  const startingXI = squad.map((p) => p.current_ability_stars ?? 2.5).sort((a, b) => b - a).slice(0, 11);
+  const squadQuality = startingXI.reduce((sum, v) => sum + v, 0) / startingXI.length;
+  const raw = (squadQuality - reputationStars) * SQUAD_MARKET_WEIGHT;
+  return Math.max(-MAX_SQUAD_MARKET_BONUS, Math.min(MAX_SQUAD_MARKET_BONUS, raw));
+}
+
+function computeRecentFormBonus(teamId, playedFixtures, seasonAvgPtsPerGame) {
+  const teamGames = playedFixtures
+    .filter((f) => f.home_team_id === teamId || f.away_team_id === teamId)
+    .slice(-RECENT_FORM_GAMES);
+  if (teamGames.length < 2) return 0; // época mal começada, ainda sem "momento" fiável para medir
+
+  let pts = 0;
+  teamGames.forEach((f) => {
+    const isHome = f.home_team_id === teamId;
+    const gf = isHome ? f.home_score : f.away_score;
+    const ga = isHome ? f.away_score : f.home_score;
+    if (gf > ga) pts += 3;
+    else if (gf === ga) pts += 1;
+  });
+  const recentAvg = pts / teamGames.length;
+  const raw = (recentAvg - seasonAvgPtsPerGame) * 0.12;
+  return Math.max(-MAX_FORM_BONUS, Math.min(MAX_FORM_BONUS, raw));
+}
+
+function computeTitleOdds(divisionTeams, playedFixtures, remainingFixtures) {
+  const baseStandings = buildStandings(divisionTeams, playedFixtures);
+
+  const totalTeamGamesPlayed = playedFixtures.length * 2; // cada jogo conta para as 2 equipas
+  const totalPts = baseStandings.reduce((sum, s) => sum + s.pts, 0);
+  const seasonAvgPtsPerGame = totalTeamGamesPlayed > 0 ? totalPts / totalTeamGamesPlayed : 1.3;
+
+  const strength = new Map();
+  const meanReputation = divisionTeams.reduce((sum, t) => sum + (t.reputation_stars ?? 2.5), 0) / divisionTeams.length;
+  divisionTeams.forEach((t) => {
+    const rep = t.reputation_stars ?? 2.5;
+    const compressedRep = meanReputation + (rep - meanReputation) * STRENGTH_COMPRESSION_FACTOR;
+    const capFactor = db.getCaptainFactor(t.id);
+    const marketBonus = computeSquadMarketBonus(t.id, rep);
+    const formBonus = computeRecentFormBonus(t.id, playedFixtures, seasonAvgPtsPerGame);
+    strength.set(t.id, compressedRep + capFactor + marketBonus + formBonus);
+  });
+
+  const titleCount = new Map(divisionTeams.map((t) => [t.id, 0]));
+
+  for (let iter = 0; iter < TITLE_ODDS_ITERATIONS; iter += 1) {
+    const sim = new Map(baseStandings.map((s) => [s.team_id, { ...s }]));
+
+    remainingFixtures.forEach((f) => {
+      const home = sim.get(f.home_team_id);
+      const away = sim.get(f.away_team_id);
+      if (!home || !away) return;
+
+      const homeDefBonus = teamHasPatrao(f.home_team_id) ? 0.3 : 0;
+      const awayDefBonus = teamHasPatrao(f.away_team_id) ? 0.3 : 0;
+      const homeStr = strength.get(f.home_team_id) ?? 2.5;
+      const awayStr = strength.get(f.away_team_id) ?? 2.5;
+      const homeGoals = simulateLeagueGoals(homeStr + 0.15, awayStr + awayDefBonus);
+      const awayGoals = simulateLeagueGoals(awayStr, homeStr + 0.15 + homeDefBonus);
+
+      home.pj += 1; away.pj += 1;
+      home.gp += homeGoals; home.gc += awayGoals;
+      away.gp += awayGoals; away.gc += homeGoals;
+      if (homeGoals > awayGoals) home.pts += 3;
+      else if (awayGoals > homeGoals) away.pts += 3;
+      else { home.pts += 1; away.pts += 1; }
+    });
+
+    const finalOrder = [...sim.values()]
+      .map((t) => ({ ...t, sg: t.gp - t.gc }))
+      .sort((a, b) => b.pts - a.pts || b.sg - a.sg || b.gp - a.gp || a.name.localeCompare(b.name));
+
+    const champion = finalOrder[0];
+    if (champion) titleCount.set(champion.team_id, (titleCount.get(champion.team_id) || 0) + 1);
+  }
+
+  return divisionTeams
+    .map((t) => ({
+      team_id: t.id,
+      name: t.name,
+      shield_path: t.shield_path,
+      title_probability: Math.round((titleCount.get(t.id) / TITLE_ODDS_ITERATIONS) * 1000) / 10, // 1 casa decimal
+    }))
+    .sort((a, b) => b.title_probability - a.title_probability);
+}
+
 /* ---------- GET /api/league/:teamId — tabela + calendário do clube ---------- */
 router.get('/:teamId', (req, res) => {
   const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(req.params.teamId);
@@ -895,14 +1015,21 @@ router.get('/:teamId', (req, res) => {
   const currentDate = state.current_date;
   const seasonStart = getCurrentSeasonStart();
 
-  const divisionTeams = db.prepare('SELECT id, name, shield_path FROM teams WHERE division = ?').all(team.division);
+  const divisionTeams = db.prepare('SELECT id, name, shield_path, reputation_stars FROM teams WHERE division = ?').all(team.division);
   const playedFixtures = db.prepare(`
     SELECT * FROM league_fixtures WHERE status = 'played' AND home_team_id IN (
+      SELECT id FROM teams WHERE division = ?
+    )
+    ORDER BY match_date ASC, id ASC
+  `).all(team.division);
+  const remainingFixtures = db.prepare(`
+    SELECT * FROM league_fixtures WHERE status IN ('scheduled', 'linked') AND home_team_id IN (
       SELECT id FROM teams WHERE division = ?
     )
   `).all(team.division);
 
   const standings = buildStandings(divisionTeams, playedFixtures);
+  const titleOdds = computeTitleOdds(divisionTeams, playedFixtures, remainingFixtures);
   const leaders = getCompetitionLeaders('league', divisionTeams.map((t) => t.id));
 
   const teamFixtures = db.prepare(`
@@ -927,6 +1054,7 @@ router.get('/:teamId', (req, res) => {
     preseason_window: preseasonWindowFor(seasonStart),
     my_team_id: team.id,
     standings,
+    title_odds: titleOdds,
     leaders,
     upcoming,
     history,
@@ -1040,3 +1168,4 @@ module.exports.ensureSeasonFixtures = ensureSeasonFixtures;
 module.exports.runLeagueTick = runLeagueTick;
 module.exports.getCurrentSeasonStart = getCurrentSeasonStart;
 module.exports.buildStandings = buildStandings;
+module.exports.computeTitleOdds = computeTitleOdds;
