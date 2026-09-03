@@ -350,7 +350,7 @@ router.get('/state', (req, res) => {
    runPlayerDevelopmentForSeason em routes/league.js); sem isso, a margem
    para "descer" é bem mais apertada, para os clubes grandes não andarem
    sempre atrás de reforços fracos só porque calham a precisar da posição. */
-function reputationCompatible(buyerReputation, playerQuality, { breakout = false, upTolerance = 1.1, downTolerance = 0.6, breakoutDownTolerance = 1.8 } = {}) {
+function reputationCompatible(buyerReputation, playerQuality, { breakout = false, upTolerance = 1.1, downTolerance = 1.4, breakoutDownTolerance = 1.8 } = {}) {
   const gap = buyerReputation - playerQuality; // positivo = o comprador é mais forte do que o jogador
   if (gap <= 0) return Math.abs(gap) <= upTolerance;
   return gap <= (breakout ? breakoutDownTolerance : downTolerance);
