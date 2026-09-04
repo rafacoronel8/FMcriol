@@ -678,6 +678,16 @@ function runSeasonRolloverIfDue(nextDateStr) {
     players.assignCaptaincy(t.id, { force: true });
   });
 
+  /* ---------- Folha salarial de fim de época ----------
+     Debita de TODAS as equipas a soma dos salários semanais do plantel ×
+     12, tirada do orçamento de transferências — ver
+     db.chargeSeasonWages em db/database.js (só o clube do utilizador
+     recebe mensagem na caixa de entrada, mesmo critério do resto desta
+     função). Corre aqui, ANTES das mensagens de troféus/prémios abaixo,
+     para a mensagem "Folha salarial da época" aparecer primeiro na caixa
+     de entrada, como o "fecho de contas" da época que agora termina. */
+  db.chargeSeasonWages(seasonLabel, nextDateStr);
+
   /* Notifica o treinador — uma mensagem por cada troféu/prémio que o SEU
      clube (ou um jogador dele) tenha ganho, além do aviso geral de que a
      época nova já começou. Assim fica claro na caixa de entrada o que foi

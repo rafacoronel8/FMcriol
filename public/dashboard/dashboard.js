@@ -226,78 +226,113 @@ async function loadStaffPanels(){
   }catch(err){
     // mantém o estado anterior se falhar
   }
-  loadScoutRecommendations();
 }
 
-/* ---------- Recomendações do Olheiro ----------
-   Só aparece alguma coisa se o clube tiver um Olheiro contratado E o
+/* ---------- Aba Olheiro ---------- */
+/* Só aparece alguma coisa se o clube tiver um Olheiro contratado E o
    mercado de transferências estiver aberto (ver routes/scout.js). Clicar
-   numa recomendação leva ao perfil do jogador, onde já é possível fazer
-   uma proposta a sério. */
-async function loadScoutRecommendations(){
-  const list = el('scoutRecommendations');
-  const emptyMsg = el('scoutEmpty');
+   num cartão leva ao perfil do jogador, onde já é possível fazer uma
+   proposta a sério. */
+let scoutState = { hasScout: false, marketOpen: false, scoutId: null };
+
+function renderScoutCard(r){
+  const teamShieldHtml = r.team_shield ? `<img src="${r.team_shield}" alt="">` : '';
+  const tags = [];
+  if(r.need_reason) tags.push(r.need_reason);
+  if(r.age != null) tags.push(`${r.age} anos`);
+  return `
+    <div class="scout-card" data-id="${r.player_id}">
+      <div class="scout-card-top">
+        <div class="scout-card-avatar">${r.photo_path ? `<img src="${r.photo_path}" alt="">` : '🧑'}</div>
+        <div style="flex:1;min-width:0;">
+          <div class="scout-card-name">${r.name}</div>
+          <div class="scout-card-meta">${r.position_tag || 'Posição não definida'}</div>
+        </div>
+      </div>
+      <div class="scout-card-team">${teamShieldHtml}<span>${r.team_name || ''}</span></div>
+      ${tags.length ? `<div class="scout-card-tags">${tags.map((t) => `<span class="scout-card-tag">${t}</span>`).join('')}</div>` : ''}
+      <div class="scout-card-bottom">
+        <span class="scout-card-value">${fmtMoney(r.estimated_value)}</span>
+        <span class="scout-card-stars">${staffStars(r.current_ability_stars)}</span>
+      </div>
+    </div>`;
+}
+
+function bindScoutCardClicks(container){
+  container.querySelectorAll('.scout-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      window.location.href = `/jogador/perfilJogador.html?id=${card.dataset.id}`;
+    });
+  });
+}
+
+function renderScoutHero(name, stars, statusText, marketOpen, photoPath){
+  const avatar = el('scoutHeroAvatar');
+  avatar.innerHTML = photoPath ? `<img src="${photoPath}" alt="">` : '🔎';
+  el('scoutHeroName').textContent = name;
+  el('scoutHeroStars').textContent = stars;
+  el('scoutHeroStatus').textContent = statusText;
+  const badge = el('scoutHeroMarketBadge');
+  badge.textContent = marketOpen ? 'Mercado Aberto' : 'Mercado Fechado';
+  badge.className = 'scout-hero-badge ' + (marketOpen ? 'market-open' : 'market-closed');
+}
+
+async function loadScoutPanel(){
   const noScoutMsg = el('scoutNoScout');
   const closedMsg = el('scoutMarketClosed');
-  const taskForm = el('scoutTaskForm');
-  if(!list) return;
-
-  [emptyMsg, noScoutMsg, closedMsg].forEach((box) => box.classList.add('hidden'));
-  list.innerHTML = '';
-  taskForm.classList.add('hidden');
+  const workArea = el('scoutWorkArea');
+  [noScoutMsg, closedMsg].forEach((box) => box.classList.add('hidden'));
+  workArea.classList.add('hidden');
 
   try{
+    // Usamos /recommendations só para saber se há olheiro, o estado do
+    // mercado e a tarefa atual — o resto (cartões) é tratado abaixo.
     const res = await fetch(`/api/scout/${teamId}/recommendations`);
     if(!res.ok) throw new Error();
     const data = await res.json();
 
+    scoutState = { hasScout: data.has_scout, marketOpen: data.market_open, scoutId: data.scout_id || null };
+
     if(!data.has_scout){
+      renderScoutHero('Sem Olheiro contratado', '—', 'Vai à Comissão Técnica', false);
       noScoutMsg.classList.remove('hidden');
       return;
     }
 
-    // A partir daqui já há Olheiro contratado — mostra sempre o formulário
-    // da tarefa, mesmo com o mercado fechado, para dar para preparar com
-    // antecedência o que ele deve procurar assim que a janela abrir.
+    renderScoutHero(data.scout_name, staffStars(5), 'Ao serviço do clube', data.market_open);
+    workArea.classList.remove('hidden');
+
+    const taskForm = el('scoutTaskForm');
     taskForm.dataset.scoutId = data.scout_id;
     el('scoutTaskMinAge').value = data.task?.min_age ?? '';
     el('scoutTaskMaxAge').value = data.task?.max_age ?? '';
     el('scoutTaskPosition').value = data.task?.position ?? '';
     el('scoutTaskMaxPrice').value = data.task?.max_price ?? '';
-    taskForm.classList.remove('hidden');
 
     if(!data.market_open){
       closedMsg.classList.remove('hidden');
-      return;
-    }
-    if(!data.recommendations.length){
-      emptyMsg.classList.remove('hidden');
+      el('scoutRecommendations').innerHTML = '';
+      el('scoutEmpty').classList.add('hidden');
       return;
     }
 
-    list.innerHTML = data.recommendations.map((r) => `
-      <div class="scout-row" data-id="${r.player_id}">
-        <div class="scout-avatar">${r.photo_path ? `<img src="${r.photo_path}" alt="">` : '🧑'}</div>
-        <div class="scout-info">
-          <div class="scout-name">${r.name}</div>
-          <div class="scout-meta">${r.position_tag || 'Posição não definida'} · ${r.team_name}</div>
-          <div class="scout-reason">${r.need_reason}</div>
-        </div>
-        <div class="scout-side">
-          <span class="scout-value">${fmtMoney(r.estimated_value)}</span>
-          <span class="scout-stars">${staffStars(r.current_ability_stars)}</span>
-        </div>
-      </div>`).join('');
-
-    list.querySelectorAll('.scout-row').forEach((row) => {
-      row.addEventListener('click', () => {
-        window.location.href = `/jogador/perfilJogador.html?id=${row.dataset.id}`;
-      });
-    });
+    renderScoutRecommendations(data.recommendations || []);
   }catch(err){
-    emptyMsg.textContent = 'Não foi possível carregar as recomendações do olheiro.';
-    emptyMsg.classList.remove('hidden');
+    renderScoutHero('Não foi possível carregar', '—', 'Tenta novamente', false);
   }
+}
+
+function renderScoutRecommendations(recommendations){
+  const list = el('scoutRecommendations');
+  const emptyMsg = el('scoutEmpty');
+  if(!recommendations.length){
+    list.innerHTML = '';
+    emptyMsg.classList.remove('hidden');
+    return;
+  }
+  emptyMsg.classList.add('hidden');
+  list.innerHTML = recommendations.map(renderScoutCard).join('');
+  bindScoutCardClicks(list);
 }
 
 el('scoutTaskForm').addEventListener('submit', async (e) => {
@@ -328,7 +363,7 @@ el('scoutTaskForm').addEventListener('submit', async (e) => {
     resultBox.textContent = 'Tarefa guardada — o olheiro passa a procurar dentro destes critérios.';
     resultBox.className = 'activity-result ok';
     resultBox.classList.remove('hidden');
-    loadScoutRecommendations();
+    loadScoutPanel();
   }catch(err){
     resultBox.textContent = err.message;
     resultBox.className = 'activity-result err';
@@ -336,6 +371,78 @@ el('scoutTaskForm').addEventListener('submit', async (e) => {
   }finally{
     submitBtn.disabled = false;
   }
+});
+
+/* ---------- Pesquisa avançada do Olheiro ---------- */
+function buildScoutSearchQuery(){
+  const params = new URLSearchParams();
+  const map = {
+    q: el('scoutSearchName').value.trim(),
+    position: el('scoutSearchPosition').value,
+    nationality: el('scoutSearchNationality').value.trim(),
+    min_age: el('scoutSearchMinAge').value,
+    max_age: el('scoutSearchMaxAge').value,
+    min_stars: el('scoutSearchMinStars').value,
+    max_stars: el('scoutSearchMaxStars').value,
+    max_price: el('scoutSearchMaxPrice').value,
+    sort: el('scoutSearchSort').value,
+  };
+  Object.entries(map).forEach(([key, value]) => { if(value) params.set(key, value); });
+  return params.toString();
+}
+
+el('scoutSearchForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const resultsBox = el('scoutSearchResults');
+  const emptyMsg = el('scoutSearchEmpty');
+  const hintMsg = el('scoutSearchHint');
+  const metaBox = el('scoutSearchMeta');
+  const submitBtn = e.target.querySelector('button[type="submit"]');
+
+  hintMsg.classList.add('hidden');
+  emptyMsg.classList.add('hidden');
+  submitBtn.disabled = true;
+  resultsBox.innerHTML = '';
+  metaBox.classList.add('hidden');
+
+  try{
+    const query = buildScoutSearchQuery();
+    const res = await fetch(`/api/scout/${teamId}/search?${query}`);
+    if(!res.ok) throw new Error();
+    const data = await res.json();
+
+    if(!data.has_scout || !data.market_open){
+      emptyMsg.textContent = !data.has_scout
+        ? 'Contrata um Olheiro primeiro para poderes pesquisar.'
+        : 'O mercado está fechado — a pesquisa só funciona durante a janela de transferências.';
+      emptyMsg.classList.remove('hidden');
+      return;
+    }
+
+    if(!data.results.length){
+      emptyMsg.textContent = 'Nenhum jogador encontrado com esses filtros.';
+      emptyMsg.classList.remove('hidden');
+      return;
+    }
+
+    metaBox.innerHTML = `<b>${data.total_matches}</b> jogador${data.total_matches === 1 ? '' : 'es'} encontrado${data.total_matches === 1 ? '' : 's'}${data.total_matches > data.results.length ? ` — a mostrar os ${data.results.length} melhores` : ''}`;
+    metaBox.classList.remove('hidden');
+    resultsBox.innerHTML = data.results.map(renderScoutCard).join('');
+    bindScoutCardClicks(resultsBox);
+  }catch(err){
+    emptyMsg.textContent = 'Não foi possível pesquisar agora. Tenta outra vez.';
+    emptyMsg.classList.remove('hidden');
+  }finally{
+    submitBtn.disabled = false;
+  }
+});
+
+el('scoutSearchClear').addEventListener('click', () => {
+  el('scoutSearchForm').reset();
+  el('scoutSearchResults').innerHTML = '';
+  el('scoutSearchMeta').classList.add('hidden');
+  el('scoutSearchEmpty').classList.add('hidden');
+  el('scoutSearchHint').classList.remove('hidden');
 });
 
 function renderStaffHired(list){
@@ -442,8 +549,72 @@ document.querySelectorAll('.tab').forEach((tab) => {
     if (tab.dataset.tab === 'clausulas') loadClauses();
     if (tab.dataset.tab === 'campeonato') loadLeague();
     if (tab.dataset.tab === 'taca') loadCup();
+    if (tab.dataset.tab === 'olheiro') loadScoutPanel();
+    if (tab.dataset.tab === 'financas') loadFinancesPanel();
   });
 });
+
+/* ---------- Finanças: folha salarial vs. saldo / orçamento de transferências ----------
+   GET /api/teams/:id/finances (routes/teams.js) devolve os orçamentos da
+   equipa + a folha salarial ATUAL do plantel (somada ao vivo a partir de
+   wage_text), o valor que vai ser debitado no fecho da época (soma dos
+   salários semanais × 12 — ver db.chargeSeasonWages em db/database.js,
+   que paga primeiro do SALDO e só recorre ao orçamento de transferências
+   para o que faltar) e uma indicação simples de saúde financeira. */
+const FIN_HEALTH_CLASS = {
+  'Excelente': 'fin-health-good',
+  'Estável': 'fin-health-good',
+  'Preocupante': 'fin-health-warn',
+  'Crítico': 'fin-health-bad',
+};
+
+async function loadFinancesPanel(){
+  try{
+    const res = await fetch(`/api/teams/${teamId}/finances`);
+    if(!res.ok) throw new Error();
+    const f = await res.json();
+    fillFinancesPanel(f);
+  }catch(err){
+    el('finHealthSub').textContent = 'Não foi possível carregar os dados financeiros.';
+  }
+}
+
+function fillFinancesPanel(f){
+  const healthClass = FIN_HEALTH_CLASS[f.health] || 'fin-health-mid';
+  const badge = el('finHealthBadge');
+  badge.textContent = f.health;
+  badge.className = 'fin-hero-badge ' + healthClass;
+
+  const daysText = f.days_until_charge != null
+    ? `daqui a ${f.days_until_charge} dia${f.days_until_charge === 1 ? '' : 's'} (1 de agosto)`
+    : 'no próximo fecho de época';
+  el('finHealthSub').textContent =
+    `A folha salarial × 4 representa ${f.wage_share_of_cushion_pct}% do que o clube tem disponível (saldo + orçamento de transferências) — cobrada ${daysText}.`;
+
+  el('finBalance').textContent = fmtMoney(f.balance);
+  el('finTransferBudget').textContent = fmtMoney(f.transfer_budget);
+  el('finWageBudget').textContent = fmtMoney(f.wage_budget) + ' / semana';
+  el('finTier').textContent = f.financial_tier;
+
+  el('finPlayerCount').textContent = f.player_count;
+  el('finWeeklyWages').textContent = fmtMoney(f.weekly_wage_bill) + ' / semana';
+  el('finSeasonCharge').textContent = fmtMoney(f.projected_season_wage_charge);
+  el('finChargeHint').textContent = f.already_charged_this_season
+    ? `Já debitado na época ${f.season_label}.`
+    : `Ainda não debitado esta época (${f.season_label}).`;
+
+  const total = f.projected_season_wage_charge || 1;
+  const balancePct = Math.max(0, Math.min(100, (f.projected_from_balance / total) * 100));
+  const transferPct = Math.max(0, Math.min(100 - balancePct, (f.projected_from_transfer_budget / total) * 100));
+  el('finCompareFillBalance').style.width = balancePct + '%';
+  el('finCompareFillTransfer').style.width = transferPct + '%';
+  el('finCompareFillTransfer').className = 'fin-compare-fill fin-compare-fill-transfer ' + healthClass;
+
+  el('finFromBalance').textContent = fmtMoney(f.projected_from_balance);
+  el('finFromTransfer').textContent = fmtMoney(f.projected_from_transfer_budget);
+  el('finBalanceAfter').textContent = fmtMoney(f.balance_after_charge);
+  el('finAfterCharge').textContent = fmtMoney(f.transfer_budget_after_charge);
+}
 
 /* ---------- Minha Equipa (plantel) ---------- */
 const FITNESS_CLASS = {
@@ -1154,6 +1325,7 @@ const MESSAGE_ICONS = {
   player_of_match: '⭐',
   scout_tip: '🔎',
   season_prize_money: '💰',
+  season_wage_charge: '📉',
   choose_captain: '🎖️',
 };
 
@@ -1248,6 +1420,56 @@ function renderSeasonPrizeBox(m){
           </div>`).join('')}
       </div>
       <p class="msg-prize-footnote">Já somado ao orçamento de transferências.</p>
+    </div>`;
+}
+
+/* ---------- Débito da folha salarial de fim de época ----------
+   messages.extra_json guarda { wage_charge: { total, season_label,
+   weekly_wage_bill, player_count, balance_before, balance_after,
+   paid_from_balance, paid_from_transfer_budget, transfer_budget_before,
+   transfer_budget_after } } — ver db/database.js:chargeSeasonWages. O
+   saldo paga primeiro; só mostra a linha do orçamento de transferências
+   se sobrou algum valor por pagar (paid_from_transfer_budget > 0). */
+function renderWageChargeBox(m){
+  if(m.type !== 'season_wage_charge' || !m.extra_json) return '';
+  let extra;
+  try{ extra = JSON.parse(m.extra_json); }catch(err){ return ''; }
+  const w = extra && extra.wage_charge;
+  if(!w) return '';
+
+  const items = [
+    `<div class="msg-prize-item">
+      <span class="msg-prize-item-icon">📋</span>
+      <span class="msg-prize-item-label">${w.player_count} jogador${w.player_count === 1 ? '' : 'es'} sob contrato · ${fmtMoney(w.weekly_wage_bill)} / semana</span>
+      <span class="msg-prize-item-amount">×4</span>
+    </div>`,
+    `<div class="msg-prize-item">
+      <span class="msg-prize-item-icon">💰</span>
+      <span class="msg-prize-item-label">Pago pelo saldo do clube</span>
+      <span class="msg-prize-item-amount">-${fmtMoney(w.paid_from_balance)}</span>
+    </div>`,
+  ];
+  if(w.paid_from_transfer_budget > 0){
+    items.push(`
+      <div class="msg-prize-item">
+        <span class="msg-prize-item-icon">🔁</span>
+        <span class="msg-prize-item-label">Diferença tirada do orçamento de transferências</span>
+        <span class="msg-prize-item-amount">-${fmtMoney(w.paid_from_transfer_budget)}</span>
+      </div>`);
+  }
+
+  const footnote = w.paid_from_transfer_budget > 0
+    ? `Saldo: ${fmtMoney(w.balance_before)} → ${fmtMoney(w.balance_after)}. Orçamento de transferências: ${fmtMoney(w.transfer_budget_before)} → ${fmtMoney(w.transfer_budget_after)}.`
+    : `Saldo: ${fmtMoney(w.balance_before)} → ${fmtMoney(w.balance_after)}. O orçamento de transferências não foi tocado.`;
+
+  return `
+    <div class="msg-prize-box msg-wage-box">
+      <div class="msg-prize-total msg-wage-total">
+        <span class="msg-prize-total-label">Total debitado</span>
+        <span class="msg-prize-total-value msg-wage-total-value">-${fmtMoney(w.total)}</span>
+      </div>
+      <div class="msg-prize-items">${items.join('')}</div>
+      <p class="msg-prize-footnote">${footnote}</p>
     </div>`;
 }
 
@@ -1461,6 +1683,7 @@ function renderMessageDetail(m){
     ${renderPotmStatsBox(m)}
     ${renderScoutTipBox(m)}
     ${renderSeasonPrizeBox(m)}
+    ${renderWageChargeBox(m)}
     <div class="inbox-detail-body">${m.body}</div>
     ${renderMessageGauges(m)}
     ${actions}

@@ -120,6 +120,19 @@ router.post('/:id/shield', upload.single('shield'), (req, res) => {
   res.json({ ...team, shield_path: relPath });
 });
 
+/* ---------- GET /api/teams/:id/finances — resumo para a aba Finanças ----------
+   Ver db.buildFinanceSummary em db/database.js: junta os orçamentos da
+   equipa com a folha salarial ATUAL do plantel (somada ao vivo a partir de
+   wage_text) para mostrar quanto vai sair do orçamento de transferências
+   no próximo fecho de época (1 de agosto — ver runSeasonRolloverIfDue em
+   routes/league.js), quantos dias faltam para isso, e uma indicação
+   simples de saúde financeira. */
+router.get('/:id/finances', (req, res) => {
+  const summary = db.buildFinanceSummary(req.params.id);
+  if (!summary) return res.status(404).json({ error: 'Equipa não encontrada' });
+  res.json(summary);
+});
+
 /* ---------- PUT /api/teams/:id/budget-split — regulador salários ⇄ transferências ----------
    O treinador pode redistribuir a capacidade financeira do clube entre o
    orçamento semanal de salários e o orçamento de transferências — subir um

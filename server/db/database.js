@@ -1603,6 +1603,211 @@ function awardLeagueSeasonPrizeMoney({ standings, season_label: seasonLabel }) {
 }
 db.awardLeagueSeasonPrizeMoney = awardLeagueSeasonPrizeMoney;
 
+/* ---------- Folha salarial: débito de fim de época ----------
+   No fecho da época (1 de agosto, ver runSeasonRolloverIfDue em
+   routes/league.js), cada equipa paga a soma dos salários semanais de
+   TODOS os jogadores do seu plantel × SEASON_WAGE_MULTIPLIER, retirado do
+   ORÇAMENTO DE TRANSFERÊNCIAS (nunca do saldo nem do wage_budget — esse
+   continua a ser só um teto semanal informativo, ver routes/teams.js).
+   Aplica-se a TODAS as equipas (não só à do utilizador) para a economia
+   das equipas geridas pelo jogo não ficar sempre a crescer com prémios e
+   nunca a gastar em salários — mas, tal como nos prémios de fim de época,
+   só o clube do utilizador recebe mensagem na caixa de entrada.
+   season_wage_payments evita cobrar duas vezes na mesma época, exatamente
+   como season_prize_payments faz para os prémios. */
+const SEASON_WAGE_MULTIPLIER = 4;
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS season_wage_payments (
+    team_id       INTEGER NOT NULL,
+    season_label  TEXT NOT NULL,
+    paid_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (team_id, season_label)
+  )
+`);
+
+/* Mesma lógica de routes/game.js:parseWageAmount — duplicada aqui (função
+   pequena e pura) para db/database.js não ter de importar routes/game.js,
+   o que criaria uma dependência circular (routes/game.js já importa
+   db/database.js). Lê um número aproximado de texto tipo "£41.5K p/s" ou
+   "£3.000 p/s": só trata como casa decimal o que vem antes de um sufixo
+   K/M — sem sufixo, o "." ou espaço é separador de milhar, não vírgula
+   decimal. */
+function parseWageAmount(text) {
+  const str = String(text || '');
+  const suffixMatch = str.match(/([\d]+(?:[.,]\d+)?)\s*(K|M)/i);
+  if (suffixMatch) {
+    const num = parseFloat(suffixMatch[1].replace(',', '.'));
+    const mult = /M/i.test(suffixMatch[2]) ? 1_000_000 : 1_000;
+    return Number.isFinite(num) && num > 0 ? num * mult : 3000;
+  }
+  const digitsOnly = str.replace(/[^\d]/g, '');
+  const value = digitsOnly ? parseInt(digitsOnly, 10) : 0;
+  return Number.isFinite(value) && value > 0 ? value : 3000;
+}
+db.parseWageAmount = parseWageAmount;
+
+function computeTeamWeeklyWageBill(teamId) {
+  const rows = db.prepare('SELECT wage_text FROM players WHERE team_id = ?').all(teamId);
+  return rows.reduce((sum, p) => sum + parseWageAmount(p.wage_text), 0);
+}
+db.computeTeamWeeklyWageBill = computeTeamWeeklyWageBill;
+
+/* Chamada uma vez por época a partir de runSeasonRolloverIfDue
+   (routes/league.js), com a época que está mesmo a fechar (seasonLabel) e
+   a data do rollover (eventDateStr) — usadas só para o texto da mensagem
+   e para a proteção season_wage_payments acima.
+
+   O SALDO (balance) é o dinheiro do dia-a-dia do clube — é dali que sai a
+   folha salarial primeiro, tal como na vida real. Só quando o saldo não
+   chega para cobrir tudo é que a diferença é tirada do ORÇAMENTO DE
+   TRANSFERÊNCIAS (nunca ao contrário). Se o saldo já estiver negativo (por
+   outro motivo qualquer), não há nada para "gastar" dele — tudo sai do
+   orçamento de transferências. */
+function chargeSeasonWages(seasonLabel, eventDateStr) {
+  const teams = db.prepare('SELECT id, name, balance, transfer_budget, is_user_controlled FROM teams').all();
+
+  teams.forEach((team) => {
+    const alreadyCharged = db.prepare(`
+      SELECT 1 FROM season_wage_payments WHERE team_id = ? AND season_label = ?
+    `).get(team.id, seasonLabel);
+    if (alreadyCharged) return;
+
+    const squad = db.prepare('SELECT id, wage_text FROM players WHERE team_id = ?').all(team.id);
+    const weeklyWageBill = squad.reduce((sum, p) => sum + parseWageAmount(p.wage_text), 0);
+    const seasonCharge = weeklyWageBill * SEASON_WAGE_MULTIPLIER;
+
+    const balanceBefore = team.balance;
+    const transferBudgetBefore = team.transfer_budget;
+
+    const paidFromBalance = Math.max(0, Math.min(balanceBefore, seasonCharge));
+    const shortfall = seasonCharge - paidFromBalance;
+
+    const balanceAfter = balanceBefore - paidFromBalance;
+    const transferBudgetAfter = transferBudgetBefore - shortfall;
+
+    db.prepare(`
+      UPDATE teams SET balance = @balance, transfer_budget = @transfer_budget, updated_at = datetime('now') WHERE id = @id
+    `).run({ id: team.id, balance: balanceAfter, transfer_budget: transferBudgetAfter });
+    db.prepare('INSERT INTO season_wage_payments (team_id, season_label) VALUES (?, ?)').run(team.id, seasonLabel);
+
+    if (!team.is_user_controlled) return;
+
+    const shortfallLine = shortfall > 0
+      ? ` O saldo não chegou para cobrir tudo, por isso os restantes ${shortfall.toLocaleString('pt-PT')}£ saíram do orçamento de transferências, que passa de ${transferBudgetBefore.toLocaleString('pt-PT')}£ para ${transferBudgetAfter.toLocaleString('pt-PT')}£.`
+      : ' O saldo do clube foi suficiente para cobrir tudo — o orçamento de transferências não foi tocado.';
+
+    db.prepare(`
+      INSERT INTO messages (team_id, type, title, body, extra_json)
+      VALUES (@team_id, 'season_wage_charge', @title, @body, @extra_json)
+    `).run({
+      team_id: team.id,
+      title: `📉 Folha salarial da época: ${seasonCharge.toLocaleString('pt-PT')}£`,
+      body: `O plantel do ${team.name} tem ${squad.length} jogador${squad.length === 1 ? '' : 'es'} sob contrato, num total de ${weeklyWageBill.toLocaleString('pt-PT')}£ por semana em salários. No fecho da época ${seasonLabel}, esse valor × 6 (${seasonCharge.toLocaleString('pt-PT')}£) sai do saldo do clube, que passa de ${balanceBefore.toLocaleString('pt-PT')}£ para ${balanceAfter.toLocaleString('pt-PT')}£.${shortfallLine}`,
+      extra_json: JSON.stringify({
+        wage_charge: {
+          total: seasonCharge,
+          season_label: seasonLabel,
+          weekly_wage_bill: weeklyWageBill,
+          player_count: squad.length,
+          balance_before: balanceBefore,
+          balance_after: balanceAfter,
+          paid_from_balance: paidFromBalance,
+          paid_from_transfer_budget: shortfall,
+          transfer_budget_before: transferBudgetBefore,
+          transfer_budget_after: transferBudgetAfter,
+        },
+      }),
+    });
+  });
+}
+db.chargeSeasonWages = chargeSeasonWages;
+
+/* ---------- Resumo financeiro para a aba "Finanças" ----------
+   Usado por GET /api/teams/:id/finances (routes/teams.js). Junta os
+   orçamentos da equipa com a folha salarial ATUAL do plantel (somada a
+   partir de wage_text, ao vivo — não depende de nenhum débito já feito)
+   para mostrar, antes de a época fechar, quanto vai sair no próximo
+   rollover — primeiro do SALDO, só a diferença (se houver) do orçamento
+   de transferências, exatamente como em chargeSeasonWages acima — e uma
+   indicação simples de "saúde financeira". */
+function buildFinanceSummary(teamId) {
+  const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId);
+  if (!team) return null;
+
+  const squad = db.prepare('SELECT id, name, wage_text FROM players WHERE team_id = ?').all(teamId);
+  const weeklyWageBill = squad.reduce((sum, p) => sum + parseWageAmount(p.wage_text), 0);
+  const projectedSeasonCharge = weeklyWageBill * SEASON_WAGE_MULTIPLIER;
+
+  const state = db.prepare('SELECT current_date, current_season_start FROM game_state WHERE id = 1').get();
+  const seasonStart = (state && state.current_season_start) || '2026-08-01';
+  const rolloverYear = Number(seasonStart.slice(0, 4)) + 1;
+  const rolloverDate = `${rolloverYear}-08-01`;
+  const seasonLabel = `${seasonStart.slice(0, 4)}/${rolloverYear}`;
+
+  let daysUntilCharge = null;
+  if (state && state.current_date) {
+    const [cy, cm, cd] = state.current_date.split('-').map(Number);
+    const [ry, rm, rd] = rolloverDate.split('-').map(Number);
+    daysUntilCharge = Math.round((Date.UTC(ry, rm - 1, rd) - Date.UTC(cy, cm - 1, cd)) / 86400000);
+  }
+
+  /* Mesma ordem de pagamento de chargeSeasonWages: saldo primeiro, o
+     orçamento de transferências só cobre o que faltar. */
+  const projectedFromBalance = Math.max(0, Math.min(team.balance, projectedSeasonCharge));
+  const projectedShortfall = projectedSeasonCharge - projectedFromBalance;
+  const balanceAfterCharge = team.balance - projectedFromBalance;
+  const transferBudgetAfterCharge = team.transfer_budget - projectedShortfall;
+
+  /* Saúde financeira: quanto da folga total do clube (saldo + orçamento de
+     transferências, os dois sítios de onde o débito pode sair) o próximo
+     débito vai consumir. */
+  const totalCushion = Math.max(0, team.balance) + Math.max(0, team.transfer_budget);
+  const wageShareOfCushion = totalCushion > 0
+    ? projectedSeasonCharge / totalCushion
+    : (projectedSeasonCharge > 0 ? 1 : 0);
+
+  let health = 'Excelente';
+  if (projectedSeasonCharge > 0) {
+    if (wageShareOfCushion >= 1) health = 'Crítico';
+    else if (wageShareOfCushion >= 0.6) health = 'Preocupante';
+    else if (wageShareOfCushion >= 0.3) health = 'Estável';
+  }
+
+  const alreadyChargedThisSeason = !!db.prepare(`
+    SELECT 1 FROM season_wage_payments WHERE team_id = ? AND season_label = ?
+  `).get(teamId, seasonLabel);
+
+  const recentCharges = db.prepare(`
+    SELECT season_label, paid_at FROM season_wage_payments WHERE team_id = ? ORDER BY paid_at DESC LIMIT 6
+  `).all(teamId);
+
+  return {
+    team_id: team.id,
+    team_name: team.name,
+    financial_tier: team.financial_tier,
+    balance: team.balance,
+    wage_budget: team.wage_budget,
+    transfer_budget: team.transfer_budget,
+    player_count: squad.length,
+    weekly_wage_bill: weeklyWageBill,
+    season_wage_multiplier: SEASON_WAGE_MULTIPLIER,
+    projected_season_wage_charge: projectedSeasonCharge,
+    projected_from_balance: projectedFromBalance,
+    projected_from_transfer_budget: projectedShortfall,
+    balance_after_charge: balanceAfterCharge,
+    transfer_budget_after_charge: transferBudgetAfterCharge,
+    wage_share_of_cushion_pct: Math.round(wageShareOfCushion * 100),
+    health,
+    season_label: seasonLabel,
+    rollover_date: rolloverDate,
+    days_until_charge: daysUntilCharge,
+    already_charged_this_season: alreadyChargedThisSeason,
+    recent_charges: recentCharges,
+  };
+}
+db.buildFinanceSummary = buildFinanceSummary;
+
 /* ---------- Efeito do capitão na simulação de jogos ----------
    Um capitão com Liderança alta dá um pequeno empurrão extra à equipa
    (como se fosse mais um pouco de reputação); um capitão mal escolhido

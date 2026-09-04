@@ -918,9 +918,9 @@ body{
   padding:14px;margin-bottom:14px;display:flex;flex-direction:column;gap:10px;
 }
 .scout-task-title{font-size:12px;font-weight:700;color:var(--text-1);}
-.scout-task-row{display:flex;gap:10px;}
+.scout-task-row{display:flex;gap:10px;flex-wrap:wrap;}
 .scout-task-row label{
-  flex:1;display:flex;flex-direction:column;gap:4px;
+  flex:1;min-width:120px;display:flex;flex-direction:column;gap:4px;
   font-size:11px;color:var(--text-2);
 }
 .scout-task-row input, .scout-task-row select{
@@ -929,6 +929,176 @@ body{
   outline:none;
 }
 .scout-task-row input:focus, .scout-task-row select:focus{border-color:var(--accent);}
+
+/* ---------- Aba Olheiro — visual novo ---------- */
+.scout-section-hint{font-size:12px;color:var(--text-2);margin:-4px 0 14px;}
+
+.scout-hero{
+  display:flex;align-items:center;gap:20px;padding:24px;
+  background:
+    radial-gradient(circle at 85% 0%, rgba(155,61,255,.18) 0%, transparent 60%),
+    linear-gradient(135deg, var(--bg-2), var(--bg-1));
+  border:1px solid var(--line);border-radius:var(--radius-l);
+  position:relative;overflow:hidden;
+}
+.scout-hero::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(90deg, var(--accent), var(--accent-2));
+  opacity:.7;height:3px;top:0;
+}
+.scout-hero-avatar{
+  width:76px;height:76px;border-radius:50%;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:32px;
+  background:var(--bg-3);border:2px solid var(--accent-2);
+  box-shadow:0 0 0 4px rgba(155,61,255,.12);
+  overflow:hidden;
+}
+.scout-hero-avatar img{width:100%;height:100%;object-fit:cover;}
+.scout-hero-main{flex:1;min-width:0;}
+.scout-hero-name{font-size:22px;font-weight:800;color:var(--text-0);}
+.scout-hero-meta{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2);margin-top:4px;}
+.scout-hero-meta span:first-child{color:var(--gold);}
+.scout-hero-dot{opacity:.5;}
+.scout-hero-badge{
+  padding:7px 16px;border-radius:20px;font-size:12px;font-weight:700;
+  background:var(--bg-3);border:1px solid var(--line);color:var(--text-1);flex-shrink:0;
+}
+.scout-hero-badge.market-open{color:var(--green);border-color:var(--green-dim);background:rgba(62,207,110,.08);}
+.scout-hero-badge.market-closed{color:var(--amber);border-color:#4a3e1f;background:rgba(232,163,61,.08);}
+
+.scout-filters-grid{
+  display:grid;grid-template-columns:repeat(4, 1fr);gap:12px;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-m);
+  padding:16px;margin-bottom:16px;
+}
+.scout-filter{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--text-2);}
+.scout-filter input, .scout-filter select{
+  background:var(--bg-3);border:1px solid var(--line);color:var(--text-0);
+  border-radius:var(--radius-s);padding:8px 10px;font-size:13px;font-family:inherit;outline:none;
+  transition:border-color .15s ease;
+}
+.scout-filter input:focus, .scout-filter select:focus{border-color:var(--accent);}
+.scout-filter-actions{
+  grid-column:1 / -1;display:flex;gap:10px;align-items:center;margin-top:2px;
+}
+.btn-secondary-small{
+  background:transparent;color:var(--text-2);border:1px solid var(--line);
+  border-radius:var(--radius-s);padding:9px 14px;font-size:12.5px;cursor:pointer;
+  font-family:inherit;transition:all .15s ease;
+}
+.btn-secondary-small:hover{color:var(--text-0);border-color:var(--text-2);}
+
+.scout-search-meta{font-size:12px;color:var(--text-2);margin-bottom:10px;}
+.scout-search-meta b{color:var(--text-0);}
+
+/* Grid de cartões — recomendações e resultados de pesquisa */
+.scout-card-grid{
+  display:grid;grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));gap:12px;
+}
+.scout-card{
+  display:flex;flex-direction:column;gap:10px;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-m);
+  padding:14px;cursor:pointer;transition:transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+  position:relative;overflow:hidden;
+}
+.scout-card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg, var(--accent), var(--accent-2));
+  opacity:0;transition:opacity .15s ease;
+}
+.scout-card:hover{transform:translateY(-3px);border-color:var(--accent);box-shadow:0 8px 22px rgba(0,0,0,.28);}
+.scout-card:hover::before{opacity:1;}
+.scout-card-top{display:flex;align-items:center;gap:10px;}
+.scout-card-avatar{
+  width:44px;height:44px;border-radius:50%;flex-shrink:0;
+  background:var(--bg-3);border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;font-size:19px;overflow:hidden;
+}
+.scout-card-avatar img{width:100%;height:100%;object-fit:cover;}
+.scout-card-name{font-size:14px;font-weight:700;color:var(--text-0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.scout-card-meta{font-size:11px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.scout-card-team{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-2);}
+.scout-card-team img{width:16px;height:16px;border-radius:3px;object-fit:cover;flex-shrink:0;}
+.scout-card-tags{display:flex;flex-wrap:wrap;gap:6px;}
+.scout-card-tag{
+  font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;
+  background:var(--bg-3);color:var(--accent-2);border:1px solid var(--line);
+}
+.scout-card-bottom{
+  display:flex;align-items:center;justify-content:space-between;
+  padding-top:10px;border-top:1px solid var(--line);
+}
+.scout-card-value{font-size:13.5px;font-weight:700;color:var(--text-0);}
+.scout-card-stars{color:var(--gold);font-size:12px;}
+
+/* ---------- Aba Finanças ---------- */
+.fin-hero{
+  display:flex;align-items:center;gap:20px;padding:24px;margin-bottom:16px;
+  background:
+    radial-gradient(circle at 85% 0%, rgba(155,61,255,.18) 0%, transparent 60%),
+    linear-gradient(135deg, var(--bg-2), var(--bg-1));
+  border:1px solid var(--line);border-radius:var(--radius-l);
+  position:relative;overflow:hidden;
+}
+.fin-hero::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(90deg, var(--accent), var(--accent-2));
+  opacity:.7;height:3px;top:0;
+}
+.fin-hero-badge{
+  padding:10px 18px;border-radius:20px;font-size:14px;font-weight:800;flex-shrink:0;
+  background:var(--bg-3);border:1px solid var(--line);color:var(--text-1);
+}
+.fin-hero-main{flex:1;min-width:0;}
+.fin-hero-title{font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-2);}
+.fin-hero-sub{font-size:14px;color:var(--text-0);margin-top:6px;line-height:1.5;}
+
+.fin-health-good{color:var(--green);border-color:var(--green-dim, var(--green));background:rgba(62,207,110,.08);}
+.fin-health-mid{color:var(--amber);border-color:#4a3e1f;background:rgba(232,163,61,.08);}
+.fin-health-warn{color:var(--amber);border-color:#4a3e1f;background:rgba(232,163,61,.08);}
+.fin-health-bad{color:var(--red);border-color:#4a1f26;background:rgba(226,73,91,.08);}
+
+.fin-grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:16px;
+}
+.fin-card-wide{grid-column:span 2;}
+
+.fin-stat-row{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:10px 0;border-bottom:1px solid var(--line);
+  font-size:13px;color:var(--text-1);
+}
+.fin-stat-row:last-child{border-bottom:none;}
+.fin-stat-row b{color:var(--text-0);font-size:14px;font-weight:700;}
+.fin-stat-row-total{margin-top:4px;padding-top:14px;border-top:1px dashed var(--line);border-bottom:none;}
+
+.fin-compare-bar{
+  width:100%;height:14px;border-radius:8px;background:var(--bg-3);
+  border:1px solid var(--line);overflow:hidden;margin:14px 0 10px;
+  display:flex;align-items:stretch;
+}
+.fin-compare-fill{height:100%;transition:width .3s ease;}
+.fin-compare-fill-balance{background:var(--accent);}
+.fin-compare-fill-transfer{background:var(--amber);}
+.fin-compare-fill-transfer.fin-health-good{background:var(--green);}
+.fin-compare-fill-transfer.fin-health-mid,
+.fin-compare-fill-transfer.fin-health-warn{background:var(--amber);}
+.fin-compare-fill-transfer.fin-health-bad{background:var(--red);}
+.fin-compare-labels{
+  display:flex;align-items:center;justify-content:space-between;
+  font-size:12px;color:var(--text-2);
+}
+.fin-compare-labels b{color:var(--text-0);}
+
+/* ---- Caixa de mensagem: débito da folha salarial (caixa de entrada) ---- */
+.msg-wage-total-value{color:var(--red) !important;}
+
+@media (max-width: 720px){
+  .fin-grid{grid-template-columns:1fr;}
+  .fin-card-wide{grid-column:span 1;}
+  .fin-hero{flex-wrap:wrap;}
+  .fin-hero-badge{order:3;width:100%;text-align:center;}
+}
 
 /* ---- Marcar amigável ---- */
 .friendly-form{display:flex;flex-direction:column;gap:12px;}
@@ -2597,4 +2767,14 @@ body{
   .tab .tab-label{font-size:7.8px;}
   .content{padding:12px 10px 24px;}
   .card{padding:12px;}
+}
+/* ---------- Responsividade — aba Olheiro ---------- */
+@media (max-width:900px){
+  .scout-filters-grid{grid-template-columns:repeat(2, 1fr);}
+  .scout-hero{flex-wrap:wrap;}
+}
+@media (max-width:560px){
+  .scout-filters-grid{grid-template-columns:1fr;}
+  .scout-card-grid{grid-template-columns:1fr;}
+  .scout-hero-badge{order:3;width:100%;text-align:center;}
 }

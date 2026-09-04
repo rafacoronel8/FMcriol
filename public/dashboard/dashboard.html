@@ -34,6 +34,8 @@
   <button class="tab" data-tab="mercado"><span class="tab-icon"></span><span class="tab-label">Mercado</span></button>
   <button class="tab" data-tab="clausulas"><span class="tab-icon"></span><span class="tab-label">Cláusulas</span></button>
   <button class="tab" data-tab="meuClube"><span class="tab-icon"></span><span class="tab-label">Meu Clube</span></button>
+  <button class="tab" data-tab="olheiro"><span class="tab-icon"></span><span class="tab-label">Olheiro</span></button>
+  <button class="tab" data-tab="financas"><span class="tab-icon"></span><span class="tab-label">Finanças</span></button>
   <button class="tab" data-tab="minhaEquipa"><span class="tab-icon"></span><span class="tab-label">Minha Equipa</span></button>
   <button class="tab" data-tab="tatica"><span class="tab-icon"></span><span class="tab-label">Tática</span></button>
   <button class="tab" data-tab="calendario"><span class="tab-icon"></span><span class="tab-label">Calendário</span></button>
@@ -187,25 +189,76 @@
       <p class="placeholder-text hidden" id="staffAvailableEmpty">Sem ninguém disponível de momento — cria mais na Gestão de Comissão Técnica.</p>
     </div>
 
-    <div class="card">
-      <div class="card-title no-margin">🔎 Recomendações do Olheiro</div>
+  </section>
 
-      <form id="scoutTaskForm" class="scout-task-form hidden">
-        <div class="scout-task-title">Diz ao olheiro o que procurar</div>
-        <div class="scout-task-row">
-          <label>
-            <span>Idade mín.</span>
-            <input type="number" id="scoutTaskMinAge" min="14" max="45" placeholder="Sem limite">
-          </label>
-          <label>
-            <span>Idade máx.</span>
-            <input type="number" id="scoutTaskMaxAge" min="14" max="45" placeholder="Sem limite">
-          </label>
+  <!-- ===== OLHEIRO ===== -->
+  <section class="tab-panel hidden" id="panel-olheiro">
+
+    <div class="scout-hero" id="scoutHero">
+      <div class="scout-hero-avatar" id="scoutHeroAvatar">🔎</div>
+      <div class="scout-hero-main">
+        <div class="scout-hero-name" id="scoutHeroName">Sem Olheiro contratado</div>
+        <div class="scout-hero-meta">
+          <span id="scoutHeroStars">—</span>
+          <span class="scout-hero-dot">•</span>
+          <span id="scoutHeroStatus">—</span>
         </div>
-        <div class="scout-task-row">
-          <label>
+      </div>
+      <div class="scout-hero-badge" id="scoutHeroMarketBadge">—</div>
+    </div>
+
+    <p class="placeholder-text hidden" id="scoutNoScout">Contrata um Olheiro na Gestão de Comissão Técnica para começares a receber recomendações e poderes pesquisar jogadores de outros clubes.</p>
+    <p class="placeholder-text hidden" id="scoutMarketClosed">O mercado de transferências está fechado — o olheiro só trabalha durante a janela de transferências.</p>
+
+    <div id="scoutWorkArea" class="hidden">
+
+      <!-- Tarefa do Olheiro -->
+      <div class="card">
+        <div class="card-title no-margin">🎯 Diz ao Olheiro o que Procurar</div>
+        <p class="scout-section-hint">Define critérios fixos — o olheiro passa a trazer indicações espontâneas para a caixa de entrada só dentro destes limites.</p>
+        <form id="scoutTaskForm" class="scout-task-form">
+          <div class="scout-task-row">
+            <label>
+              <span>Idade mín.</span>
+              <input type="number" id="scoutTaskMinAge" min="14" max="45" placeholder="Sem limite">
+            </label>
+            <label>
+              <span>Idade máx.</span>
+              <input type="number" id="scoutTaskMaxAge" min="14" max="45" placeholder="Sem limite">
+            </label>
+            <label>
+              <span>Posição</span>
+              <select id="scoutTaskPosition">
+                <option value="">Qualquer</option>
+                <option value="GR">Guarda-Redes</option>
+                <option value="DEF">Defesa</option>
+                <option value="MED">Médio</option>
+                <option value="MO">Médio Ofensivo</option>
+                <option value="PL">Avançado</option>
+              </select>
+            </label>
+            <label>
+              <span>Preço máx. (£)</span>
+              <input type="number" id="scoutTaskMaxPrice" min="0" step="1000" placeholder="Sem limite">
+            </label>
+          </div>
+          <button type="submit" class="btn-advance small">Guardar Tarefa</button>
+          <p id="scoutTaskResult" class="activity-result hidden"></p>
+        </form>
+      </div>
+
+      <!-- Pesquisa Avançada -->
+      <div class="card">
+        <div class="card-title no-margin">🔍 Pesquisa Avançada</div>
+        <p class="scout-section-hint">Pesquisa manualmente entre todos os jogadores de outros clubes, com os filtros que quiseres.</p>
+        <form id="scoutSearchForm" class="scout-filters-grid">
+          <label class="scout-filter">
+            <span>Nome</span>
+            <input type="text" id="scoutSearchName" placeholder="ex: Silva">
+          </label>
+          <label class="scout-filter">
             <span>Posição</span>
-            <select id="scoutTaskPosition">
+            <select id="scoutSearchPosition">
               <option value="">Qualquer</option>
               <option value="GR">Guarda-Redes</option>
               <option value="DEF">Defesa</option>
@@ -214,19 +267,133 @@
               <option value="PL">Avançado</option>
             </select>
           </label>
-          <label>
-            <span>Preço máx. (£)</span>
-            <input type="number" id="scoutTaskMaxPrice" min="0" step="1000" placeholder="Sem limite">
+          <label class="scout-filter">
+            <span>Nacionalidade</span>
+            <input type="text" id="scoutSearchNationality" placeholder="ex: CPV" maxlength="3">
           </label>
-        </div>
-        <button type="submit" class="btn-advance small">Guardar Tarefa</button>
-        <p id="scoutTaskResult" class="activity-result hidden"></p>
-      </form>
+          <label class="scout-filter">
+            <span>Idade mín.</span>
+            <input type="number" id="scoutSearchMinAge" min="14" max="45" placeholder="—">
+          </label>
+          <label class="scout-filter">
+            <span>Idade máx.</span>
+            <input type="number" id="scoutSearchMaxAge" min="14" max="45" placeholder="—">
+          </label>
+          <label class="scout-filter">
+            <span>Nível mín. (★)</span>
+            <input type="number" id="scoutSearchMinStars" min="0" max="5" step="0.5" placeholder="—">
+          </label>
+          <label class="scout-filter">
+            <span>Nível máx. (★)</span>
+            <input type="number" id="scoutSearchMaxStars" min="0" max="5" step="0.5" placeholder="—">
+          </label>
+          <label class="scout-filter">
+            <span>Preço máx. (£)</span>
+            <input type="number" id="scoutSearchMaxPrice" min="0" step="1000" placeholder="Sem limite">
+          </label>
+          <label class="scout-filter">
+            <span>Ordenar por</span>
+            <select id="scoutSearchSort">
+              <option value="fit">Melhor opção</option>
+              <option value="quality">Nível (maior primeiro)</option>
+              <option value="value_asc">Preço (mais barato)</option>
+              <option value="value_desc">Preço (mais caro)</option>
+              <option value="age_asc">Idade (mais novo)</option>
+            </select>
+          </label>
+          <div class="scout-filter-actions">
+            <button type="submit" class="btn-advance small">Pesquisar</button>
+            <button type="button" id="scoutSearchClear" class="btn-secondary-small">Limpar filtros</button>
+          </div>
+        </form>
 
-      <div id="scoutRecommendations" class="scout-list"></div>
-      <p class="placeholder-text hidden" id="scoutEmpty">O olheiro não encontrou nenhuma boa oportunidade com os critérios atuais.</p>
-      <p class="placeholder-text hidden" id="scoutNoScout">Contrata um Olheiro na Gestão de Comissão Técnica para começares a receber recomendações de jogadores durante o mercado.</p>
-      <p class="placeholder-text hidden" id="scoutMarketClosed">O mercado de transferências está fechado — o olheiro só recomenda jogadores durante a janela de transferências.</p>
+        <div id="scoutSearchMeta" class="scout-search-meta hidden"></div>
+        <div id="scoutSearchResults" class="scout-card-grid"></div>
+        <p class="placeholder-text hidden" id="scoutSearchEmpty">Nenhum jogador encontrado com esses filtros.</p>
+        <p class="placeholder-text" id="scoutSearchHint">Usa os filtros acima e clica em "Pesquisar" para começares.</p>
+      </div>
+
+      <!-- Recomendações Automáticas -->
+      <div class="card">
+        <div class="card-title no-margin">✨ Recomendações Automáticas</div>
+        <p class="scout-section-hint">Escolhidas pelo olheiro com base no orçamento, necessidades do plantel e qualidade — atualizam sozinhas.</p>
+        <div id="scoutRecommendations" class="scout-card-grid"></div>
+        <p class="placeholder-text hidden" id="scoutEmpty">O olheiro não encontrou nenhuma boa oportunidade com os critérios atuais.</p>
+      </div>
+
+    </div>
+
+  </section>
+
+  <!-- ===== FINANÇAS ===== -->
+  <section class="tab-panel hidden" id="panel-financas">
+
+    <div class="fin-hero" id="finHero">
+      <div class="fin-hero-badge" id="finHealthBadge">—</div>
+      <div class="fin-hero-main">
+        <div class="fin-hero-title">Saúde Financeira</div>
+        <div class="fin-hero-sub" id="finHealthSub">A carregar…</div>
+      </div>
+    </div>
+
+    <div class="fin-grid">
+      <div class="card fin-card">
+        <div class="card-title no-margin">💰 Orçamentos</div>
+        <div class="fin-stat-row">
+          <span>Saldo do clube</span>
+          <b id="finBalance">—</b>
+        </div>
+        <div class="fin-stat-row">
+          <span>Orçamento de transferências</span>
+          <b id="finTransferBudget">—</b>
+        </div>
+        <div class="fin-stat-row">
+          <span>Teto de salários (semanal)</span>
+          <b id="finWageBudget">—</b>
+        </div>
+        <div class="fin-stat-row">
+          <span>Escalão financeiro</span>
+          <b id="finTier">—</b>
+        </div>
+      </div>
+
+      <div class="card fin-card">
+        <div class="card-title no-margin">📋 Folha Salarial do Plantel</div>
+        <div class="fin-stat-row">
+          <span>Jogadores sob contrato</span>
+          <b id="finPlayerCount">—</b>
+        </div>
+        <div class="fin-stat-row">
+          <span>Total de salários / semana</span>
+          <b id="finWeeklyWages">—</b>
+        </div>
+        <div class="fin-stat-row">
+          <span>× 6 no fecho da época</span>
+          <b id="finSeasonCharge">—</b>
+        </div>
+        <p class="scout-section-hint" id="finChargeHint">—</p>
+      </div>
+
+      <div class="card fin-card fin-card-wide">
+        <div class="card-title no-margin">⚖️ De onde sai a folha salarial da época</div>
+        <p class="scout-section-hint">O saldo do clube paga primeiro — só o que faltar é que sai do orçamento de transferências.</p>
+        <div class="fin-compare-bar" id="finCompareBar">
+          <div class="fin-compare-fill fin-compare-fill-balance" id="finCompareFillBalance"></div>
+          <div class="fin-compare-fill fin-compare-fill-transfer" id="finCompareFillTransfer"></div>
+        </div>
+        <div class="fin-compare-labels">
+          <span>💰 Do saldo: <b id="finFromBalance">—</b></span>
+          <span>🔁 Do orçamento de transferências: <b id="finFromTransfer">—</b></span>
+        </div>
+        <div class="fin-stat-row fin-stat-row-total">
+          <span>Saldo estimado após o débito</span>
+          <b id="finBalanceAfter">—</b>
+        </div>
+        <div class="fin-stat-row">
+          <span>Orçamento de transferências estimado após o débito</span>
+          <b id="finAfterCharge">—</b>
+        </div>
+      </div>
     </div>
 
   </section>
