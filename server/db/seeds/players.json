@@ -152,6 +152,25 @@
     "team_name": "Corinthians"
   },
   {
+    "admin_uid": "0069e765-14ae-4683-bf24-299685b06ad4",
+    "name": "Pericles",
+    "jersey_number": "4",
+    "position_tag": "Defesa Central",
+    "position_code": "DC",
+    "nationality_code": "CPV",
+    "birth_date": "2004-09-11",
+    "club_status": "Titular Regular",
+    "wage_text": "£1360 p/s",
+    "personality": "Normal",
+    "technical_json": "[[\"Cruzamento\",5],[\"Drible\",6],[\"Finalização\",3],[\"Primeiro Toque\",9],[\"Cabeceamento\",15],[\"Remates de Longe\",5],[\"Marcação\",15],[\"Passe\",11],[\"Desarme\",16],[\"Técnica\",9]]",
+    "set_pieces_json": "[[\"Cantos\",6],[\"Livres\",5],[\"Lançamentos Longos\",10],[\"Grandes Penalidades\",6]]",
+    "mental_json": "[[\"Agressividade\",13],[\"Antecipação\",14],[\"Coragem\",13],[\"Compostura\",11],[\"Concentração\",15],[\"Decisões\",12],[\"Determinação\",13],[\"Classe\",9],[\"Liderança\",11],[\"Fora de Bola\",6],[\"Posicionamento\",15],[\"Trabalho de Equipa\",12],[\"Visão\",8],[\"Ritmo de Jogo\",8]]",
+    "physical_json": "[[\"Aceleração\",10],[\"Agilidade\",10],[\"Equilíbrio\",10],[\"Alcance de Cabeceamento\",14],[\"Condição Natural\",10],[\"Velocidade\",11],[\"Resistência\",12],[\"Força\",16]]",
+    "goalkeeping_json": "[]",
+    "season_stats_json": "[{\"competition\":\"Geral (Clube)\",\"j\":0,\"g\":0,\"a\":0,\"xg\":0,\"pen\":0,\"mdp\":0,\"am\":0,\"verm\":0,\"tk\":0,\"pp\":\"-\",\"media\":\"-\"}]",
+    "team_name": "Castilho"
+  },
+  {
     "admin_uid": "b9a2fcaa-2452-4e5e-a1e2-65d71eacc843",
     "name": "Rafa",
     "jersey_number": "4",
@@ -349,7 +368,7 @@
     "position_code": "PL",
     "nationality_code": "CPV",
     "birth_date": "2000-09-11",
-    "club_status": "Jogador Livre",
+    "club_status": "Titular Regular",
     "wage_text": "",
     "personality": "Normal",
     "technical_json": "[[\"Cruzamento\",8],[\"Drible\",12],[\"Finalização\",14],[\"Primeiro Toque\",13],[\"Cabeceamento\",11],[\"Remates de Longe\",12],[\"Marcação\",4],[\"Passe\",8],[\"Desarme\",4],[\"Técnica\",11]]",
@@ -358,7 +377,7 @@
     "physical_json": "[[\"Aceleração\",12],[\"Agilidade\",11],[\"Equilíbrio\",10],[\"Alcance de Cabeceamento\",10],[\"Condição Natural\",9],[\"Velocidade\",13],[\"Resistência\",10],[\"Força\",10]]",
     "goalkeeping_json": "[]",
     "season_stats_json": "[{\"competition\":\"Geral (Clube)\",\"j\":0,\"g\":0,\"a\":0,\"xg\":0,\"pen\":0,\"mdp\":0,\"am\":0,\"verm\":0,\"tk\":0,\"pp\":\"-\",\"media\":\"-\"}]",
-    "team_name": null
+    "team_name": "Ponta d'Pom"
   },
   {
     "admin_uid": "447995e1-848a-4d7d-9acc-fdf92d8fb12e",
