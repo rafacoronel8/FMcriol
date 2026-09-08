@@ -192,16 +192,40 @@ function ageWageFactor(age) {
 const MAX_MARKET_VALUE = 400000;
 const MAX_WAGE = 5000;
 
-function computePlayerValuation(player) {
+/* Multiplicador de salário por escalão financeiro do clube — a MESMA
+   tabela usada em db/database.js (db.FINANCIAL_TIER_WAGE_MULTIPLIER),
+   para os dois sítios nunca divergirem. `conn` é a ligação a consultar
+   (por omissão a do pedido atual) — recebe uma ligação explícita quando
+   é preciso calcular o salário de UM dispositivo específico (ver
+   generate-attributes, onde a equipa do jogador pode divergir entre
+   saves). Sem equipa (agente livre), usa-se 1.0 como referência neutra —
+   nem penaliza nem beneficia. */
+function teamWageTierMultiplier(teamId, conn = db) {
+  if (!teamId) return 1.0;
+  const team = conn.prepare('SELECT financial_tier FROM teams WHERE id = ?').get(teamId);
+  const tier = team?.financial_tier;
+  return (conn.FINANCIAL_TIER_WAGE_MULTIPLIER && conn.FINANCIAL_TIER_WAGE_MULTIPLIER[tier]) ?? 1.0;
+}
+
+/* `teamId` é passado explicitamente (em vez de vir sempre de
+   `player.team_id`) para o mesmo motivo do parâmetro `conn` acima:
+   generate-attributes precisa de calcular isto por dispositivo, com a
+   equipa própria de cada save. */
+function computePlayerValuation(player, teamId, conn = db) {
   const quality01 = Math.max(0, Math.min(1, (computePlayerQuality(player) - 1) / 19));
   const age = ageFromBirthDate(player.birth_date);
 
   const marketValue = Math.max(1000, Math.round((MAX_MARKET_VALUE * (quality01 ** 1.8) * ageValueFactor(age)) / 1000) * 1000);
-  const wage = Math.max(50, Math.round((MAX_WAGE * (quality01 ** 1.5) * ageWageFactor(age)) / 10) * 10);
+
+  // O teto do salário sobe/desce consoante a capacidade financeira do
+  // clube: um jogador com a MESMA qualidade ganha bem mais no Muito Rico
+  // do que no Muito Pobre.
+  const wageCeiling = MAX_WAGE * teamWageTierMultiplier(teamId, conn);
+  const wage = Math.max(50, Math.round((wageCeiling * (quality01 ** 1.5) * ageWageFactor(age)) / 10) * 10);
 
   return {
     market_value_text: `£${Math.min(MAX_MARKET_VALUE, marketValue).toLocaleString('pt-PT')}`,
-    wage_text: `£${Math.min(MAX_WAGE, wage).toLocaleString('pt-PT')} p/s`,
+    wage_text: `£${Math.min(wageCeiling, wage).toLocaleString('pt-PT')} p/s`,
   };
 }
 
@@ -210,7 +234,7 @@ router.put('/:id/generate-value', (req, res) => {
   const player = db.prepare('SELECT * FROM players WHERE id = ?').get(req.params.id);
   if (!player) return res.status(404).json({ error: 'Jogador não encontrado' });
 
-  const { market_value_text, wage_text } = computePlayerValuation(player);
+  const { market_value_text, wage_text } = computePlayerValuation(player, player.team_id);
   db.prepare("UPDATE players SET market_value_text = ?, wage_text = ?, updated_at = datetime('now') WHERE id = ?")
     .run(market_value_text, wage_text, player.id);
 
@@ -228,11 +252,42 @@ router.put('/generate-values', (req, res) => {
   const update = db.prepare("UPDATE players SET market_value_text = @market_value_text, wage_text = @wage_text, updated_at = datetime('now') WHERE id = @id");
 
   players.forEach((p) => {
-    const { market_value_text, wage_text } = computePlayerValuation(p);
+    const { market_value_text, wage_text } = computePlayerValuation(p, p.team_id);
     update.run({ id: p.id, market_value_text, wage_text });
   });
 
   res.json({ ok: true, updated: players.length });
+});
+
+/* ---------- PUT /api/players/backfill-wages (manutenção) ----------
+   Preenche o salário de qualquer jogador que ainda não tenha nenhum
+   definido (wage_text vazio) — tipicamente o plantel inicial de cada
+   clube, criado antes de existir esta fórmula (por isso tem valor de
+   mercado mas nenhum salário). Usa a mesma computePlayerValuation
+   (qualidade dos atributos + idade + escalão financeiro do clube), mas
+   só toca no SALÁRIO: nunca mexe no valor de mercado, mesmo que também
+   esteja em branco, para não sobrescrever valores já definidos.
+
+   Corre em TODOS os saves já criados neste servidor + no molde (tal como
+   as outras rotas de manutenção deste ficheiro — ver export-seed,
+   backfill-admin-uid), para os saves futuros já nascerem com salários e
+   os saves já em jogo ficarem corrigidos de uma vez. Chama-se isto UMA
+   VEZ (não há botão nenhum na interface de propósito — é só para arrumar
+   dados antigos, não faz parte do fluxo normal do jogo). */
+router.put('/backfill-wages', (req, res) => {
+  const updatedInCurrentDevice = db.withEveryDatabase((conn) => {
+    const players = conn.prepare("SELECT * FROM players WHERE wage_text IS NULL OR wage_text = ''").all();
+    const update = conn.prepare("UPDATE players SET wage_text = @wage_text, updated_at = datetime('now') WHERE id = @id");
+
+    players.forEach((p) => {
+      const { wage_text } = computePlayerValuation(p, p.team_id, conn);
+      update.run({ id: p.id, wage_text });
+    });
+
+    return players.length;
+  });
+
+  res.json({ ok: true, updatedInCurrentDevice: updatedInCurrentDevice || 0 });
 });
 
 /* ---------- PUT /api/players/:id/generate-attributes ----------
@@ -289,6 +344,19 @@ router.put('/:id/generate-attributes', (req, res) => {
           updated_at = datetime('now')
         WHERE admin_uid = @admin_uid
       `).run(updatePayload);
+
+      // Salário/valor calculados NESTA ligação, com a equipa própria
+      // deste save — a mesma qualidade recém-gerada pode valer salários
+      // diferentes consoante o clube em cada save (ver comentário em
+      // computePlayerValuation).
+      const localPlayer = conn.prepare('SELECT id, birth_date, position_code, team_id FROM players WHERE admin_uid = ?').get(player.admin_uid);
+      if (localPlayer) {
+        const valuation = computePlayerValuation({ ...localPlayer, ...updatePayload }, localPlayer.team_id, conn);
+        conn.prepare(`
+          UPDATE players SET market_value_text = @market_value_text, wage_text = @wage_text, updated_at = datetime('now')
+          WHERE id = @id
+        `).run({ ...valuation, id: localPlayer.id });
+      }
     });
   } else {
     // Jogador normal do jogo (scouting, IA, etc.) — só existe neste save,
@@ -300,6 +368,12 @@ router.put('/:id/generate-attributes', (req, res) => {
         updated_at = datetime('now')
       WHERE id = @id
     `).run({ ...updatePayload, id: player.id });
+
+    const valuation = computePlayerValuation({ ...player, ...updatePayload }, player.team_id);
+    db.prepare(`
+      UPDATE players SET market_value_text = @market_value_text, wage_text = @wage_text, updated_at = datetime('now')
+      WHERE id = @id
+    `).run({ ...valuation, id: player.id });
   }
 
   const updated = db.prepare('SELECT * FROM players WHERE id = ?').get(player.id);
@@ -382,7 +456,7 @@ router.get('/', (req, res) => {
     SELECT p.id, p.name, p.photo_path, p.jersey_number, p.position_tag, p.position_code, p.team_id,
            p.club_status, p.fitness_status, p.fitness_note, p.current_ability_stars, p.form_text,
            p.market_value_text, p.wage_text, p.personality, p.stood_down_until, p.stood_down_reason,
-           p.focus_role, p.loan_from_team_id, p.loan_return_date, p.birth_date, p.season_stats_json,
+           p.focus_role, p.squad_role, p.loan_from_team_id, p.loan_return_date, p.birth_date, p.season_stats_json,
            p.is_captain, p.is_vice_captain,
            t.name AS team_name,
            loanFrom.name AS loan_from_team_name
@@ -528,7 +602,7 @@ const UPDATABLE_FIELDS = [
   'height_cm', 'reputation_text', 'personality', 'left_foot', 'right_foot', 'traits', 'gk_rating',
   'happiness', 'positive_count', 'negative_count', 'fitness_status', 'fitness_note', 'form_text',
   'discipline_text', 'discipline_note', 'training_status', 'training_rating', 'season_stats_json',
-  'career_clubs', 'career_apps', 'career_goals', 'focus_role',
+  'career_clubs', 'career_apps', 'career_goals', 'focus_role', 'squad_role',
 ];
 
 /* Subconjunto de UPDATABLE_FIELDS que é "identidade/base" do jogador (não
@@ -558,7 +632,8 @@ router.put('/:id', (req, res) => {
       // routes/morale.js) — qualquer outra coisa cai para "Normal", em vez
       // de deixar entrar texto livre que os eventos de balneário não saibam interpretar.
       if (field === 'personality' && !db.PERSONALITY_TIERS.includes(val)) val = 'Normal';
-      if (field === 'focus_role' && val && !db.FOCUS_ROLES.includes(val)) val = null;
+      if (field === 'focus_role' && val && !(db.FOCUS_ROLES || []).includes(val)) val = null;
+      if (field === 'squad_role' && !(db.SQUAD_ROLES || ['Jogador Chave', 'Jogador Importante', 'Esporádico', 'Reserva']).includes(val)) val = 'Reserva';
       updates[field] = val;
     }
   }

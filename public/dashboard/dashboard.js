@@ -42,6 +42,100 @@ async function claimTeam(){
   }
 }
 
+/* ---------- Guardar Jogo: dá um nome ao save e escreve o .db no dispositivo ----------
+   Ver routes/save.js — devolve o ficheiro .db do dispositivo/browser atual.
+   Para "continuar" mais tarde, basta escolher esse ficheiro em
+   "Continuar jogo guardado" na seleção de clube.
+
+   Em browsers com File System Access API (Chrome/Edge), usamos
+   showSaveFilePicker: é a própria janela nativa de guardar que, ao
+   escolheres um nome já usado, pergunta se queres substituir esse
+   ficheiro — sem descarregar uma cópia nova ao lado. Em browsers sem
+   suporte (Firefox, Safari), cai-se num download normal com esse nome. */
+function sanitizeSaveFileName(name){
+  const clean = String(name || '').trim().replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80);
+  return clean || 'fmcriol-save';
+}
+
+function suggestedSaveName(){
+  const stored = localStorage.getItem('fmcriol_lastSaveName');
+  if (stored) return stored;
+  const club = el('clubName')?.textContent?.trim();
+  return (club && club !== '—') ? club : 'O meu save';
+}
+
+async function saveGameToFile(){
+  const btn = el('saveGameBtn');
+  if (!btn || btn.disabled) return;
+
+  const nameInput = await openDecisionModal({
+    title: 'Guardar Jogo',
+    message: 'Dá um nome a este save. Se já existir um ficheiro com o mesmo nome, o teu browser vai perguntar se queres substituí-lo.',
+    label: 'Nome do save',
+    placeholder: 'ex: Época 2026-27',
+    defaultValue: suggestedSaveName(),
+    confirmLabel: 'Guardar',
+  });
+  if (nameInput === null) return; // cancelou
+
+  const fileName = `${sanitizeSaveFileName(nameInput)}.db`;
+  localStorage.setItem('fmcriol_lastSaveName', sanitizeSaveFileName(nameInput));
+
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'A guardar…';
+
+  const finish = (text) => {
+    btn.textContent = text;
+    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2200);
+  };
+
+  try{
+    // Pede logo o destino/nome ANTES de ir buscar os dados ao servidor —
+    // é aqui que o browser mostra "Substituir ficheiro existente?" se for
+    // o caso, e se o treinador cancelar não vale a pena ter pedido nada ao servidor.
+    let handle = null;
+    if (window.showSaveFilePicker){
+      handle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{ description: 'Save do FMcriol', accept: { 'application/octet-stream': ['.db'] } }],
+      });
+    }
+
+    const res = await fetch('/api/save/export');
+    if (!res.ok) throw new Error('export failed');
+    const blob = await res.blob();
+
+    if (handle){
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+    } else {
+      // Sem File System Access API: download normal. O próprio browser
+      // decide o que fazer com nomes repetidos (não há como perguntar).
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+    finish('Guardado ✓');
+  }catch(err){
+    if (err && err.name === 'AbortError'){
+      // Fechou a janela de guardar sem escolher nada — não é um erro.
+      btn.textContent = original;
+      btn.disabled = false;
+      return;
+    }
+    console.error('Erro ao guardar o jogo:', err);
+    finish('Erro ao guardar');
+  }
+}
+el('saveGameBtn')?.addEventListener('click', saveGameToFile);
+
 /* ---------- Carregar dados do clube ---------- */
 async function loadClub(){
   try{

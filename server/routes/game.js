@@ -356,6 +356,68 @@ function reputationCompatible(buyerReputation, playerQuality, { breakout = false
   return gap <= (breakout ? breakoutDownTolerance : downTolerance);
 }
 
+/* ---------- Papel no plantel (mercado) — quem se pode interessar por cada jogador ----------
+   Definido manualmente para cada jogador — no perfil (players.js ->
+   perfilJogador.html, campo "squadRole") para o utilizador, ou no painel
+   admin (gestaoJogadores.html) para jogadores de QUALQUER equipa — a coluna
+   players.squad_role guarda um dos 4 papéis: Jogador Chave, Jogador
+   Importante, Esporádico ou Reserva. Isso decide que FAIXA de clubes rivais
+   se pode interessar por ele — não pela reputação em si, mas pela POSIÇÃO
+   relativa de cada clube na tabela de reputação de todo o jogo (rank 1 =
+   maior reputação), face à equipa DONA do jogador:
+
+     - 7 equipas acima (melhor reputação)         -> Jogador Chave
+     - 3 acima + 5 abaixo                         -> Jogador Importante
+     - as 3 equipas a seguir a essas 5 abaixo     -> Esporádico
+     - todas as restantes                         -> Reserva
+
+   Isto é a TENDÊNCIA normal, não uma regra absoluta — squadRoleCompatible
+   dá sempre uma pequena chance de uma equipa fora da faixa esperada se
+   interessar na mesma (ver exceptionChance abaixo), tal como pedido: "nem
+   sempre" a regra é seguida à risca.
+
+   Esta regra aplica-se a TODAS as equipas (não só à do utilizador) — ver
+   runTransferListTick e runAiScoutingTick abaixo. Jogadores sem
+   squad_role definido (ex.: gerados antes desta funcionalidade existir)
+   caem em 'Reserva' por omissão, ver PLAYER_COLUMNS em database.js. A
+   função reputationCompatible() acima fica disponível caso seja precisa
+   noutro sítio, mas deixou de ser usada para decidir interesse de
+   transferência. */
+function getReputationRankMap() {
+  const teams = db.prepare('SELECT id FROM teams ORDER BY reputation_stars DESC, id ASC').all();
+  const rankById = new Map();
+  teams.forEach((t, idx) => rankById.set(t.id, idx + 1));
+  return rankById;
+}
+
+function squadRoleCompatible(sellerTeamId, buyerTeamId, squadRole, rankById, { exceptionChance = 0.08 } = {}) {
+  const sellerRank = rankById.get(sellerTeamId);
+  const buyerRank = rankById.get(buyerTeamId);
+  if (sellerRank == null || buyerRank == null) return false;
+
+  // positivo = o comprador está ACIMA (melhor reputação) por esta distância
+  // de posições no ranking; negativo = está ABAIXO por essa distância.
+  const diff = sellerRank - buyerRank;
+  const inKeyBand = diff >= 1 && diff <= 7;                                    // 7 equipas acima
+  const inImportantBand = (diff >= 1 && diff <= 3) || (diff <= -1 && diff >= -5); // 3 acima + 5 abaixo
+  const inSporadicBand = diff <= -6 && diff >= -8;                             // as 3 abaixo dessas 5
+
+  const expectedBand = squadRole === 'Jogador Chave' ? inKeyBand
+    : squadRole === 'Jogador Importante' ? inImportantBand
+    : squadRole === 'Esporádico' ? inSporadicBand
+    : !inKeyBand && !inImportantBand && !inSporadicBand; // Reserva
+
+  if (expectedBand) return true;
+
+  /* A regra acima é a TENDÊNCIA normal, não uma parede rígida — pedido
+     explicitamente: "nem sempre" um clube fora da faixa esperada respeita a
+     regra. Um agente a insistir, um olheiro que gostou mais do que seria
+     suposto, uma equipa "de fora da caixa" com uma necessidade urgente
+     daquela posição — há sempre uma pequena chance (8% por omissão) de uma
+     equipa fora da faixa se interessar na mesma. */
+  return Math.random() < exceptionChance;
+}
+
 /* Lê um número aproximado de um texto de salário tipo "£41.5K p/s" ou
    "£3.000 p/s". Só se trata como casa decimal o que vem antes de um sufixo
    K/M — sem sufixo, o texto é um valor inteiro já por extenso ("3.000" ou
@@ -525,6 +587,11 @@ function runTransferListTick(squadNeedsCache) {
   `).all();
   const sales = [];
   const pendingApprovals = [];
+  // Ranking de reputação de todas as equipas, calculado uma única vez por
+  // tick — usado para decidir o interesse por jogadores do utilizador
+  // consoante o "papel no plantel" que lhes foi atribuído (ver
+  // squadRoleCompatible acima).
+  const reputationRankMap = getReputationRankMap();
 
   listed.forEach((player) => {
     /* Nem todos os dias há movimento no mercado para um jogador listado — na
@@ -539,8 +606,14 @@ function runTransferListTick(squadNeedsCache) {
 
     const quality = player.current_ability_stars ?? 2.5;
     const playerCode = getMainPositionCode(player.position_code);
+    /* O "papel no plantel" (squad_role) passou a poder ser definido no
+       painel admin para jogadores de QUALQUER equipa (ver
+       gestaoJogadores.js) — por isso a regra de faixas por ranking de
+       reputação aplica-se agora a todas as equipas, não só à do
+       utilizador. Jogadores sem papel definido caem em 'Reserva' por
+       omissão (ver squad_role em PLAYER_COLUMNS, database.js). */
     const candidates = db.prepare('SELECT * FROM teams WHERE id != ?').all(player.team_id)
-      .filter((t) => reputationCompatible(t.reputation_stars, quality, { breakout: !!player.breakout_season }))
+      .filter((t) => squadRoleCompatible(player.team_id, t.id, player.squad_role || 'Reserva', reputationRankMap))
       .filter((t) => t.transfer_budget >= player.asking_price);
     if (!candidates.length) return;
 
@@ -762,6 +835,8 @@ function runAiScoutingTick(squadNeedsCache) {
   const allTeams = db.prepare('SELECT * FROM teams').all();
   const aiTeams = allTeams.filter((t) => String(t.id) !== String(userTeamId));
   const teamsById = new Map(allTeams.map((t) => [t.id, t]));
+  // Ranking de reputação de todas as equipas — ver squadRoleCompatible acima.
+  const reputationRankMap = getReputationRankMap();
 
   /* IMPORTANTE: ao contrário da versão anterior, isto já não se limita aos
      jogadores de clubes geridos pelo jogo — um clube pode fazer uma
@@ -829,11 +904,11 @@ function runAiScoutingTick(squadNeedsCache) {
        ele propõe através das suas próprias ações no perfil do jogador. */
     const candidates = aiTeams
       .filter((t) => t.id !== sellerTeam.id)
-      /* Um jogador em breakout_season chama a atenção de clubes bem mais
-         fortes do que seria normal para o seu nível atual — mas só nesse
-         caso: um clube grande não anda atrás de reforços fracos só porque
-         precisa da posição (ver reputationCompatible acima). */
-      .filter((t) => reputationCompatible(t.reputation_stars, quality, { breakout: isBreakout }))
+      /* O interesse é decidido pelo "papel no plantel" atribuído ao jogador
+         (perfil do jogador ou painel admin — ver squadRoleCompatible acima)
+         para TODAS as equipas, não só a do utilizador. Jogadores sem papel
+         definido caem em 'Reserva' por omissão. */
+      .filter((t) => squadRoleCompatible(player.team_id, t.id, player.squad_role || 'Reserva', reputationRankMap))
       .filter((t) => t.transfer_budget >= referenceValue * tierRatio);
     if (!candidates.length) return;
 

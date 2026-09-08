@@ -72,6 +72,47 @@ el('filterBox').addEventListener('input', (e) => {
 
 el('managerName').addEventListener('input', validate);
 
+/* ---------- Continuar Jogo Guardado ----------
+   O jogador escolhe um ficheiro .db (exportado antes em "Guardar Jogo",
+   no dashboard). É enviado tal como está para o servidor, que substitui
+   o save do dispositivo atual por ele — ver POST /api/save/import. */
+async function handleSaveFileChosen(file){
+  const label = el('continueLabel');
+  const errorBox = el('continueError');
+  const originalLabel = label.textContent;
+
+  errorBox.classList.add('hidden');
+  label.classList.add('is-loading');
+  label.textContent = 'A carregar…';
+
+  try{
+    const buffer = await file.arrayBuffer();
+    const res = await fetch('/api/save/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: buffer,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Não foi possível carregar este save.');
+    if (!data.team_id) throw new Error('Este save ainda não tem nenhuma equipa escolhida.');
+
+    localStorage.setItem('fmcriol_teamId', data.team_id);
+    localStorage.setItem('fmcriol_managerName', data.manager_name || '');
+    window.location.href = '/dashboard/dashboard.html';
+  }catch(err){
+    errorBox.textContent = err.message || 'Não foi possível carregar este save.';
+    errorBox.classList.remove('hidden');
+    label.classList.remove('is-loading');
+    label.textContent = originalLabel;
+  }
+}
+
+el('saveFileInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = ''; // permite escolher o mesmo ficheiro outra vez, se preciso
+  if (file) handleSaveFileChosen(file);
+});
+
 el('startBtn').addEventListener('click', () => {
   if (!selectedTeam) return;
   localStorage.setItem('fmcriol_teamId', selectedTeam.id);

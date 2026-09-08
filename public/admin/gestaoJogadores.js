@@ -4,6 +4,20 @@
 const el = (id) => document.getElementById(id);
 let allTeams = [];
 
+/* Papel do jogador no plantel (mercado) — tem de ficar igual ao usado em
+   script_perfilJogador.js e à validação em routes/players.js (db.SQUAD_ROLES).
+   Editável aqui, no painel admin, para jogadores de QUALQUER equipa — assim
+   a regra de interesse por faixa de reputação (ver squadRoleCompatible em
+   routes/game.js) passa a poder ser afinada para todo o universo de clubes,
+   não só para os jogadores do utilizador. */
+const SQUAD_ROLES = ['Jogador Chave', 'Jogador Importante', 'Esporádico', 'Reserva'];
+const SQUAD_ROLE_CLASS = {
+  'Jogador Chave': 'role-chave',
+  'Jogador Importante': 'role-importante',
+  'Esporádico': 'role-esporadico',
+  'Reserva': 'role-reserva',
+};
+
 /* Lista oficial de posições — tem de ficar igual à usada em script_perfilJogador.js */
 const POSITION_CATALOG = [
   { code: 'GR',  label: 'Guarda-Redes' },
@@ -141,6 +155,7 @@ async function loadPlayers(){
     const row = document.createElement('div');
     row.className = 'player-row';
     const avatar = p.photo_path ? `<img src="${p.photo_path}" alt="">` : '🧑';
+    const currentRole = SQUAD_ROLES.includes(p.squad_role) ? p.squad_role : 'Reserva';
     row.innerHTML = `
       <div class="player-avatar">${avatar}</div>
       <div class="player-info">
@@ -148,14 +163,40 @@ async function loadPlayers(){
         <div class="player-position">${p.position_tag || 'Posição não definida'}</div>
       </div>
       <span class="player-jersey">#${p.jersey_number || '00'}</span>
+      <select class="role-select ${SQUAD_ROLE_CLASS[currentRole]}" data-id="${p.id}" title="Papel no plantel — decide que faixa de clubes rivais se pode interessar por este jogador no mercado">
+        ${SQUAD_ROLES.map((r) => `<option value="${r}" ${r === currentRole ? 'selected' : ''}>${r}</option>`).join('')}
+      </select>
       <div class="player-actions">
         <a class="btn-edit" href="/jogador/perfilJogador.html?id=${p.id}&mode=admin">Editar perfil</a>
         <button class="btn-delete" data-id="${p.id}">Apagar</button>
       </div>
     `;
+    row.querySelector('.role-select').addEventListener('change', (e) => {
+      updateSquadRole(p.id, e.target.value, e.target);
+    });
     row.querySelector('.btn-delete').addEventListener('click', () => deletePlayer(p.id, p.name));
     list.appendChild(row);
   });
+}
+
+/* ---------- Gravar o papel no plantel de um jogador (qualquer equipa) ---------- */
+async function updateSquadRole(id, squadRole, selectEl){
+  selectEl.classList.remove(...Object.values(SQUAD_ROLE_CLASS));
+  selectEl.disabled = true;
+  try{
+    const res = await fetch(`/api/players/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ squad_role: squadRole }),
+    });
+    if(!res.ok) throw new Error('Falha ao guardar');
+    selectEl.classList.add(SQUAD_ROLE_CLASS[squadRole]);
+    showToast(`Papel no plantel atualizado para "${squadRole}".`, 'ok');
+  }catch(err){
+    showToast('Não foi possível guardar o papel no plantel.', 'err');
+  }finally{
+    selectEl.disabled = false;
+  }
 }
 
 async function deletePlayer(id, name){

@@ -64,6 +64,55 @@ function openConnection(dbFilePath) {
    (Corpo igual ao que existia antes de haver dispositivos — só passou
    a viver dentro desta função para poder ser repetido por cada
    dispositivo em vez de correr uma única vez no arranque.) */
+/* ---------- Salário de início consoante a qualidade do jogador e o clube ----------
+   Usado ao criar um jogador sem salário definido manualmente pelo admin:
+   calcula um valor de partida plausível a partir da qualidade atual
+   (current_ability_stars) e da capacidade financeira do clube
+   (financial_tier). Devolve já no mesmo formato usado no resto do jogo
+   para wage_text (ver parseWageAmount mais abaixo e as propostas de
+   contrato em routes/game.js): "£1.200 p/s".
+
+   Calibrado para bater certo com o antigo valor fixo de £3.000/sem que
+   qualquer jogador sem wage_text acabava por "herdar" via parseWageAmount:
+   é exatamente o que sai desta fórmula para um jogador médio (2.5★) num
+   clube financeiramente "Medio". O expoente 2.2 faz os melhores jogadores
+   (5★) ganharem bastante mais do que os fracos (1★), tal como num plantel
+   real — não é uma progressão linear.
+
+   Vive ao nível do módulo (não dentro de initializeSchema) para poder ser
+   chamada tanto através de `db.computeStartingWageText(...)` — ver mais
+   abaixo, onde fica ligada a cada ligação, tal como parseWageAmount —
+   como diretamente por applyPlayerSeedsToConnection, que corre fora de
+   qualquer pedido HTTP. */
+const FINANCIAL_TIER_WAGE_MULTIPLIER = {
+  'Muito Rico': 2.4,
+  'Rico': 1.6,
+  'Medio': 1.0,
+  'Pobre': 0.6,
+  'Muito Pobre': 0.35,
+};
+const BASE_WEEKLY_WAGE_AT_2_5_STARS_MEDIO = 3000;
+
+function roundWageToNiceNumber(value) {
+  if (value < 1000) return Math.round(value / 25) * 25;
+  if (value < 5000) return Math.round(value / 50) * 50;
+  if (value < 20000) return Math.round(value / 250) * 250;
+  return Math.round(value / 1000) * 1000;
+}
+
+/* `team` pode ser o objeto completo da equipa (com financial_tier) ou só a
+   própria string do escalão financeiro — aceita os dois para facilitar a
+   chamada a partir de sítios diferentes. Sem clube (agente livre), usa-se
+   o escalão "Medio" como referência neutra. */
+function computeStartingWageText(currentAbilityStars, team) {
+  const stars = Math.max(0.5, Number(currentAbilityStars) || 2.5);
+  const financialTier = (typeof team === 'string' ? team : team?.financial_tier) || 'Medio';
+  const tierMult = FINANCIAL_TIER_WAGE_MULTIPLIER[financialTier] ?? 1.0;
+  const qualityMult = Math.pow(stars / 2.5, 2.2);
+  const weekly = roundWageToNiceNumber(BASE_WEEKLY_WAGE_AT_2_5_STARS_MEDIO * tierMult * qualityMult);
+  return `£${weekly.toLocaleString('pt-PT')} p/s`;
+}
+
 function initializeSchema(db) {
 
 
@@ -144,6 +193,15 @@ const PLAYER_COLUMNS = [
   ['club_name_override', 'TEXT'],
   ['club_logo_path', 'TEXT'],
   ['club_status', "TEXT DEFAULT 'Titular Regular'"],
+  // Papel do jogador no plantel para efeitos de MERCADO (não confundir com
+  // club_status acima, que é o estado de utilização em jogo). Definido
+  // manualmente — no perfil do jogador ou no painel admin
+  // (gestaoJogadores.html, para qualquer equipa) — e usado em
+  // routes/game.js (squadRoleCompatible) para decidir que clubes rivais,
+  // consoante a sua posição no ranking de reputação face à equipa do
+  // jogador, se podem interessar por ele: Jogador Chave, Jogador
+  // Importante, Esporádico ou Reserva.
+  ['squad_role', "TEXT DEFAULT 'Reserva'"],
   ['market_value_text', "TEXT DEFAULT ''"],
   ['caps', 'INTEGER DEFAULT 0'],
   ['international_goals', 'INTEGER DEFAULT 0'],
@@ -1653,6 +1711,9 @@ function computeTeamWeeklyWageBill(teamId) {
 }
 db.computeTeamWeeklyWageBill = computeTeamWeeklyWageBill;
 
+db.computeStartingWageText = computeStartingWageText;
+db.FINANCIAL_TIER_WAGE_MULTIPLIER = FINANCIAL_TIER_WAGE_MULTIPLIER;
+
 /* Chamada uma vez por época a partir de runSeasonRolloverIfDue
    (routes/league.js), com a época que está mesmo a fechar (seasonLabel) e
    a data do rollover (eventDateStr) — usadas só para o texto da mensagem
@@ -2051,6 +2112,20 @@ db.FOCUS_ROLES = FOCUS_ROLES;
   if (!pCols.includes('focus_role')) db.exec('ALTER TABLE players ADD COLUMN focus_role TEXT');
 }
 
+/* ---------- Papel no Plantel (mercado) ----------
+   Ver squad_role em PLAYER_COLUMNS acima (já tratado pela migração
+   automática logo a seguir a PLAYER_COLUMNS, não precisa de bloco próprio)
+   e squadRoleCompatible em routes/game.js — decide que clubes rivais se
+   podem interessar por este jogador, consoante a diferença de posição no
+   ranking de reputação face à equipa dele. Editável no perfil do jogador
+   ou no painel admin (gestaoJogadores.html), para qualquer equipa. */
+const SQUAD_ROLES = ['Jogador Chave', 'Jogador Importante', 'Esporádico', 'Reserva'];
+db.SQUAD_ROLES = SQUAD_ROLES;
+{
+  const pCols = db.prepare("PRAGMA table_info(players)").all().map((c) => c.name);
+  if (!pCols.includes('squad_role')) db.exec("ALTER TABLE players ADD COLUMN squad_role TEXT DEFAULT 'Reserva'");
+}
+
 db.exec(`
 CREATE TABLE IF NOT EXISTS staff (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2145,6 +2220,53 @@ function getOrCreateDeviceConnection(deviceId) {
   }
 
   return conn;
+}
+
+/* ---------- Guardar / Carregar o save como ficheiro (.db) ----------
+   Usado pela funcionalidade "Guardar Jogo" (dashboard) e "Continuar jogo
+   guardado" (seleção de clube): o jogador transfere o ficheiro .db do
+   dispositivo atual para o seu disco e, mais tarde, pode voltar a
+   carregá-lo — no mesmo dispositivo ou noutro qualquer — para continuar
+   exatamente a partir daquele ponto. */
+
+/* Lê o ficheiro .db de um dispositivo, já com o WAL "achatado" para dentro
+   dele (senão o ficheiro exportado podia não incluir as alterações mais
+   recentes, que por vezes ficam só no -wal até um checkpoint acontecer). */
+function exportDeviceBuffer(deviceId) {
+  const conn = getOrCreateDeviceConnection(deviceId);
+  conn.pragma('wal_checkpoint(TRUNCATE)');
+  return fs.readFileSync(devicePathFor(deviceId));
+}
+
+/* Substitui o save de um dispositivo pelo conteúdo de `buffer` (o ficheiro
+   .db que o jogador escolheu no seu disco). */
+function importDeviceBuffer(deviceId, buffer) {
+  const dbFilePath = devicePathFor(deviceId);
+
+  // Fecha a ligação atual deste dispositivo antes de reescrever o
+  // ficheiro no disco, para nunca haver duas ligações abertas ao mesmo
+  // tempo com conteúdos diferentes.
+  const existing = connectionsByDevice.get(deviceId);
+  const wasCurrent = Boolean(existing) && existing === currentConnection;
+  if (existing) {
+    try { existing.close(); } catch (err) { /* já fechada, ignora */ }
+    connectionsByDevice.delete(deviceId);
+  }
+
+  fs.writeFileSync(dbFilePath, buffer);
+  // Restos de WAL/SHM da sessão anterior pertencem ao ficheiro antigo —
+  // não fazem sentido com o conteúdo novo que acabámos de escrever.
+  for (const suffix of ['-wal', '-shm']) {
+    const sidecar = dbFilePath + suffix;
+    if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar);
+  }
+
+  // Reabre já com o schema atual do jogo: se o save foi guardado numa
+  // versão mais antiga, isto acrescenta as colunas/tabelas que faltem,
+  // tal como já acontece para qualquer dispositivo no arranque do servidor.
+  const conn = getOrCreateDeviceConnection(deviceId);
+  if (wasCurrent) currentConnection = conn;
+  return true;
 }
 
 /* ---------- Aplica uma alteração a TODOS os saves (para o admin) ----------
@@ -2266,9 +2388,10 @@ function applyPlayerSeedsToConnection(conn, seeds) {
     }
 
     let teamId = null;
+    let teamFinancialTier = 'Medio';
     if (seed.team_name) {
-      const team = conn.prepare('SELECT id FROM teams WHERE name = ?').get(seed.team_name);
-      if (team) teamId = team.id;
+      const team = conn.prepare('SELECT id, financial_tier FROM teams WHERE name = ?').get(seed.team_name);
+      if (team) { teamId = team.id; teamFinancialTier = team.financial_tier; }
     }
 
     conn.prepare(`
@@ -2289,7 +2412,7 @@ function applyPlayerSeedsToConnection(conn, seeds) {
       nationality_code: seed.nationality_code || '',
       birth_date: seed.birth_date || null,
       club_status: teamId ? (seed.club_status || 'Titular Regular') : 'Jogador Livre',
-      wage_text: seed.wage_text || '',
+      wage_text: seed.wage_text || computeStartingWageText(seed.current_ability_stars, teamFinancialTier),
       personality: seed.personality || 'Normal',
       technical_json: seed.technical_json || '[]',
       set_pieces_json: seed.set_pieces_json || '[]',
@@ -2451,6 +2574,8 @@ const db = new Proxy({}, {
     if (prop === 'withEveryDatabase') return withEveryDatabase;
     if (prop === 'withTemplateDatabase') return withTemplateDatabase;
     if (prop === 'PLAYER_SEED_PATH') return PLAYER_SEED_PATH;
+    if (prop === 'exportDeviceBuffer') return exportDeviceBuffer;
+    if (prop === 'importDeviceBuffer') return importDeviceBuffer;
     if (!currentConnection) {
       throw new Error(
         'db acedido antes de attachDeviceContext correr — confirma que ' +

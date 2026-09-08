@@ -76,6 +76,7 @@ body{
   width:340px;
 }
 .topbar-advance-btn{flex-shrink:0;white-space:nowrap;}
+.topbar-save-btn{flex-shrink:0;white-space:nowrap;min-width:96px;}
 .search-input{
   width:100%;
   background:var(--bg-2);
@@ -2672,6 +2673,7 @@ body{
   .chip-manager{display:none;}
   .topbar-date{font-size:11px;padding:5px 10px;order:2;}
   .topbar-advance-btn{order:3;padding:7px 12px !important;font-size:12px !important;}
+  .topbar-save-btn{order:4;padding:7px 12px !important;font-size:12px !important;min-width:0;}
   .search-wrap{
     order:5;
     width:100%;

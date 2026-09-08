@@ -21,6 +21,7 @@ const cupRouter = require('./routes/cup');
 const moraleRouter = require('./routes/morale');
 const staffRouter = require('./routes/staff');
 const scoutRouter = require('./routes/scout');
+const saveRouter = require('./routes/save');
 
 
 const app = express();
@@ -62,6 +63,7 @@ app.use('/api/cup', cupRouter);
 app.use('/api/morale', moraleRouter);
 app.use('/api/staff', staffRouter);
 app.use('/api/scout', scoutRouter);
+app.use('/api/save', saveRouter);
 
 /* Verificação rápida de que o servidor + base de dados estão a funcionar */
 app.get('/api/health', (req, res) => {

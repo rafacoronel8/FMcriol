@@ -16,6 +16,18 @@
     <p>Seleciona o clube que vais treinar na Primeira Divisão.</p>
   </div>
 
+  <div class="continue-box" id="continueBox">
+    <div class="continue-box-text">
+      <div class="continue-box-title">Já tens um save?</div>
+      <p class="continue-box-hint">Carrega o ficheiro <code>.db</code> que guardaste anteriormente para continuares exatamente onde ficaste.</p>
+    </div>
+    <label for="saveFileInput" class="btn-continue" id="continueLabel">📂 Continuar Jogo Guardado</label>
+    <input type="file" id="saveFileInput" accept=".db" hidden>
+  </div>
+  <p id="continueError" class="continue-error hidden"></p>
+
+  <div class="divider"><span>ou começa um jogo novo</span></div>
+
   <input type="search" id="filterBox" class="filter-box" placeholder="Filtrar por nome…">
 
   <div id="teamGrid" class="team-grid"></div>
