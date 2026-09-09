@@ -590,12 +590,12 @@ function queueSave(patch){
   Object.assign(saveQueue, patch);
   clearTimeout(saveTimer);
   setSaveStatus('saving');
-  saveTimer = setTimeout(flushSave, 500);
+  saveTimer = setTimeout(() => flushSave(), 500);
 }
 
 const ATTRIBUTE_JSON_FIELDS = ['technical_json', 'set_pieces_json', 'mental_json', 'physical_json', 'goalkeeping_json'];
 
-async function flushSave(){
+async function flushSave(opts = {}){
   if(!playerId || Object.keys(saveQueue).length === 0) return;
   const payload = saveQueue;
   saveQueue = {};
@@ -604,6 +604,11 @@ async function flushSave(){
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      // Ver flushPendingSaveOnExit() mais abaixo: quando isto corre porque a
+      // página está a fechar/navegar, `keepalive` garante ao browser que
+      // deixa este pedido terminar em segundo plano, mesmo que o JS desta
+      // página pare de existir um instante depois.
+      keepalive: !!opts.keepalive,
     });
     if(!res.ok) throw new Error('Falha ao gravar');
     setSaveStatus('saved');
@@ -615,13 +620,36 @@ async function flushSave(){
        /api/players/:id/generate-value), em vez de ficarem "presos" no
        valor calculado da última vez que o Nível Geral foi usado. Só corre
        DEPOIS de a gravação do atributo ter sido confirmada, para nunca
-       recalcular a partir de um valor ainda por gravar. */
-    const touchedAttributes = Object.keys(payload).some((key) => ATTRIBUTE_JSON_FIELDS.includes(key));
+       recalcular a partir de um valor ainda por gravar. Nunca faz sentido
+       ao sair da página (opts.keepalive) — não há ninguém a olhar para o
+       resultado, e só atrasaria/arriscaria o próprio fecho da página. */
+    const touchedAttributes = !opts.keepalive && Object.keys(payload).some((key) => ATTRIBUTE_JSON_FIELDS.includes(key));
     if(touchedAttributes) await refreshMarketValue();
   }catch(err){
     setSaveStatus('error');
   }
 }
+
+/* Sem isto, mudar um papel/posição (ou qualquer outro campo com autosave)
+   e sair logo a seguir da página — ex: clicar noutro jogador na lista do
+   admin, ou fechar o separador — perdia sempre essa última alteração: o
+   temporizador de 500ms do autosave normal nunca chegava a disparar,
+   porque a página já tinha navegado/fechado entretanto. Isto era a causa
+   mais provável do bug reportado "os papéis não ficam guardados".
+
+   `pagehide` cobre navegação/fecho da página; `visibilitychange` cobre
+   também trocar de separador ou minimizar (em alguns browsers/mobile,
+   `pagehide` não dispara nesses casos). Chamar as duas é seguro: se uma já
+   tiver esvaziado o saveQueue, a outra não tem nada para enviar. */
+function flushPendingSaveOnExit(){
+  if(!playerId || Object.keys(saveQueue).length === 0) return;
+  clearTimeout(saveTimer);
+  flushSave({ keepalive: true });
+}
+window.addEventListener('pagehide', flushPendingSaveOnExit);
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'hidden') flushPendingSaveOnExit();
+});
 
 /* Campos de texto simples: elemento -> coluna na BD */
 const SIMPLE_FIELD_MAP = {
@@ -766,6 +794,66 @@ function fmtDatePt(birthDateStr){
   return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
 }
 
+/* ---------- Lista Preferencial ---------- */
+async function setupShortlistButton(p){
+  const btn = el('shortlistBtn');
+  if(!btn) return;
+
+  const myId = localStorage.getItem('fmcriol_teamId');
+
+  // Só faz sentido para um treinador (não o admin) a olhar para um
+  // jogador que NÃO é seu — do teu próprio plantel não há nada para
+  // "vigiar" como alvo de mercado.
+  if(isAdmin || !myId || String(p.team_id) === String(myId)){
+    btn.classList.add('hidden');
+    return;
+  }
+  btn.classList.remove('hidden');
+
+  const icon = btn.querySelector('.shortlist-btn-icon');
+  const label = btn.querySelector('.shortlist-btn-label');
+  function paint(onList){
+    btn.classList.toggle('on-shortlist', onList);
+    icon.textContent = onList ? '★' : '☆';
+    label.textContent = onList ? 'Na Lista Preferencial' : 'Adicionar à Lista Preferencial';
+  }
+
+  let onShortlist = false;
+  try{
+    const res = await fetch(`/api/shortlist/${myId}/status/${p.id}`);
+    if(res.ok){
+      const data = await res.json();
+      onShortlist = !!data.on_shortlist;
+    }
+  }catch(err){
+    // se falhar, assume que não está — o pior que acontece é o botão
+    // oferecer para adicionar algo que já lá estava
+  }
+  paint(onShortlist);
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try{
+      if(onShortlist){
+        await fetch(`/api/shortlist/${myId}/${p.id}`, { method: 'DELETE' });
+        onShortlist = false;
+      }else{
+        await fetch('/api/shortlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ team_id: myId, player_id: p.id }),
+        });
+        onShortlist = true;
+      }
+      paint(onShortlist);
+    }catch(err){
+      // sem gravar — o botão simplesmente mantém o estado anterior
+    }finally{
+      btn.disabled = false;
+    }
+  };
+}
+
 async function loadPlayer(){
   try{
     await loadGameCurrentDate();
@@ -782,6 +870,7 @@ async function loadPlayer(){
 
 function fillFromPlayer(p){
   document.title = `${p.name} — FMcriol`;
+  setupShortlistButton(p);
 
   el('playerName').textContent = p.name || '';
   const captainBadgeEl = el('captainBadge');

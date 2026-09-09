@@ -21,7 +21,7 @@
 
   <span class="topbar-date" id="topbarDate">—</span>
   <button id="topbarAdvanceBtn" class="btn-advance small topbar-advance-btn">Continuar ▸</button>
-  <button id="saveGameBtn" class="btn-advance small ghost topbar-save-btn" title="Descarrega uma cópia do teu save para o teu dispositivo">Guardar</button>
+  <button id="saveGameBtn" class="btn-advance small ghost topbar-save-btn" title="Descarrega uma cópia do teu save para o teu dispositivo">💾 Guardar</button>
 
   <div class="search-wrap">
     <input type="search" id="searchInput" class="search-input" placeholder="Pesquisar clube ou jogador…" autocomplete="off">
@@ -36,6 +36,7 @@
   <button class="tab" data-tab="clausulas"><span class="tab-icon"></span><span class="tab-label">Cláusulas</span></button>
   <button class="tab" data-tab="meuClube"><span class="tab-icon"></span><span class="tab-label">Meu Clube</span></button>
   <button class="tab" data-tab="olheiro"><span class="tab-icon"></span><span class="tab-label">Olheiro</span></button>
+  <button class="tab" data-tab="listaPreferencial"><span class="tab-icon"></span><span class="tab-label">Lista Preferencial</span></button>
   <button class="tab" data-tab="financas"><span class="tab-icon"></span><span class="tab-label">Finanças</span></button>
   <button class="tab" data-tab="minhaEquipa"><span class="tab-icon"></span><span class="tab-label">Minha Equipa</span></button>
   <button class="tab" data-tab="tatica"><span class="tab-icon"></span><span class="tab-label">Tática</span></button>
@@ -323,6 +324,27 @@
       </div>
 
     </div>
+
+  </section>
+
+  <!-- ===== LISTA PREFERENCIAL ===== -->
+  <section class="tab-panel hidden" id="panel-listaPreferencial">
+
+    <div class="scout-hero">
+      <div class="scout-hero-avatar">⭐</div>
+      <div class="scout-hero-main">
+        <div class="scout-hero-name">Lista Preferencial</div>
+        <div class="scout-hero-meta"><span id="shortlistCount">0 alvos</span></div>
+      </div>
+      <div class="scout-hero-badge market-open">Alvos de Mercado</div>
+    </div>
+    <p class="scout-section-hint">Jogadores de outros clubes (ou agentes livres) que marcaste a partir do perfil deles.</p>
+
+    <p class="placeholder-text hidden" id="shortlistEmpty">
+      Ainda não tens nenhum jogador na Lista Preferencial. Abre o perfil de um jogador de outro clube (ou de um agente livre) e clica em "Adicionar à Lista Preferencial".
+    </p>
+
+    <div id="shortlistGrid" class="scout-card-grid"></div>
 
   </section>
 

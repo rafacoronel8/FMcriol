@@ -5,6 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Painel de Jogador</title>
 <link rel="stylesheet" href="style_perfilJogador.css">
+<style>
+  /* Botão da Lista Preferencial — self-contido porque style_perfilJogador.css
+     não faz parte deste pedido; usa cores neutras que devem encaixar em
+     qualquer tema escuro. Ver #shortlistBtn mais abaixo. */
+  .shortlist-btn{
+    display:inline-flex; align-items:center; gap:7px;
+    background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14);
+    color:#cbd3e1; border-radius:999px; padding:7px 14px;
+    font-size:12.5px; font-weight:600; font-family:inherit; cursor:pointer;
+    transition:border-color .15s ease, background .15s ease, color .15s ease;
+  }
+  .shortlist-btn:hover{border-color:#7c5cff; color:#fff;}
+  .shortlist-btn:disabled{opacity:.6; cursor:default;}
+  .shortlist-btn .shortlist-btn-icon{font-size:14px; line-height:1;}
+  .shortlist-btn.on-shortlist{
+    background:rgba(242,193,78,.14); border-color:#f2c14e; color:#f2c14e;
+  }
+  .shortlist-btn.hidden{display:none;}
+  .top-strip-left{display:flex; align-items:center; gap:12px;}
+</style>
 </head>
 <body>
 
@@ -12,7 +32,13 @@
 
   <!-- ===== BARRA SUPERIOR (nova: voltar + estado de gravação) ===== -->
   <div class="top-strip">
-    <a href="#" id="backLink" class="back-link">← Voltar</a>
+    <div class="top-strip-left">
+      <a href="#" id="backLink" class="back-link">← Voltar</a>
+      <button id="shortlistBtn" class="shortlist-btn hidden" type="button">
+        <span class="shortlist-btn-icon">☆</span>
+        <span class="shortlist-btn-label">Adicionar à Lista Preferencial</span>
+      </button>
+    </div>
     <span id="saveStatus" class="save-status"></span>
   </div>
 

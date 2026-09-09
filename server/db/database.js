@@ -1023,6 +1023,26 @@ CREATE TABLE IF NOT EXISTS tactics (
 );
 `);
 
+/* ---------- Lista Preferencial: alvos de mercado guardados pelo treinador ----------
+   Um "marcador" simples sobre um jogador de outro clube (ou agente livre)
+   que o treinador quer vigiar — nada mais do que uma nota + a data em que
+   foi adicionado. Não confundir com scout_tip (routes/scout.js), que são
+   indicações automáticas do olheiro: esta lista é sempre uma escolha
+   manual do próprio treinador, feita a partir do perfil do jogador (botão
+   "Adicionar à Lista Preferencial"). UNIQUE(team_id, player_id) impede
+   duplicados — adicionar duas vezes só atualiza a nota. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS shortlist (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id     INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  note        TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(team_id, player_id)
+);
+CREATE INDEX IF NOT EXISTS idx_shortlist_team ON shortlist(team_id);
+`);
+
 /* ---------- Notícias do mercado: registo global de TODAS as movimentações ----------
    Ao contrário de "messages" (que é a caixa de entrada privada de cada clube),
    esta tabela guarda um registo público de tudo o que acontece no mercado —

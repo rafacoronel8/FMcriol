@@ -539,6 +539,101 @@ el('scoutSearchClear').addEventListener('click', () => {
   el('scoutSearchHint').classList.remove('hidden');
 });
 
+/* ---------- Aba Lista Preferencial ----------
+   Alvos de mercado marcados manualmente a partir do perfil de um jogador
+   ("Adicionar à Lista Preferencial" — ver script_perfilJogador.js) —
+   ver routes/shortlist.js. Ao contrário das recomendações do Olheiro
+   acima, isto não depende de ter Olheiro contratado nem do mercado estar
+   aberto: é só uma lista de vigilância que o treinador guarda à sua
+   maneira. Clicar num cartão abre o perfil do jogador; o clique no botão
+   ⭐ ou na nota nunca propaga para o cartão (ver stopPropagation abaixo). */
+function renderShortlistCard(entry){
+  const p = entry.player;
+  const teamShieldHtml = p.team_shield ? `<img src="${p.team_shield}" alt="">` : '';
+  const ageText = calcAgeFromBirth(p.birth_date);
+  const tags = [];
+  if(ageText !== '—') tags.push(`${ageText} anos`);
+  if(!p.team_id) tags.push('<span class="shortlist-tag-free">Agente Livre</span>');
+  else if(p.is_listed) tags.push('<span class="shortlist-tag-listed">Listado p/ Transferência</span>');
+
+  return `
+    <div class="scout-card shortlist-card" data-id="${p.id}">
+      <button type="button" class="shortlist-remove-btn" data-remove-shortlist="${p.id}" title="Remover da Lista Preferencial">★</button>
+      <div class="scout-card-top">
+        <div class="scout-card-avatar">${p.photo_path ? `<img src="${p.photo_path}" alt="">` : '🧑'}</div>
+        <div style="flex:1;min-width:0;">
+          <div class="scout-card-name">${p.name}</div>
+          <div class="scout-card-meta">${p.position_tag || p.position_code || 'Posição não definida'}</div>
+        </div>
+      </div>
+      <div class="scout-card-team">${teamShieldHtml}<span>${p.team_name || entry.status}</span></div>
+      ${tags.length ? `<div class="scout-card-tags">${tags.map((t) => `<span class="scout-card-tag">${t}</span>`).join('')}</div>` : ''}
+      <textarea class="shortlist-note" data-note-id="${entry.shortlist_id}" placeholder="Nota (opcional)…" rows="2">${p ? (entry.note || '') : ''}</textarea>
+      <div class="scout-card-bottom">
+        <span class="scout-card-value">${p.market_value_text || '—'}</span>
+        <span class="scout-card-stars">${staffStars(p.current_ability_stars)}</span>
+      </div>
+    </div>`;
+}
+
+async function loadShortlistPanel(){
+  const grid = el('shortlistGrid');
+  const emptyMsg = el('shortlistEmpty');
+  try{
+    const res = await fetch(`/api/shortlist/${teamId}`);
+    if(!res.ok) throw new Error();
+    const data = await res.json();
+    const entries = data.entries || [];
+
+    el('shortlistCount').textContent = `${entries.length} alvo${entries.length === 1 ? '' : 's'}`;
+    emptyMsg.classList.toggle('hidden', entries.length > 0);
+    grid.innerHTML = entries.map(renderShortlistCard).join('');
+    bindShortlistCardEvents(grid);
+  }catch(err){
+    grid.innerHTML = '';
+    emptyMsg.textContent = 'Não foi possível carregar a Lista Preferencial agora.';
+    emptyMsg.classList.remove('hidden');
+  }
+}
+
+function bindShortlistCardEvents(grid){
+  grid.querySelectorAll('.shortlist-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      window.location.href = `/jogador/perfilJogador.html?id=${card.dataset.id}`;
+    });
+  });
+
+  grid.querySelectorAll('[data-remove-shortlist]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const playerId = btn.dataset.removeShortlist;
+      btn.disabled = true;
+      try{
+        await fetch(`/api/shortlist/${teamId}/${playerId}`, { method: 'DELETE' });
+        loadShortlistPanel();
+      }catch(err){
+        btn.disabled = false;
+      }
+    });
+  });
+
+  grid.querySelectorAll('.shortlist-note').forEach((textarea) => {
+    textarea.addEventListener('click', (e) => e.stopPropagation());
+    textarea.addEventListener('blur', async () => {
+      const shortlistId = textarea.dataset.noteId;
+      try{
+        await fetch(`/api/shortlist/${shortlistId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note: textarea.value }),
+        });
+      }catch(err){
+        // sem feedback dedicado — a nota fica só na caixa até tentares outra vez
+      }
+    });
+  });
+}
+
 function renderStaffHired(list){
   const box = el('staffHired');
   const empty = el('staffHiredEmpty');
@@ -644,6 +739,7 @@ document.querySelectorAll('.tab').forEach((tab) => {
     if (tab.dataset.tab === 'campeonato') loadLeague();
     if (tab.dataset.tab === 'taca') loadCup();
     if (tab.dataset.tab === 'olheiro') loadScoutPanel();
+    if (tab.dataset.tab === 'listaPreferencial') loadShortlistPanel();
     if (tab.dataset.tab === 'financas') loadFinancesPanel();
   });
 });

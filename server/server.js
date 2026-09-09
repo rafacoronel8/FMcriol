@@ -22,6 +22,7 @@ const moraleRouter = require('./routes/morale');
 const staffRouter = require('./routes/staff');
 const scoutRouter = require('./routes/scout');
 const saveRouter = require('./routes/save');
+const shortlistRouter = require('./routes/shortlist');
 
 
 const app = express();
@@ -64,6 +65,7 @@ app.use('/api/morale', moraleRouter);
 app.use('/api/staff', staffRouter);
 app.use('/api/scout', scoutRouter);
 app.use('/api/save', saveRouter);
+app.use('/api/shortlist', shortlistRouter);
 
 /* Verificação rápida de que o servidor + base de dados estão a funcionar */
 app.get('/api/health', (req, res) => {

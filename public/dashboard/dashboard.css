@@ -1032,6 +1032,25 @@ body{
 .scout-card-value{font-size:13.5px;font-weight:700;color:var(--text-0);}
 .scout-card-stars{color:var(--gold);font-size:12px;}
 
+/* ---------- Extras do cartão da Lista Preferencial (assenta em cima de .scout-card) ---------- */
+.shortlist-card{padding-top:34px;}
+.shortlist-remove-btn{
+  position:absolute;top:10px;right:10px;z-index:1;
+  width:26px;height:26px;border-radius:50%;
+  background:rgba(242,193,78,.14);border:1px solid var(--gold);color:var(--gold);
+  font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;
+  cursor:pointer;transition:transform .12s ease, background .12s ease;
+}
+.shortlist-remove-btn:hover{transform:scale(1.12);background:rgba(242,193,78,.26);}
+.scout-card-tag.shortlist-tag-listed{color:var(--red);border-color:#4a2530;}
+.scout-card-tag.shortlist-tag-free{color:var(--green);border-color:var(--green-dim);}
+.shortlist-note{
+  width:100%;resize:none;min-height:40px;
+  background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-s);
+  color:var(--text-1);font-family:inherit;font-size:12px;padding:8px 10px;outline:none;
+}
+.shortlist-note:focus{border-color:var(--accent);color:var(--text-0);}
+
 /* ---------- Aba Finanças ---------- */
 .fin-hero{
   display:flex;align-items:center;gap:20px;padding:24px;margin-bottom:16px;
