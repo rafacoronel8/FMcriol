@@ -3744,6 +3744,9 @@ let liveBusy = false;    // evita pedidos sobrepostos (duplo clique / autoplay +
 let liveSubModalOutId = null; // jogador escolhido para sair, dentro da janela de substituições
 let liveAnimQueue = [];  // fila dos golos/lances por animar no campo (ver playLiveBallAnimation)
 let liveAnimPlaying = false;
+let liveIdleTimer = null;      // ver startLiveIdleMotion — movimento de posse "fantasma" fora dos lances
+let liveIdleZone = { x: 50, y: 50 };
+let liveInstructionsMeta = null; // catálogo de /meta/instructions (labels/dicas), pedido uma única vez
 
 function shieldHtml(team){
   return team.team_shield
@@ -3758,12 +3761,17 @@ async function openLiveMatch(friendlyId){
   liveSubModalOutId = null;
   liveAnimQueue = [];
   liveAnimPlaying = false;
+  liveIdleZone = { x: 50, y: 50 };
   postTalkPromptShownFor = null;
   el('liveMatchOverlay').classList.remove('hidden');
   el('liveSubModalOverlay').classList.add('hidden');
+  el('liveSideCol').classList.remove('open');
+  el('liveDrawerBackdrop').classList.remove('open');
   el('liveFeed').innerHTML = '<p class="placeholder-text">A carregar…</p>';
   el('livePitchTokens').innerHTML = '';
   el('livePitchBall').style.opacity = '0';
+  el('livePitchIdleBall').style.left = '50%';
+  el('livePitchIdleBall').style.top = '50%';
   el('liveGoalFlash').classList.remove('show');
   el('liveScoreNumbers').textContent = '0 - 0';
   el('liveMinute').textContent = "0'";
@@ -3772,6 +3780,15 @@ async function openLiveMatch(friendlyId){
   el('liveSummaryPanel').classList.add('hidden');
   el('livePlayBtn').disabled = true;
   el('liveAutoBtn').disabled = true;
+
+  // Tenta abrir mesmo em ecrã inteiro (não só CSS) e, dentro dele, travar
+  // a orientação na horizontal — falha silenciosamente em navegadores/
+  // dispositivos que não suportem (ex.: iOS Safari), sem incomodar ninguém.
+  try{
+    const rootEl = document.documentElement;
+    if(rootEl.requestFullscreen) await rootEl.requestFullscreen().catch(() => {});
+    if(screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape').catch(() => {});
+  }catch(err){ /* ecrã inteiro/orientação são só um extra — o CSS já cobre o essencial */ }
 
   try{
     let res = await fetch(`/api/live-matches/${friendlyId}`);
@@ -3782,6 +3799,8 @@ async function openLiveMatch(friendlyId){
     if(!res.ok) throw new Error(data.error || 'Não foi possível carregar o jogo');
     applyLiveState(data, data.events || []);
     startLiveAuto(); // o jogo começa a simular-se sozinho assim que abre — não é preciso clicar em nada
+    startLiveIdleMotion();
+    loadLiveInstructionsMeta();
   }catch(err){
     el('liveFeed').innerHTML = `<p class="placeholder-text">${err.message}</p>`;
   }
@@ -3791,6 +3810,8 @@ function closeLiveMatch(){
   el('liveMatchOverlay').classList.add('hidden');
   el('liveSubModalOverlay').classList.add('hidden');
   stopLiveAuto();
+  stopLiveIdleMotion();
+  if(document.fullscreenElement) document.exitFullscreen().catch(() => {});
   liveFriendlyId = null;
   liveState = null;
   liveSubModalOutId = null;
@@ -3800,6 +3821,29 @@ function closeLiveMatch(){
 el('liveMatchClose').addEventListener('click', closeLiveMatch);
 el('liveMatchOverlay').addEventListener('click', (e) => {
   if(e.target === el('liveMatchOverlay')) closeLiveMatch();
+});
+
+el('liveFullscreenBtn').addEventListener('click', async () => {
+  try{
+    if(document.fullscreenElement){
+      await document.exitFullscreen();
+    }else{
+      await document.documentElement.requestFullscreen();
+      if(screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+    }
+  }catch(err){ /* alguns browsers recusam pedidos de ecrã inteiro fora de um gesto direto — sem problema */ }
+});
+document.addEventListener('fullscreenchange', () => {
+  el('liveFullscreenBtn').classList.toggle('active', !!document.fullscreenElement);
+});
+
+el('liveDrawerToggle').addEventListener('click', () => {
+  el('liveSideCol').classList.toggle('open');
+  el('liveDrawerBackdrop').classList.toggle('open');
+});
+el('liveDrawerBackdrop').addEventListener('click', () => {
+  el('liveSideCol').classList.remove('open');
+  el('liveDrawerBackdrop').classList.remove('open');
 });
 
 function renderLiveFeedItems(events){
@@ -3847,6 +3891,19 @@ function slotCoords(formation, slotIndex, mirrored){
   return { x, y };
 }
 
+/* ---------- Campo desenhado na horizontal ----------
+   Toda a lógica do "motor" acima (slotCoords, alvo dos remates, empurrões
+   táticos de playOrganizedMovement, zona de posse de startLiveIdleMotion)
+   continua a pensar sempre num campo vertical clássico: x = posição na
+   largura do campo, y = profundidade (perto da própria baliza a perto de
+   100, perto da baliza contrária a perto de 0). É só aqui, no momento de
+   desenhar no ecrã, que se trocam os eixos — o campo aparece deitado
+   (balizas à esquerda/direita) para caber melhor num ecrã inteiro em
+   modo paisagem, sem ter de reescrever toda a matemática do jogo. */
+function toScreenPct(pt){
+  return { left: pt.y, top: pt.x };
+}
+
 function liveTokenHtml(p, x, y, teamState){
   const isMySelectable = teamState.is_user && liveState && liveState.status !== 'finished';
   const sideClass = teamState.is_user ? 'side-user' : 'side-opponent';
@@ -3854,9 +3911,10 @@ function liveTokenHtml(p, x, y, teamState){
   if(p.goals) badges.push(`<span class="live-token-badge">⚽${p.goals > 1 ? `×${p.goals}` : ''}</span>`);
   if(p.assists) badges.push(`<span class="live-token-badge">🅰️${p.assists > 1 ? `×${p.assists}` : ''}</span>`);
   const swayDelay = (Math.random() * 2.6).toFixed(2); // dessincroniza o "balanço" de cada jogador — não parecem estátuas
+  const screen = toScreenPct({ x, y });
   return `
     <div class="live-token ${sideClass}${isMySelectable ? ' selectable' : ''}"
-         style="left:${x}%;top:${y}%;--sway-delay:${swayDelay}s;" data-player-id="${p.id}">
+         style="left:${screen.left}%;top:${screen.top}%;--sway-delay:${swayDelay}s;" data-player-id="${p.id}">
       <div class="live-token-circle">${p.jersey_number || '•'}
         ${badges.length ? `<span class="live-token-badges">${badges.join('')}</span>` : ''}
         ${p.yellow ? '<span class="live-token-yellow"></span>' : ''}
@@ -3936,9 +3994,10 @@ function moveTokenTemporarily(playerId, board, targetPct, holdMs){
   if(!tokenEl) return;
   const originLeft = tokenEl.style.left;
   const originTop = tokenEl.style.top;
+  const screen = toScreenPct(targetPct);
   tokenEl.style.transition = 'left .9s ease, top .9s ease';
-  tokenEl.style.left = `${targetPct.x}%`;
-  tokenEl.style.top = `${targetPct.y}%`;
+  tokenEl.style.left = `${screen.left}%`;
+  tokenEl.style.top = `${screen.top}%`;
   setTimeout(() => {
     tokenEl.style.left = originLeft;
     tokenEl.style.top = originTop;
@@ -4010,14 +4069,20 @@ function playLiveBallAnimation(ev, data){
 
   playOrganizedMovement(ev, data, origin, target, defendSide);
 
+  const idleBall = el('livePitchIdleBall');
+  if(idleBall) idleBall.style.opacity = '0';
+
+  const originScreen = toScreenPct(origin);
+  const targetScreen = toScreenPct(target);
+
   ball.style.transition = 'none';
-  ball.style.left = `${origin.x}%`;
-  ball.style.top = `${origin.y}%`;
+  ball.style.left = `${originScreen.left}%`;
+  ball.style.top = `${originScreen.top}%`;
   ball.style.opacity = '1';
   void ball.offsetWidth; // força reflow antes de ligar a transição
   ball.style.transition = 'left .9s cubic-bezier(.3,.7,.4,1), top .9s cubic-bezier(.3,.7,.4,1)';
-  ball.style.left = `${target.x}%`;
-  ball.style.top = `${target.y}%`;
+  ball.style.left = `${targetScreen.left}%`;
+  ball.style.top = `${targetScreen.top}%`;
 
   const attackerToken = board.querySelector(`.live-token[data-player-id="${ev.player_id}"]`);
   if(attackerToken){
@@ -4046,7 +4111,7 @@ function playLiveBallAnimation(ev, data){
     }, 550);
   }
 
-  setTimeout(() => { ball.style.opacity = '0'; }, 1450);
+  setTimeout(() => { ball.style.opacity = '0'; if(idleBall) idleBall.style.opacity = '.85'; }, 1450);
 }
 
 
@@ -4063,6 +4128,73 @@ function playNextLiveAnimation(){
   const { ev, data } = liveAnimQueue.shift();
   playLiveBallAnimation(ev, data);
   setTimeout(() => { liveAnimPlaying = false; playNextLiveAnimation(); }, 1800);
+}
+
+/* ---------- Movimento de posse "fantasma" (fora dos golos/lances) ----------
+   Fora dos momentos de golo/lance (só aí a bola "real" anima-se — ver
+   playLiveBallAnimation), o campo não fica só com os 22 bonecos a balançar
+   ao acaso: uma bolinha mais discreta (ver .live-pitch-idle-ball) passeia-se
+   pelo relvado como se fosse a bola em jogo normal, e os jogadores reagem
+   a ela como numa jogada real:
+   - os 3 jogadores de cada equipa mais próximos da zona aproximam-se um
+     pouco (o mais próximo mais que os outros — como quem vai apoiar/
+     pressionar a jogada);
+   - quanto maior a Pressão definida pela equipa, mais forte é essa reação,
+     tal como no motor do jogo (ver tacticsAttackMultiplier em
+     routes/liveMatch.js).
+   Tudo isto é só visual — não altera lances, golos nem o marcador, que
+   continuam a ser decididos pelo servidor. */
+function startLiveIdleMotion(){
+  stopLiveIdleMotion();
+  liveIdleTimer = setInterval(() => {
+    if(!liveState || liveState.status === 'finished' || liveAnimPlaying) return;
+    stepLiveIdleMotion();
+  }, 2400);
+}
+function stopLiveIdleMotion(){
+  if(liveIdleTimer) clearInterval(liveIdleTimer);
+  liveIdleTimer = null;
+}
+
+function stepLiveIdleMotion(){
+  const data = liveState;
+  const board = el('livePitchTokens');
+  const idleBall = el('livePitchIdleBall');
+  if(!data || !board || !idleBall) return;
+
+  // Passeio aleatório suave da zona de posse "fantasma", sem se afastar
+  // muito das zonas mais centrais do campo.
+  liveIdleZone = {
+    x: Math.max(14, Math.min(86, liveIdleZone.x + (Math.random() * 30 - 15))),
+    y: Math.max(12, Math.min(88, liveIdleZone.y + (Math.random() * 30 - 15))),
+  };
+  const screenZone = toScreenPct(liveIdleZone);
+  idleBall.style.left = `${screenZone.left}%`;
+  idleBall.style.top = `${screenZone.top}%`;
+
+  ['home', 'away'].forEach((side) => {
+    const teamState = data[side];
+    if(!teamState) return;
+    const outfield = teamState.on_pitch.filter((p) => p.category !== 'GR');
+    const withDist = outfield.map((p) => {
+      const pos = findLiveTokenPosition(p.id, side, data);
+      if(!pos) return null;
+      return { p, pos, dist: Math.hypot(pos.x - liveIdleZone.x, pos.y - liveIdleZone.y) };
+    }).filter(Boolean).sort((a, b) => a.dist - b.dist);
+
+    const pressing = (teamState.tactics && teamState.tactics.pressing) ?? 50;
+    const pressFactor = 0.4 + (pressing / 100) * 0.9; // 0.4 (passiva) a 1.3 (intensa)
+    withDist.slice(0, 3).forEach(({ p, pos, dist }, i) => {
+      if(dist < 2) return; // já está mesmo ali, não vale a pena animar
+      const pull = i === 0 ? 0.34 : 0.16; // o mais próximo aproxima-se mais que os outros dois
+      const targetX = pos.x + (liveIdleZone.x - pos.x) * pull * pressFactor;
+      const targetY = pos.y + (liveIdleZone.y - pos.y) * pull * pressFactor;
+      moveTokenTemporarily(p.id, board, {
+        x: Math.max(4, Math.min(96, targetX)),
+        y: Math.max(2, Math.min(98, targetY)),
+      }, 2100);
+    });
+  });
 }
 
 function applyLiveState(data, newEvents){
@@ -4103,6 +4235,7 @@ function applyLiveState(data, newEvents){
   renderLiveSubPanel(myState);
   renderLiveTacticPanel(myState);
   renderLiveMentalityPanel(myState);
+  renderLiveInstructionsPanel(myState);
   if(!el('liveSubModalOverlay').classList.contains('hidden')) renderSubModalLists(myState); // mantém a janela de subs sincronizada se ficar aberta
 
   const playBtn = el('livePlayBtn');
@@ -4438,7 +4571,39 @@ el('liveOpenSubModalBtn').addEventListener('click', () => openSubModal(null));
    Abre por cima do jogo ao vivo: escolhe primeiro quem sai (em campo),
    depois quem entra (banco) — a troca acontece de imediato e a janela
    fecha-se sozinha, voltando a mostrar os bonecos já atualizados no
-   campo (ver applyLiveState → renderLivePitch). */
+   campo (ver applyLiveState → renderLivePitch). Os dois lados aparecem
+   agrupados por posição, com estrelas de qualidade (ver qualityStars) e
+   uma sugestão automática — o melhor jogador do banco na mesma posição
+   de quem está a sair — para decidir mais depressa a meio de um jogo. */
+const LIVE_CATEGORY_ORDER = ['GR', 'DEF', 'MED', 'MO', 'PL'];
+const LIVE_CATEGORY_LABELS = { GR: 'Guarda-Redes', DEF: 'Defesas', MED: 'Médios', MO: 'Meio-Ofensivos', PL: 'Avançados' };
+
+function qualityStars(quality){
+  const filled = Math.max(1, Math.min(5, Math.round(((quality ?? 1) / 2.2) * 5)));
+  return '★'.repeat(filled) + '☆'.repeat(5 - filled);
+}
+
+function groupByCategory(players){
+  const groups = {};
+  players.forEach((p) => { (groups[p.category] || (groups[p.category] = [])).push(p); });
+  return LIVE_CATEGORY_ORDER
+    .filter((cat) => groups[cat] && groups[cat].length)
+    .map((cat) => ({ cat, label: LIVE_CATEGORY_LABELS[cat] || cat, players: groups[cat] }));
+}
+
+function subModalRowHtml(p, { selected, disabled, suggested }){
+  return `
+    <div class="live-sub-modal-row${selected ? ' selected' : ''}${disabled ? ' disabled' : ''}${suggested ? ' live-sub-modal-suggested' : ''}" data-player-id="${p.id}">
+      <div class="live-sub-modal-row-info">
+        <span class="live-token-circle">${p.jersey_number || '•'}</span>
+        <span class="live-sub-modal-row-name">${p.name}</span>
+        ${p.yellow ? '<span class="live-sub-modal-yellow-tag"></span>' : ''}
+      </div>
+      <span class="live-sub-modal-pos">${p.position_code || ''}</span>
+      <span class="live-sub-modal-stars">${qualityStars(p.quality)}</span>
+    </div>`;
+}
+
 function openSubModal(preselectOutId){
   const myState = liveMySide ? liveState[liveMySide] : null;
   if(!myState || liveState.status === 'finished') return;
@@ -4459,27 +4624,47 @@ el('liveSubModalOverlay').addEventListener('click', (e) => {
 
 function renderSubModalLists(myState){
   const hint = el('liveSubModalHint');
+  const remainingBadge = el('liveSubModalRemaining');
+  const selectedBar = el('liveSubModalSelectedBar');
   const onPitchList = el('liveSubModalOnPitch');
   const benchList = el('liveSubModalBench');
   if(!myState){ return; }
 
   const noSubsLeft = myState.subs_remaining <= 0;
+  remainingBadge.textContent = `${myState.subs_remaining} restante${myState.subs_remaining === 1 ? '' : 's'}`;
+  remainingBadge.classList.toggle('none', noSubsLeft);
+
+  const outPlayer = liveSubModalOutId ? myState.on_pitch.find((p) => p.id === liveSubModalOutId) : null;
 
   if(noSubsLeft){
     hint.textContent = 'Já não tens substituições disponíveis.';
   }else if(!myState.bench.length){
     hint.textContent = 'O banco está vazio.';
-  }else if(liveSubModalOutId){
-    const outPlayer = myState.on_pitch.find((p) => p.id === liveSubModalOutId);
-    hint.textContent = outPlayer ? `${outPlayer.name} vai sair — escolhe quem entra no banco.` : 'Escolhe primeiro quem sai do campo.';
+  }else if(outPlayer){
+    hint.textContent = 'Escolhe agora quem entra no banco.';
   }else{
     hint.textContent = 'Escolhe primeiro quem sai do campo.';
   }
 
-  onPitchList.innerHTML = myState.on_pitch.map((p) => `
-    <div class="live-sub-modal-row${liveSubModalOutId === p.id ? ' selected' : ''}${noSubsLeft ? ' disabled' : ''}" data-player-id="${p.id}">
-      <span class="live-token-circle">${p.jersey_number || '•'}</span><span>${p.name}</span>
-    </div>`).join('');
+  if(outPlayer){
+    selectedBar.classList.remove('hidden');
+    selectedBar.innerHTML = `
+      <span class="live-token-circle">${outPlayer.jersey_number || '•'}</span>
+      <span>${outPlayer.name} vai sair</span>
+      <button type="button" class="live-sub-modal-selected-clear" id="liveSubModalClearBtn" title="Escolher outro jogador">✕</button>`;
+    el('liveSubModalClearBtn').addEventListener('click', () => {
+      liveSubModalOutId = null;
+      renderSubModalLists(myState);
+    });
+  }else{
+    selectedBar.classList.add('hidden');
+    selectedBar.innerHTML = '';
+  }
+
+  onPitchList.innerHTML = groupByCategory(myState.on_pitch).map(({ label, players }) => `
+    <div class="live-sub-modal-group-label">${label}</div>
+    ${players.map((p) => subModalRowHtml(p, { selected: liveSubModalOutId === p.id, disabled: noSubsLeft })).join('')}
+  `).join('');
   onPitchList.querySelectorAll('.live-sub-modal-row').forEach((row) => {
     if(noSubsLeft) return;
     row.addEventListener('click', () => {
@@ -4490,11 +4675,20 @@ function renderSubModalLists(myState){
   });
 
   const benchDisabled = noSubsLeft || !liveSubModalOutId;
+  // Sugestão: o jogador do banco com melhor qualidade na mesma posição de
+  // quem está a sair — só um empurrãozinho, a escolha final é sempre livre.
+  let suggestedId = null;
+  if(outPlayer && myState.bench.length){
+    const sameCategory = myState.bench.filter((p) => p.category === outPlayer.category);
+    const pool = sameCategory.length ? sameCategory : myState.bench;
+    suggestedId = pool.reduce((best, p) => (!best || (p.quality ?? 0) > (best.quality ?? 0) ? p : best), null)?.id ?? null;
+  }
+
   benchList.innerHTML = myState.bench.length
-    ? myState.bench.map((p) => `
-        <div class="live-sub-modal-row${benchDisabled ? ' disabled' : ''}" data-player-id="${p.id}">
-          <span class="live-token-circle">${p.jersey_number || '•'}</span><span>${p.name}</span>
-        </div>`).join('')
+    ? groupByCategory(myState.bench).map(({ label, players }) => `
+        <div class="live-sub-modal-group-label">${label}</div>
+        ${players.map((p) => subModalRowHtml(p, { selected: false, disabled: benchDisabled, suggested: p.id === suggestedId })).join('')}
+      `).join('')
     : '<p class="live-bench-empty">Banco vazio.</p>';
   benchList.querySelectorAll('.live-sub-modal-row').forEach((row) => {
     row.addEventListener('click', () => {
@@ -4616,3 +4810,140 @@ el('liveFormationPicker').querySelectorAll('.formation-btn').forEach((btn) => {
     }
   });
 });
+/* ==========================================================
+   Instruções Táticas avançadas (Jogo ao Vivo)
+   — linha de defesa, pressão, comprimento, temporização,
+   direção de jogo e perder tempo — ver POST
+   /api/live-matches/:friendlyId/instructions em routes/liveMatch.js.
+   ========================================================== */
+const LIVE_TACTIC_SLIDER_KEYS = ['defensive_line', 'pressing', 'width', 'tempo'];
+
+/* ---------- Catálogo de labels/dicas (pedido uma única vez, ver openLiveMatch) ----------
+   Se o pedido falhar (ex.: sem rede), cai num catálogo local equivalente,
+   para o painel continuar a funcionar na mesma. */
+const LIVE_INSTRUCTIONS_FALLBACK = {
+  directness: [
+    { key: 'equilibrado', label: 'Equilibrado', description: 'Sem preferência marcada — usa o espaço que a defesa adversária deixar.' },
+    { key: 'centro', label: 'Jogar Pelo Centro', description: 'Insiste no corredor central — combinações mais diretas, mas mais fácil de fechar por um bloco compacto.' },
+    { key: 'flancos', label: 'Jogar Pelos Flancos', description: 'Estica o jogo pelas alas — mais cruzamentos e finalizações de jogadores de faixa, menos presença central na área.' },
+  ],
+  sliders: {
+    defensive_line: { label: 'Linha de Defesa', low: 'Recuada', high: 'Adiantada', hint: 'Alta ganha metros no terreno, mas deixa espaço nas costas contra equipas rápidas.' },
+    pressing: { label: 'Pressão', low: 'Passiva', high: 'Intensa', hint: 'Alta recupera a bola mais perto da baliza contrária, mas cansa e arrisca mais cartões.' },
+    width: { label: 'Comprimento', low: 'Estreito', high: 'Largo', hint: 'Largo estica o jogo pelas alas; estreito concentra o jogo no corredor central.' },
+    tempo: { label: 'Temporização', low: 'Controlar o Jogo', high: 'Jogo Direto', hint: 'Direto cria mais lances mas com menos critério; controlar reduz o risco.' },
+  },
+  default: { defensive_line: 50, pressing: 50, tempo: 50, width: 50, directness: 'equilibrado', time_wasting: false },
+};
+
+async function loadLiveInstructionsMeta(){
+  if(liveInstructionsMeta) { renderLiveInstructionsPanel(liveMySide ? liveState?.[liveMySide] : null); return; }
+  try{
+    const res = await fetch('/api/live-matches/meta/instructions');
+    liveInstructionsMeta = await res.json();
+  }catch(err){
+    liveInstructionsMeta = LIVE_INSTRUCTIONS_FALLBACK;
+  }
+  renderLiveInstructionsPanel(liveMySide ? liveState?.[liveMySide] : null);
+}
+
+function renderLiveInstructionsPanel(myState){
+  const panel = el('liveInstructionsPanel');
+  const grid = el('liveTacticsGrid');
+  if(!panel || !grid) return;
+
+  if(!myState || !liveState || liveState.status === 'finished'){
+    panel.classList.add('disabled');
+    return;
+  }
+  panel.classList.remove('disabled');
+
+  const meta = liveInstructionsMeta || LIVE_INSTRUCTIONS_FALLBACK;
+  const tactics = { ...meta.default, ...(myState.tactics || {}) };
+
+  // Só desenha a grelha do zero uma vez (e sempre que muda de jogo) — nas
+  // atualizações seguintes só sincroniza valores, para não interromper o
+  // utilizador a meio de um arrasto do cursor do slider.
+  if(grid.dataset.built !== String(liveFriendlyId)){
+    grid.dataset.built = String(liveFriendlyId);
+    grid.innerHTML = `
+      ${LIVE_TACTIC_SLIDER_KEYS.map((key) => {
+        const s = meta.sliders[key] || LIVE_INSTRUCTIONS_FALLBACK.sliders[key];
+        return `
+        <div class="live-tactic-row" data-key="${key}">
+          <div class="live-tactic-row-head">
+            <span>${s.label}</span>
+            <span class="live-tactic-row-value" id="liveTacticVal_${key}"></span>
+          </div>
+          <input type="range" min="0" max="100" step="5" id="liveTacticSlider_${key}" data-key="${key}">
+          <div class="live-tactic-labels"><span>${s.low}</span><span>${s.high}</span></div>
+        </div>`;
+      }).join('')}
+      <div class="live-tactic-row">
+        <div class="live-tactic-row-head"><span>Direção de Jogo</span></div>
+        <div class="live-tactic-segmented" id="liveDirectnessSeg">
+          ${meta.directness.map((o) => `<button type="button" class="live-tactic-seg-btn" data-directness="${o.key}">${o.label}</button>`).join('')}
+        </div>
+        <p class="live-tactic-hint" id="liveDirectnessHint"></p>
+      </div>
+      <div class="live-tactic-row">
+        <div class="live-tactic-toggle-row">
+          <span class="live-tactic-toggle-desc">⏱️ Perder Tempo — atrasa o jogo para gerir o cronómetro (mais risco de cartão amarelo).</span>
+          <div class="live-switch" id="liveTimeWastingSwitch"></div>
+        </div>
+      </div>
+    `;
+
+    LIVE_TACTIC_SLIDER_KEYS.forEach((key) => {
+      const slider = el(`liveTacticSlider_${key}`);
+      slider.addEventListener('input', () => { el(`liveTacticVal_${key}`).textContent = slider.value; });
+      slider.addEventListener('change', () => sendLiveInstructions({ [key]: Number(slider.value) }));
+    });
+
+    grid.querySelectorAll('.live-tactic-seg-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if(btn.classList.contains('active')) return;
+        sendLiveInstructions({ directness: btn.dataset.directness });
+      });
+    });
+
+    el('liveTimeWastingSwitch').addEventListener('click', () => {
+      const isOn = el('liveTimeWastingSwitch').classList.contains('on');
+      sendLiveInstructions({ time_wasting: !isOn });
+    });
+  }
+
+  // Sincroniza os valores mostrados com o estado atual da equipa.
+  LIVE_TACTIC_SLIDER_KEYS.forEach((key) => {
+    const slider = el(`liveTacticSlider_${key}`);
+    if(document.activeElement !== slider) slider.value = tactics[key]; // não interrompe um arrasto em curso
+    el(`liveTacticVal_${key}`).textContent = slider.value;
+  });
+  grid.querySelectorAll('.live-tactic-seg-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.directness === tactics.directness);
+  });
+  const activeDirectness = meta.directness.find((o) => o.key === tactics.directness);
+  el('liveDirectnessHint').textContent = activeDirectness ? activeDirectness.description : '';
+  el('liveTimeWastingSwitch').classList.toggle('on', !!tactics.time_wasting);
+}
+
+async function sendLiveInstructions(patch){
+  const myState = liveMySide ? liveState?.[liveMySide] : null;
+  const resultBox = el('liveInstructionsResult');
+  if(!myState) return;
+
+  try{
+    const res = await fetch(`/api/live-matches/${liveFriendlyId}/instructions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team_id: myState.team_id, ...patch }),
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Não foi possível ajustar as instruções táticas');
+    resultBox.classList.add('hidden');
+    applyLiveState(data, data.new_events || []);
+  }catch(err){
+    resultBox.textContent = err.message;
+    resultBox.classList.remove('hidden');
+  }
+}

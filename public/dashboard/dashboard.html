@@ -706,9 +706,17 @@
   <div class="news-modal live-match-modal">
     <button class="news-modal-close" id="liveMatchClose" aria-label="Fechar">×</button>
 
+    <div class="live-portrait-hint">
+      <div class="live-portrait-hint-icon">🔄</div>
+      <div>Roda o telemóvel para a horizontal<br>para o campo aparecer no ecrã todo.</div>
+    </div>
+
     <div class="live-match-topline">
       <span class="live-badge" id="liveBadge"><span class="live-badge-dot"></span>AO VIVO</span>
       <span class="live-match-halfline" id="liveHalfLine"></span>
+      <div class="live-topline-actions">
+        <button type="button" class="live-icon-btn" id="liveFullscreenBtn" title="Ecrã inteiro">⛶</button>
+      </div>
     </div>
 
     <div class="live-match-header">
@@ -741,6 +749,7 @@
 
       <div class="live-pitch-col">
         <div class="live-pitch-board" id="livePitchBoard">
+          <button type="button" class="live-drawer-toggle" id="liveDrawerToggle" title="Táticas, banco e comentário">📋</button>
           <div class="live-pitch-box live-pitch-box-top"></div>
           <div class="live-pitch-box live-pitch-box-bottom"></div>
           <div class="live-pitch-goal live-pitch-goal-top"></div>
@@ -750,13 +759,15 @@
           <div class="live-pitch-team-label live-pitch-team-label-top" id="livePitchAwayLabel"></div>
           <div class="live-pitch-team-label live-pitch-team-label-bottom" id="livePitchHomeLabel"></div>
           <div class="live-pitch-tokens" id="livePitchTokens"><!-- gerado via JS --></div>
+          <div class="live-pitch-idle-ball" id="livePitchIdleBall"></div>
           <div class="live-pitch-ball" id="livePitchBall"></div>
           <div class="live-goal-flash" id="liveGoalFlash">⚽ GOLO!</div>
         </div>
         <p class="live-pitch-hint" id="livePitchHint">O jogo simula-se sozinho, minuto a minuto. A equipa a roxo és tu — clica num jogador em campo para o substituir.</p>
       </div>
 
-      <div class="live-side-col">
+      <div class="live-drawer-backdrop" id="liveDrawerBackdrop"></div>
+      <div class="live-side-col" id="liveSideCol">
         <div class="live-panel live-feed-panel">
           <div class="card-title no-margin">Comentário</div>
           <div id="liveFeed" class="live-feed"></div>
@@ -791,6 +802,12 @@
           <p id="liveMentalityResult" class="activity-result hidden"></p>
         </div>
 
+        <div class="live-panel" id="liveInstructionsPanel">
+          <div class="card-title no-margin">Instruções Táticas</div>
+          <div class="live-tactics-grid" id="liveTacticsGrid"><!-- gerado via JS --></div>
+          <p id="liveInstructionsResult" class="activity-result hidden"></p>
+        </div>
+
         <div class="live-panel live-summary-panel hidden" id="liveSummaryPanel">
           <div class="card-title no-margin">Resultado Final</div>
           <div id="liveSummaryBody" class="live-summary-body"></div>
@@ -804,8 +821,12 @@
 <div id="liveSubModalOverlay" class="news-modal-overlay hidden" style="z-index:260;">
   <div class="news-modal live-sub-modal">
     <button class="news-modal-close" id="liveSubModalClose" aria-label="Fechar">×</button>
-    <div class="card-title no-margin">Fazer Substituição</div>
+    <div class="live-sub-modal-header-info">
+      <div class="card-title no-margin">Fazer Substituição</div>
+      <span class="live-sub-modal-remaining" id="liveSubModalRemaining">5 restantes</span>
+    </div>
     <p class="live-sub-hint" id="liveSubModalHint">Escolhe primeiro quem sai do campo.</p>
+    <div class="live-sub-modal-selected-bar hidden" id="liveSubModalSelectedBar"></div>
 
     <div class="live-sub-modal-section">
       <div class="live-sub-modal-label">Em Campo</div>

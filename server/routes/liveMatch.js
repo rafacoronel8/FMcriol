@@ -124,6 +124,110 @@ const MENTALITY_DESCRIPTIONS = {
 const MENTALITY_ATTACK_MULT = { equilibrado: 1, atacante: 1.4, contra_ataque: 0.85, defensiva: 0.6 };
 const MENTALITY_DEFEND_MULT = { equilibrado: 1, atacante: 0.65, contra_ataque: 1.05, defensiva: 1.5 };
 
+/* ---------- Instruções táticas avançadas ----------
+   Além da formação e da postura geral (mentalidade), o treinador pode
+   agora afinar, a qualquer momento do jogo, 4 misturas contínuas (0-100)
+   e 2 escolhas — tudo dentro de `state.tactics`, criado com valores
+   neutros em buildTeamRoster (ver DEFAULT_TACTICS) e ajustável em pleno
+   jogo (ver POST /:friendlyId/instructions): só o que ainda falta do
+   calendário é reconstruído, exatamente como já acontecia com a
+   mentalidade e a formação. */
+const DIRECTNESS_OPTIONS = ['equilibrado', 'centro', 'flancos'];
+const DIRECTNESS_LABELS = { equilibrado: 'Equilibrado', centro: 'Jogar Pelo Centro', flancos: 'Jogar Pelos Flancos' };
+const DIRECTNESS_DESCRIPTIONS = {
+  equilibrado: 'Sem preferência marcada — usa o espaço que a defesa adversária deixar.',
+  centro: 'Insiste no corredor central — combinações mais diretas, mas mais fácil de fechar por um bloco compacto.',
+  flancos: 'Estica o jogo pelas alas — mais cruzamentos e finalizações de jogadores de faixa, menos presença central na área.',
+};
+const DEFAULT_TACTICS = { defensive_line: 50, pressing: 50, tempo: 50, width: 50, directness: 'equilibrado', time_wasting: false };
+
+/* Códigos de posição considerados "de faixa" (jogam nos corredores) vs
+   "centrais" — usados pelo Comprimento e pela Direção de Jogo para pesar
+   quem tem mais probabilidade de finalizar ou assistir um lance. */
+const WIDE_CODES = new Set(['DD', 'DE', 'MD', 'ME', 'ED', 'EE', 'MOD', 'MOE']);
+const CENTRAL_CODES = new Set(['DC', 'MC', 'MCD', 'MCO', 'PL']);
+
+/* Peso extra (multiplicador) que a Direção de Jogo e o Comprimento dão a
+   um jogador consoante a posição que ocupa — usado nas escolhas de quem
+   remata/assiste (ver pickWeightedWithFocusAndStyle), não na quantidade
+   de lances (essa é tratada em tacticsAttackMultiplier). */
+function styleWeight(positionCode, tactics) {
+  const t = tactics || DEFAULT_TACTICS;
+  const width = t.width ?? 50;
+  const directness = t.directness || 'equilibrado';
+  let w = 1;
+  if (WIDE_CODES.has(positionCode)) w *= 1 + (width - 50) / 100 * 0.6;
+  if (CENTRAL_CODES.has(positionCode)) w *= 1 - (width - 50) / 100 * 0.4;
+  if (directness === 'flancos' && WIDE_CODES.has(positionCode)) w *= 1.7;
+  if (directness === 'centro' && CENTRAL_CODES.has(positionCode)) w *= 1.6;
+  if (directness === 'flancos' && CENTRAL_CODES.has(positionCode)) w *= 0.7;
+  if (directness === 'centro' && WIDE_CODES.has(positionCode)) w *= 0.65;
+  return Math.max(0.25, w);
+}
+
+/* Mesma ideia de pickWeightedWithFocus, mas com o peso extra da Direção de
+   Jogo / Comprimento (ver styleWeight) por cima do peso de categoria e do
+   bónus de especialização — é o que faz um extremo ter mais hipótese de
+   marcar quando a equipa joga "Pelos Flancos", por exemplo. */
+function pickWeightedWithFocusAndStyle(candidates, weightMap, focusRole, tactics) {
+  const weightFn = (p) => weightMap[p.category] * (p.focus_role === focusRole ? 2.2 : 1) * styleWeight(p.position_code, tactics);
+  const pool = candidates.filter((p) => weightFn(p) > 0);
+  if (!pool.length) return null;
+  const total = pool.reduce((sum, p) => sum + weightFn(p) * p.quality, 0);
+  let roll = Math.random() * total;
+  for (const p of pool) {
+    roll -= weightFn(p) * p.quality;
+    if (roll <= 0) return p;
+  }
+  return pool[pool.length - 1];
+}
+
+/* ---------- Efeito das instruções táticas avançadas na criação de perigo ----------
+   - Linha de Defesa ALTA de quem ataca empurra mais gente para a frente
+     (mais golos); linha ALTA de quem DEFENDE deixa espaço nas costas, que
+     o adversário explora tanto mais quanto mais rápido for o seu plantel
+     em campo — a mesma ideia já usada no bónus de Contra-Ataque.
+   - Pressão ALTA de quem ataca acelera a construção (mais tentativas);
+     pressão ALTA de quem defende recupera a bola mais perto da própria
+     baliza contrária e dificulta a construção adversária.
+   - Temporização (Controlar o Jogo ↔ Jogo Direto): Jogo Direto cria mais
+     lances (mais bola no último terço, menos critério); Controlar o Jogo
+     cria menos lances mas mais seguros.
+   - Perder Tempo reduz ligeiramente o próprio ataque (a equipa passa mais
+     tempo a gerir o cronómetro do que a atacar). */
+function tacticsAttackMultiplier(attackTactics, defendTactics, attackPace) {
+  const t = { ...DEFAULT_TACTICS, ...(attackTactics || {}) };
+  const d = { ...DEFAULT_TACTICS, ...(defendTactics || {}) };
+  let mult = 1;
+  mult += (t.defensive_line - 50) / 100 * 0.22;
+  mult += (d.defensive_line - 50) / 100 * 0.22 * attackPace;
+  mult += (t.pressing - 50) / 100 * 0.10;
+  mult -= (d.pressing - 50) / 100 * 0.05;
+  mult += (t.tempo - 50) / 100 * 0.18;
+  if (t.time_wasting) mult *= 0.85;
+  return Math.max(0.4, mult);
+}
+
+/* ---------- "Textura" extra no comentário vinda das instruções táticas ----------
+   Junta-se ao leque de MENTALITY_PREFIXES (ver eventPrefix) só quando o
+   valor do slider é suficientemente marcado para justificar a frase — não
+   dispara com valores próximos do neutro (50). */
+function tacticsPrefixPool(tactics) {
+  const t = tactics || DEFAULT_TACTICS;
+  const pool = [];
+  if ((t.pressing ?? 50) >= 75) pool.push('Depois de uma pressão alta a roubar a bola no meio-campo adversário, ');
+  if ((t.tempo ?? 50) >= 75) pool.push('Em transição rápida e direta, ');
+  if ((t.tempo ?? 50) <= 25) pool.push('Numa jogada construída com muita paciência, ');
+  if ((t.defensive_line ?? 50) >= 75) pool.push('Com a linha subida a comprimir o jogo lá para a frente, ');
+  if ((t.width ?? 50) >= 75) pool.push('Depois de esticar bem o jogo pelas alas, ');
+  if ((t.width ?? 50) <= 25) pool.push('Numa combinação curta e apertada pelo corredor central, ');
+  return pool;
+}
+function eventPrefix(mentality, tactics) {
+  const pool = [...(MENTALITY_PREFIXES[mentality] || MENTALITY_PREFIXES.equilibrado), ...tacticsPrefixPool(tactics)];
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 /* Fator de ritmo do jogador (0.5-2.2, mesma escala de playerQualityFactor),
    com base em Velocidade + Aceleração (physical_json) — usado para o bónus
    de contra-ataque e não para a qualidade geral, que já existe à parte. */
@@ -186,7 +290,7 @@ function pickWeightedWithFocus(candidates, weightMap, focusRole) {
    ajustada pela postura tática de cada lado (ver MENTALITY_ATTACK_MULT /
    MENTALITY_DEFEND_MULT acima) e, no caso do contra-ataque, pelo ritmo do
    plantel em campo. */
-function mentalityLambda(attackRep, defendRep, attackMentality, defendMentality, attackPace) {
+function mentalityLambda(attackRep, defendRep, attackMentality, defendMentality, attackPace, attackTactics, defendTactics) {
   const attackMult = MENTALITY_ATTACK_MULT[attackMentality] ?? 1;
   const defendMult = MENTALITY_DEFEND_MULT[defendMentality] ?? 1;
   let lambda = Math.max(0.35, 1.15 + (attackRep * attackMult - defendRep * defendMult) * 0.3);
@@ -194,7 +298,10 @@ function mentalityLambda(attackRep, defendRep, attackMentality, defendMentality,
   if (attackMentality === 'contra_ataque' && defendMentality === 'atacante') {
     lambda += 0.4 * attackPace;
   }
-  return lambda;
+  /* Instruções táticas avançadas (linha de defesa, pressão, temporização,
+     perder tempo — ver tacticsAttackMultiplier) por cima da mentalidade. */
+  lambda *= tacticsAttackMultiplier(attackTactics, defendTactics, attackPace);
+  return Math.max(0.3, lambda);
 }
 
 function rollGoalsFromLambda(lambda) {
@@ -398,6 +505,7 @@ function buildTeamRoster(teamId) {
     is_user: !!team.is_user_controlled,
     formation,
     mentality: 'equilibrado',
+    tactics: { ...DEFAULT_TACTICS },
     on_pitch: onPitch,
     bench,
     subs_remaining: MAX_SUBS,
@@ -425,8 +533,8 @@ function buildSchedule(homeState, awayState, fromMinute = 0) {
   const homePace = teamPaceFactor(homeState);
   const awayPace = teamPaceFactor(awayState);
 
-  const homeLambda = mentalityLambda(homeState.reputation + 0.25, awayState.reputation, homeState.mentality, awayState.mentality, homePace) * remainingFraction;
-  const awayLambda = mentalityLambda(awayState.reputation, homeState.reputation + 0.25, awayState.mentality, homeState.mentality, awayPace) * remainingFraction;
+  const homeLambda = mentalityLambda(homeState.reputation + 0.25, awayState.reputation, homeState.mentality, awayState.mentality, homePace, homeState.tactics, awayState.tactics) * remainingFraction;
+  const awayLambda = mentalityLambda(awayState.reputation, homeState.reputation + 0.25, awayState.mentality, homeState.mentality, awayPace, awayState.tactics, homeState.tactics) * remainingFraction;
   const homeGoals = rollGoalsFromLambda(homeLambda);
   const awayGoals = rollGoalsFromLambda(awayLambda);
 
@@ -437,17 +545,38 @@ function buildSchedule(homeState, awayState, fromMinute = 0) {
   for (let i = 0; i < awayGoals; i += 1) events.push({ minute: minuteInRange(), type: 'goal', side: 'away' });
 
   ['home', 'away'].forEach((side) => {
+    const ownTactics = { ...DEFAULT_TACTICS, ...((side === 'home' ? homeState : awayState).tactics || {}) };
+    const oppTactics = { ...DEFAULT_TACTICS, ...((side === 'home' ? awayState : homeState).tactics || {}) };
+
+    /* Pressão muito alta cansa e arrisca mais faltas/cartões; perder tempo
+       também irrita o árbitro e o adversário — ambos sobem ligeiramente a
+       hipótese de amarelo desta equipa. */
+    const pressFatigue = Math.max(0, (ownTactics.pressing - 50) / 100) * 0.05;
+    const wastingRisk = ownTactics.time_wasting ? 0.06 : 0;
     let yellows = 0;
-    for (let i = 0; i < 5; i += 1) { if (Math.random() < 0.32 * remainingFraction) yellows += 1; }
+    for (let i = 0; i < 5; i += 1) { if (Math.random() < (0.32 + pressFatigue + wastingRisk) * remainingFraction) yellows += 1; }
     for (let i = 0; i < yellows; i += 1) events.push({ minute: minuteInRange(), type: 'yellow', side });
     if (Math.random() < 0.08 * remainingFraction) events.push({ minute: minuteInRange(), type: 'red', side });
 
     /* ---------- Lances de perigo (sem golo) ---------- */
     const attackMentality = (side === 'home' ? homeState : awayState).mentality || 'equilibrado';
     const defendMentality = (side === 'home' ? awayState : homeState).mentality || 'equilibrado';
-    const base = CHANCE_BASE_COUNT + (CHANCE_MENTALITY_BONUS[attackMentality] ?? 0) - (defendMentality === 'defensiva' ? 2 : 0);
+    let base = CHANCE_BASE_COUNT + (CHANCE_MENTALITY_BONUS[attackMentality] ?? 0) - (defendMentality === 'defensiva' ? 2 : 0);
+    /* Jogo Direto (temporização alta) e pressão alta criam mais lances;
+       controlar o jogo (temporização baixa) e o adversário a perder tempo
+       criam menos — este último representa menos minutos úteis de bola
+       em jogo, não só menos perigo para quem defende. */
+    base += Math.round((ownTactics.tempo - 50) / 100 * 3);
+    base += Math.round((ownTactics.pressing - 50) / 100 * 1.5) - Math.round((oppTactics.pressing - 50) / 100 * 1);
+    if (oppTactics.time_wasting) base -= 1;
     const count = Math.max(0, Math.round(base * remainingFraction)) + Math.floor(Math.random() * 2);
     for (let i = 0; i < count; i += 1) events.push({ minute: minuteInRange(), type: 'chance', side, mentality: attackMentality });
+
+    /* ---------- Perder Tempo: comentário de textura, sem afetar o marcador ---------- */
+    if (ownTactics.time_wasting) {
+      const wasteCount = Math.max(0, Math.round(2 * remainingFraction));
+      for (let i = 0; i < wasteCount; i += 1) events.push({ minute: minuteInRange(), type: 'time_waste', side });
+    }
   });
 
   events.sort((a, b) => a.minute - b.minute);
@@ -507,7 +636,7 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
 
   if (ev.type === 'goal') {
     const outfield = state.on_pitch.filter((p) => p.category !== 'GR');
-    const prefix = mentalityPrefix(state.mentality);
+    const prefix = eventPrefix(state.mentality, state.tactics);
 
     /* Plantel muito curto (menos de 6 em campo) — nem todo golo tem de
        ficar atribuído a alguém; conta na mesma para o marcador, mas sem
@@ -517,7 +646,7 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
       return { minute: ev.minute, kind: 'goal', side: ev.side, text: `${prefix}⚽ Golo do ${teamLabel}! A confusão na área não deixou ver quem marcou.` };
     }
 
-    const scorer = pickWeightedWithFocus(outfield, SCORE_WEIGHT, 'Goleador');
+    const scorer = pickWeightedWithFocusAndStyle(outfield, SCORE_WEIGHT, 'Goleador', state.tactics);
     if (!scorer) return null;
     scorer.goals += 1;
     scoreRef[ev.side] += 1;
@@ -525,7 +654,7 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
     let assister = null;
     if (Math.random() < 0.8) {
       const assistCandidates = outfield.filter((p) => p.id !== scorer.id);
-      assister = pickWeightedWithFocus(assistCandidates, ASSIST_WEIGHT, 'Garçom');
+      assister = pickWeightedWithFocusAndStyle(assistCandidates, ASSIST_WEIGHT, 'Garçom', state.tactics);
       if (assister) assister.assists += 1;
     }
 
@@ -546,7 +675,7 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
     const outfield = state.on_pitch.filter((p) => p.category !== 'GR');
     if (!outfield.length) return null;
 
-    const attacker = pickWeightedWithFocus(outfield, SCORE_WEIGHT, 'Goleador') || outfield[Math.floor(Math.random() * outfield.length)];
+    const attacker = pickWeightedWithFocusAndStyle(outfield, SCORE_WEIGHT, 'Goleador', state.tactics) || outfield[Math.floor(Math.random() * outfield.length)];
     const keeper = defendState.on_pitch.find((p) => p.category === 'GR');
 
     const roll = Math.random();
@@ -558,7 +687,7 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
 
     const templates = CHANCE_OUTCOME_TEMPLATES[outcomeKey];
     const template = templates[Math.floor(Math.random() * templates.length)];
-    const prefix = mentalityPrefix(ev.mentality || state.mentality);
+    const prefix = eventPrefix(ev.mentality || state.mentality, state.tactics);
     const text = prefix + template({
       attacker: attacker.name, team: teamLabel, defTeam: defendState.team_name,
       keeper: keeper ? keeper.name : 'o guarda-redes',
@@ -570,6 +699,15 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
       minute: ev.minute, kind: 'chance', side: ev.side, text,
       player_id: attacker.id, keeper_id: keeper ? keeper.id : null, outcome: outcomeKey,
     };
+  }
+
+  if (ev.type === 'time_waste') {
+    const phrases = [
+      `🕰️ ${teamLabel} gere o cronómetro, atrasando o reinício do jogo.`,
+      `🕰️ Reposição de bola lenta do ${teamLabel} — claramente a perder tempo.`,
+      `🕰️ O treinador do ${teamLabel} pede aos jogadores para segurar mais a bola junto à bandeirola de canto.`,
+    ];
+    return { minute: ev.minute, kind: 'time_waste', side: ev.side, text: phrases[Math.floor(Math.random() * phrases.length)] };
   }
 
   if (ev.type === 'yellow') {
@@ -763,13 +901,17 @@ function teamStateForClient(state) {
     is_user: state.is_user,
     formation: state.formation,
     mentality: state.mentality || 'equilibrado',
+    tactics: { ...DEFAULT_TACTICS, ...(state.tactics || {}) },
     subs_remaining: state.subs_remaining,
     on_pitch: state.on_pitch.map((p) => ({
-      id: p.id, name: p.name, yellow: !!p.yellow, category: p.category,
-      jersey_number: p.jersey_number || '', slot_index: p.slot_index,
+      id: p.id, name: p.name, yellow: !!p.yellow, category: p.category, position_code: p.position_code,
+      jersey_number: p.jersey_number || '', slot_index: p.slot_index, quality: p.quality,
       goals: p.goals || 0, assists: p.assists || 0,
     })),
-    bench: state.bench.map((p) => ({ id: p.id, name: p.name, category: p.category, jersey_number: p.jersey_number || '' })),
+    bench: state.bench.map((p) => ({
+      id: p.id, name: p.name, category: p.category, position_code: p.position_code,
+      jersey_number: p.jersey_number || '', quality: p.quality,
+    })),
     notable_players: notable,
   };
 }
@@ -1028,6 +1170,111 @@ router.post('/:friendlyId/mentality', (req, res) => {
   persistRow(row.friendly_id, {
     minute: row.current_minute, homeScore: row.home_score, awayScore: row.away_score,
     homeState, awayState, schedule: newSchedule, events, status: row.status,
+  });
+
+  const updatedRow = loadLiveRow(row.friendly_id);
+  res.json(rowToPayload(updatedRow, [event]));
+});
+
+/* ---------- GET /api/live-matches/meta/instructions — catálogo das instruções táticas avançadas ----------
+   Tal como /meta/mentalities, devolve só os textos (label + descrição de
+   cada opção de Direção de Jogo, e label + dica de cada slider contínuo)
+   para o frontend construir o painel sem duplicar estes textos aqui. */
+router.get('/meta/instructions', (req, res) => {
+  res.json({
+    directness: DIRECTNESS_OPTIONS.map((key) => ({ key, label: DIRECTNESS_LABELS[key], description: DIRECTNESS_DESCRIPTIONS[key] })),
+    sliders: {
+      defensive_line: { label: 'Linha de Defesa', low: 'Recuada', high: 'Adiantada', hint: 'Alta ganha metros no terreno, mas deixa espaço nas costas contra equipas rápidas.' },
+      pressing: { label: 'Pressão', low: 'Passiva', high: 'Intensa', hint: 'Alta recupera a bola mais perto da baliza contrária, mas cansa e arrisca mais cartões.' },
+      width: { label: 'Comprimento', low: 'Estreito', high: 'Largo', hint: 'Largo estica o jogo pelas alas; estreito concentra o jogo no corredor central.' },
+      tempo: { label: 'Temporização', low: 'Controlar o Jogo', high: 'Jogo Direto', hint: 'Direto cria mais lances mas com menos critério; controlar reduz o risco.' },
+    },
+    default: DEFAULT_TACTICS,
+  });
+});
+
+/* ---------- POST /api/live-matches/:friendlyId/instructions — afina linha de defesa, pressão, comprimento, temporização, direção de jogo e perder tempo ----------
+   Aceita qualquer subconjunto destes campos no corpo do pedido (só muda o
+   que vier preenchido) e, tal como a mentalidade e a formação, só
+   reconstrói o que ainda falta do calendário do jogo — o que já
+   aconteceu fica exatamente como estava. */
+router.post('/:friendlyId/instructions', (req, res) => {
+  const row = loadLiveRow(req.params.friendlyId);
+  if (!row) return res.status(404).json({ error: 'Este jogo ainda não começou a ser assistido.' });
+  if (row.status === 'finished') return res.status(400).json({ error: 'O jogo já terminou.' });
+
+  const { team_id, defensive_line, pressing, width, tempo, directness, time_wasting } = req.body;
+  const homeState = JSON.parse(row.home_state_json);
+  const awayState = JSON.parse(row.away_state_json);
+  const side = Number(homeState.team_id) === Number(team_id) ? 'home' : (Number(awayState.team_id) === Number(team_id) ? 'away' : null);
+  if (!side) return res.status(400).json({ error: 'Equipa inválida para este jogo.' });
+
+  const state = side === 'home' ? homeState : awayState;
+  state.tactics = { ...DEFAULT_TACTICS, ...(state.tactics || {}) };
+
+  const clampPct = (v) => Math.max(0, Math.min(100, Math.round(Number(v))));
+  const changes = [];
+  if (defensive_line !== undefined && Number.isFinite(Number(defensive_line))) { state.tactics.defensive_line = clampPct(defensive_line); changes.push('linha de defesa'); }
+  if (pressing !== undefined && Number.isFinite(Number(pressing))) { state.tactics.pressing = clampPct(pressing); changes.push('pressão'); }
+  if (width !== undefined && Number.isFinite(Number(width))) { state.tactics.width = clampPct(width); changes.push('comprimento'); }
+  if (tempo !== undefined && Number.isFinite(Number(tempo))) { state.tactics.tempo = clampPct(tempo); changes.push('temporização'); }
+  if (directness !== undefined && DIRECTNESS_OPTIONS.includes(directness)) { state.tactics.directness = directness; changes.push('direção de jogo'); }
+  if (time_wasting !== undefined) { state.tactics.time_wasting = !!time_wasting; changes.push(time_wasting ? 'perder tempo' : 'jogar a bola normalmente'); }
+
+  if (!changes.length) return res.json(rowToPayload(row));
+
+  const schedule = JSON.parse(row.schedule_json || '[]');
+  const pastSchedule = schedule.filter((ev) => ev.minute <= row.current_minute);
+  const futureSchedule = buildSchedule(homeState, awayState, row.current_minute);
+  const newSchedule = [...pastSchedule, ...futureSchedule];
+
+  const event = { minute: row.current_minute, kind: 'tactic_change', text: `🧭 ${state.team_name} ajusta: ${changes.join(', ')}.` };
+  const events = [...JSON.parse(row.events_json || '[]'), event];
+
+  persistRow(row.friendly_id, {
+    minute: row.current_minute, homeScore: row.home_score, awayScore: row.away_score,
+    homeState, awayState, schedule: newSchedule, events, status: row.status,
+  });
+
+  const updatedRow = loadLiveRow(row.friendly_id);
+  res.json(rowToPayload(updatedRow, [event]));
+});
+
+/* ---------- POST /api/live-matches/:friendlyId/swap-positions — troca dois jogadores de posição no onze ----------
+   Só troca o `slot_index` (a casa que cada um ocupa na formação) entre
+   dois jogadores da mesma equipa já em campo — ninguém sai do jogo, não
+   conta para o limite de substituições, e não precisa de reconstruir o
+   calendário: quem pesa nos golos e lances (ver SCORE_WEIGHT/
+   styleWeight) é a posição real do jogador (category/position_code), que
+   viaja sempre com ele — não a casa que ocupa na formação. */
+router.post('/:friendlyId/swap-positions', (req, res) => {
+  const row = loadLiveRow(req.params.friendlyId);
+  if (!row) return res.status(404).json({ error: 'Este jogo ainda não começou a ser assistido.' });
+  if (row.status === 'finished') return res.status(400).json({ error: 'O jogo já terminou.' });
+
+  const { team_id, player_a_id, player_b_id } = req.body;
+  const homeState = JSON.parse(row.home_state_json);
+  const awayState = JSON.parse(row.away_state_json);
+  const side = Number(homeState.team_id) === Number(team_id) ? 'home' : (Number(awayState.team_id) === Number(team_id) ? 'away' : null);
+  if (!side) return res.status(400).json({ error: 'Equipa inválida para este jogo.' });
+
+  const state = side === 'home' ? homeState : awayState;
+  const playerA = state.on_pitch.find((p) => p.id === Number(player_a_id));
+  const playerB = state.on_pitch.find((p) => p.id === Number(player_b_id));
+  if (!playerA || !playerB || playerA.id === playerB.id) {
+    return res.status(400).json({ error: 'Escolhe dois jogadores diferentes, ambos em campo.' });
+  }
+
+  const tmp = playerA.slot_index;
+  playerA.slot_index = playerB.slot_index;
+  playerB.slot_index = tmp;
+
+  const event = { minute: row.current_minute, kind: 'tactic_change', text: `🔄 ${state.team_name} troca ${playerA.name} com ${playerB.name} em campo.` };
+  const events = [...JSON.parse(row.events_json || '[]'), event];
+
+  persistRow(row.friendly_id, {
+    minute: row.current_minute, homeScore: row.home_score, awayScore: row.away_score,
+    homeState, awayState, schedule: JSON.parse(row.schedule_json || '[]'), events, status: row.status,
   });
 
   const updatedRow = loadLiveRow(row.friendly_id);
