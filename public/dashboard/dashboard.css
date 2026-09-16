@@ -1800,7 +1800,7 @@ body{
 .live-pitch-board{
   position:relative;width:100%;height:100%;
   flex:1;min-height:0;
-  aspect-ratio:16/9.4;
+  aspect-ratio:105/68;   /* proporção real de um campo de 11 */
   max-height:100%;
   margin:0 auto;
   background:
@@ -1821,29 +1821,60 @@ body{
 .live-drawer-toggle:hover{border-color:var(--accent);background:rgba(32,48,74,.9);}
 .live-drawer-toggle:active{transform:scale(.94);}
 .live-pitch-halfway{position:absolute;top:0;bottom:0;left:50%;width:0;border-left:1.5px solid rgba(223,232,242,.35);}
+/* Círculo central: 9,15m de raio = 18,3m de diâmetro -> 17,4% do
+   comprimento do campo. Em % do lado maior para ficar mesmo redondo. */
 .live-pitch-center-circle{
-  position:absolute;top:50%;left:50%;width:80px;height:80px;
+  position:absolute;top:50%;left:50%;width:17.4%;aspect-ratio:1/1;height:auto;
   transform:translate(-50%,-50%);
   border:1.5px solid rgba(223,232,242,.35);border-radius:50%;
 }
+/* Grande área: 40,32m de 68m de largura = 59,3% -> 20,35% de margem
+   em cima e em baixo; 16,5m de 105m de comprimento = 15,7% de largura. */
 .live-pitch-box{
-  position:absolute;top:20%;bottom:20%;width:11%;
+  position:absolute;top:20.35%;bottom:20.35%;width:15.7%;
   border:1.5px solid rgba(223,232,242,.35);
 }
+/* Pequena área: 18,32m de largura (=26,9%) por 5,5m (=5,24%). */
+.live-pitch-six{
+  position:absolute;top:36.5%;bottom:36.5%;width:5.24%;
+  border:1.5px solid rgba(223,232,242,.28);
+}
+.live-pitch-six-top{left:0;border-left:none;}
+.live-pitch-six-bottom{right:0;border-right:none;}
+/* Marca de penálti: 11m da linha = 10,48%. */
+.live-pitch-penspot{
+  position:absolute;top:50%;width:4px;height:4px;border-radius:50%;
+  background:rgba(223,232,242,.5);transform:translate(-50%,-50%);
+}
+.live-pitch-penspot-top{left:10.48%;}
+.live-pitch-penspot-bottom{left:89.52%;}
 .live-pitch-box-top{left:0;border-left:none;}
 .live-pitch-box-bottom{right:0;border-right:none;}
 
 /* ---------- Balizas ---------- */
+/* Baliza: 7,32m de 68m de largura = 10,8% -> 44,6% de margem cada lado. */
 .live-pitch-goal{
-  position:absolute;top:38%;bottom:38%;width:3.4%;
+  position:absolute;top:44.6%;bottom:44.6%;width:2.2%;
   border:2px solid #eef3f8;
   background:
     repeating-linear-gradient(0deg, rgba(238,243,248,.55) 0 1px, transparent 1px 7px),
     repeating-linear-gradient(90deg, rgba(238,243,248,.4) 0 1px, transparent 1px 7px);
   z-index:1;
 }
-.live-pitch-goal-top{left:0;border-left:none;}
-.live-pitch-goal-bottom{right:0;border-right:none;}
+.live-pitch-goal-top{left:0;border-left:none;transform-origin:right center;}
+.live-pitch-goal-bottom{right:0;border-right:none;transform-origin:left center;}
+
+/* ---------- Baliza a "abanar" quando entra um golo (ver triggerGoalCelebration
+   em dashboard.js) — mesma ideia do .net.ripple do protótipo campo.css,
+   aplicada diretamente à própria baliza (que já tem o padrão de rede no
+   fundo), sem precisar de um elemento extra só para a rede. ---------- */
+.live-pitch-goal.net-ripple{animation:liveNetRipple .6s ease;}
+@keyframes liveNetRipple{
+  0%{transform:scaleX(1);}
+  35%{transform:scaleX(.72);}
+  70%{transform:scaleX(1.08);}
+  100%{transform:scaleX(1);}
+}
 .live-pitch-team-label{
   position:absolute;top:8px;font-size:10px;font-weight:800;letter-spacing:.5px;
   color:rgba(223,232,242,.55);text-transform:uppercase;
@@ -1858,7 +1889,7 @@ body{
    .live-pitch-ball), só para dar a sensação de bola sempre em jogo. ---------- */
 .live-pitch-idle-ball{
   position:absolute;
-  width:9px;height:9px;
+  width:clamp(10px, 1.1vw, 13px);height:clamp(10px, 1.1vw, 13px);
   border-radius:50%;
   background:radial-gradient(circle at 35% 30%, #ffffff, #cfd6de);
   box-shadow:0 1px 4px rgba(0,0,0,.4);
@@ -1876,7 +1907,7 @@ body{
    (remate ao lado / à figura / trave). */
 .live-pitch-ball{
   position:absolute;
-  width:14px;height:14px;
+  width:clamp(15px, 1.6vw, 19px);height:clamp(15px, 1.6vw, 19px);
   border-radius:50%;
   background:radial-gradient(circle at 35% 30%, #ffffff, #cfd6de);
   box-shadow:0 2px 6px rgba(0,0,0,.45);
@@ -1924,9 +1955,9 @@ body{
   75%{transform:translate(calc(-50% + 1px), calc(-50% + 2px));}
 }
 .live-token-circle{
-  position:relative;width:34px;height:34px;border-radius:50%;
+  position:relative;width:clamp(38px, 4.4vw, 50px);height:clamp(38px, 4.4vw, 50px);border-radius:50%;
   display:flex;align-items:center;justify-content:center;
-  font-size:11px;font-weight:800;color:#fff;
+  font-size:clamp(12px, 1.4vw, 15px);font-weight:800;color:#fff;
   background:var(--bg-3);border:2px solid var(--text-2);
   box-shadow:0 2px 6px rgba(0,0,0,.4);
 }
@@ -1935,14 +1966,50 @@ body{
 .live-token.selectable{cursor:pointer;}
 .live-token.selectable:hover .live-token-circle{filter:brightness(1.18);}
 .live-token-name{
-  font-size:9px;font-weight:700;color:#dfe8f2;text-shadow:0 1px 2px rgba(0,0,0,.7);
-  max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;
+  font-size:clamp(10px, 1vw, 12px);font-weight:700;color:#dfe8f2;text-shadow:0 1px 2px rgba(0,0,0,.7);
+  max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;
 }
 .live-token-badges{position:absolute;top:-6px;right:-8px;display:flex;flex-direction:column;gap:1px;}
 .live-token-badge{font-size:9px;line-height:1;}
 .live-token-yellow{
   position:absolute;bottom:-3px;right:-4px;width:8px;height:11px;background:var(--gold);
   border-radius:1px;box-shadow:0 0 0 1px rgba(0,0,0,.4);
+}
+
+/* Cabeceamento: pequeno salto no boneco, tal como .player.jump no
+   protótipo campo.js. */
+.live-token.jump .live-token-circle{
+  transform:translateY(-8px) scale(1.08);
+  transition:transform .18s ease;
+}
+
+/* ---------- Festejos de golo (ver finishGoalOnPitch em dashboard.js) ----------
+   Sempre a mesma coreografia final, tal como finishGoal no protótipo
+   campo.js: a equipa toda corre para a bandeirola de canto e festeja lá.
+   O que varia de golo para golo é só a jogada até este ponto (ver
+   GOAL_SEQUENCES em dashboard.js). */
+@keyframes liveCelebrate{
+  0%{transform:scale(1);}
+  30%{transform:scale(1.3);box-shadow:0 0 0 6px rgba(255,196,0,.35);}
+  60%{transform:scale(.95);}
+  100%{transform:scale(1.05);}
+}
+.live-token.celebrate .live-token-circle{animation:liveCelebrate .8s ease;}
+
+@keyframes liveCelebrateBig{
+  0%{transform:scale(1);}
+  25%{transform:scale(1.55);box-shadow:0 0 0 9px rgba(255,196,0,.4);}
+  55%{transform:scale(.9);}
+  80%{transform:scale(1.2);}
+  100%{transform:scale(1.08);}
+}
+.live-token.celebrate-big .live-token-circle{animation:liveCelebrateBig 1.05s ease;}
+
+/* Defesas ficam por instantes mais "apagados" no momento do golo — mesma
+   ideia do .player.slump do protótipo campo.css. */
+.live-token.slump .live-token-circle{
+  opacity:.45;filter:grayscale(.35);
+  transition:opacity .35s ease, filter .35s ease;
 }
 
 .live-feed-panel{max-height:200px;display:flex;flex-direction:column;}
