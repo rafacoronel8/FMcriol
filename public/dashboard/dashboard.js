@@ -3842,6 +3842,36 @@ let liveBusy = false;    // evita pedidos sobrepostos (duplo clique / autoplay +
 let liveSubModalOutId = null; // jogador escolhido para sair, dentro da janela de substituições
 let liveAnimQueue = [];  // fila dos golos/lances por animar no campo (ver playLiveBallAnimation)
 let liveAnimPlaying = false;
+
+/* Placar mostrado no ecrã — só avança quando a animação do golo chega
+   ao "GOLO!" (bumpScoreDisplay), nunca logo que os dados chegam do
+   servidor. `liveState.home_score/away_score` continuam a ser a
+   verdade absoluta; isto é só o que está pintado no número. */
+let liveDisplayedScore = { home: 0, away: 0 };
+let liveScoreInitialized = false;
+
+function bumpScoreDisplay(side){
+  liveDisplayedScore[side] += 1;
+  const scoreEl = el('liveScoreNumbers');
+  if(!scoreEl) return;
+  scoreEl.textContent = `${liveDisplayedScore.home} - ${liveDisplayedScore.away}`;
+  scoreEl.classList.remove('pop');
+  void scoreEl.offsetWidth; // reinicia a animação mesmo em golos seguidos
+  scoreEl.classList.add('pop');
+}
+
+/* Rede de segurança: quando a fila de animações fica mesmo vazia (nada
+   a jogar), garante que o placar corresponde aos dados mais recentes —
+   cobre casos como abrir a página a meio de um jogo já com golos, onde
+   não faz sentido esperar por uma animação que nunca vai correr. */
+function resyncScoreDisplayIfIdle(){
+  if(liveAnimPlaying || liveAnimQueue.length || !liveState) return;
+  if(liveDisplayedScore.home === liveState.home_score && liveDisplayedScore.away === liveState.away_score) return;
+  liveDisplayedScore.home = liveState.home_score;
+  liveDisplayedScore.away = liveState.away_score;
+  const scoreEl = el('liveScoreNumbers');
+  if(scoreEl) scoreEl.textContent = `${liveDisplayedScore.home} - ${liveDisplayedScore.away}`;
+}
 let liveIdleTimer = null;      // ver startLiveIdleMotion — movimento de posse "fantasma" fora dos lances
 let liveIdleZone = { x: 50, y: 50 };
 let liveInstructionsMeta = null; // catálogo de /meta/instructions (labels/dicas), pedido uma única vez
@@ -3897,7 +3927,9 @@ async function openLiveMatch(friendlyId){
     if(!res.ok) throw new Error(data.error || 'Não foi possível carregar o jogo');
     applyLiveState(data, data.events || []);
     startLiveAuto(); // o jogo começa a simular-se sozinho assim que abre — não é preciso clicar em nada
-    startLiveIdleMotion();
+    // Sem posse "fantasma" contínua: fora dos golos/lances de perigo o
+    // campo fica quieto, com as duas equipas na formação e o placar —
+    // só golos/lances usam o campo para animar (ver PRESET_PLAYS).
     loadLiveInstructionsMeta();
   }catch(err){
     el('liveFeed').innerHTML = `<p class="placeholder-text">${err.message}</p>`;
@@ -4399,13 +4431,14 @@ function goalCornersFor(side){
    campo.js: rede a abanar, "GOLO!" a aparecer, e toda a equipa (menos
    o guarda-redes) a correr para a bandeirola de canto mais próxima para
    festejar em grupo. A defesa fica por instantes mais apagada. A única
-   coisa que varia de golo para golo é a JOGADA que leva até aqui (ver
-   GOAL_SEQUENCES mais abaixo), não o festejo em si. ---------- */
+   coisa que varia de golo para golo é a JOGADA pré-definida sorteada
+   (ver PRESET_PLAYS mais abaixo), não o festejo em si. ---------- */
 async function finishGoalOnPitch(ctx){
   const { board, ev, data, teamState, defendState, defendSide } = ctx;
 
   pulseGoalNet(ev.side);
   showGoalFlash();
+  bumpScoreDisplay(ev.side); // só agora o placar avança — ver liveDisplayedScore
 
   defendState.on_pitch.filter((p) => p.category !== 'GR').forEach((p) => tokenClass(p.id, board, 'slump', true));
 
@@ -4445,31 +4478,50 @@ async function finishGoalOnPitch(ctx){
    da linha consoante a distância, e os defesas mais próximos tentam
    fechar a linha de remate. ---------- */
 
-/* Leva um jogador + bola de onde estão até ao último terço, passando por
-   um ponto intermédio — é o "carregar a bola" que faltava e que fazia
-   com que se rematasse sempre da linha média. */
-async function advanceToFinalThird(ctx, carrierId, fromPos, targetSpot){
-  const { board, side } = ctx;
-  const mid = {
-    x: (fromPos.x + targetSpot.x) / 2 + rand(-8, 8),
-    y: (fromPos.y + targetSpot.y) / 2,
-  };
-  const legMs = Math.max(260, Math.min(620, metersBetween(fromPos, mid) * 11));
-  await Promise.all([
-    moveBallLinearField(mid, legMs),
-    moveTokenSmooth(carrierId, board, mid, legMs),
-  ]);
-  const leg2 = Math.max(260, Math.min(620, metersBetween(mid, targetSpot) * 11));
-  await Promise.all([
-    moveBallLinearField(targetSpot, leg2),
-    moveTokenSmooth(carrierId, board, targetSpot, leg2),
-  ]);
-  return targetSpot;
-}
-
 /* O remate propriamente dito: duração proporcional à distância real
    (um tap-in é instantâneo, um remate de 25m demora), curva mais aberta
    nos remates de longe, e o GR a sair à bola. */
+// Igual ao moveBallCurveField, mas SEM passar pelo T() de abrandamento
+// (o replay já define a sua própria velocidade) e cancelável a meio —
+// usado só para a repetição em câmara lenta, que o treinador pode saltar.
+function moveBallCurveRaw(p0, p1, p2, durationMs){
+  const ball = el('livePitchBall');
+  let resolveFn = () => {};
+  const promise = new Promise((resolve) => { resolveFn = resolve; });
+  if(!ball) { resolveFn(); return { promise, cancel(){} }; }
+
+  const s0 = toScreenPct(p0);
+  const s1 = toScreenPct(p1);
+  const s2 = toScreenPct(p2);
+  ball.style.transition = 'none';
+  ball.style.opacity = '1';
+  let rafId = null;
+  let done = false;
+  const start = performance.now();
+
+  function frame(now){
+    if(done) return;
+    const t = Math.min(1, (now - start) / durationMs);
+    ball.style.left = `${(1 - t) * (1 - t) * s0.left + 2 * (1 - t) * t * s1.left + t * t * s2.left}%`;
+    ball.style.top = `${(1 - t) * (1 - t) * s0.top + 2 * (1 - t) * t * s1.top + t * t * s2.top}%`;
+    if(t < 1){ rafId = requestAnimationFrame(frame); } else { done = true; resolveFn(); }
+  }
+  rafId = requestAnimationFrame(frame);
+
+  return {
+    promise,
+    cancel(){
+      if(done) return;
+      done = true;
+      if(rafId) cancelAnimationFrame(rafId);
+      const s = toScreenPct(p2);
+      ball.style.left = `${s.left}%`;
+      ball.style.top = `${s.top}%`;
+      resolveFn();
+    },
+  };
+}
+
 async function strikeAtGoal(ctx, fromPos, opts = {}){
   const { side, board, keeperId } = ctx;
   const target = opts.target || goalTarget(side);
@@ -4485,6 +4537,9 @@ async function strikeAtGoal(ctx, fromPos, opts = {}){
     x: (fromPos.x + target.x) / 2 + rand(-bend, bend),
     y: (fromPos.y + target.y) / 2,
   };
+  // guarda a geometria exata deste remate para a repetição em câmara
+  // lenta que corre a seguir ao festejo (ver playGoalReplay).
+  ctx.lastShot = { fromPos, mid, target, flightMs, side, scorerId: ctx.scorerId };
   await moveBallCurveField(fromPos, mid, target, flightMs);
   return target;
 }
@@ -4574,265 +4629,302 @@ async function attemptTackle(ctx, point, durationMs){
   }, durationMs);
 }
 
-/* ---------- Construção com muitos jogadores ----------
-   Encadeia uma série de passes por vários colegas, subindo o campo a
-   cada toque. A cada passe: o passador acompanha a jogada, o recetor
-   sai para o espaço, e o bloco defensivo inteiro desliza outra vez.
-   Devolve a posição final da bola e quem a tem. */
-async function buildUpChain(ctx, carrierIds, startPos, endDepthPct){
-  const { board, side } = ctx;
-  let ballPos = startPos;
-  let holderId = carrierIds[0];
+/* ================================================================
+   JOGADAS PRÉ-DEFINIDAS (ao estilo do protótipo campo.js) ---------
+   Em vez de calcular posições em tempo real, cada golo/lance de
+   perigo sorteia uma destas 15 coreografias — literalmente as mesmas
+   posições de partida do protótipo campo.js (corner_1..4, contra_1..3,
+   triangulacao_1..4, ensaiada_1..2, cruzamento_1..2) — e teleporta os
+   22 jogadores para lá, tal como o applySetup()/"Reproduzir jogada"
+   do protótipo. Fora destes momentos, o campo fica só com as duas
+   equipas na formação normal (ver renderLivePitch), sem o jogo
+   inteiro a simular-se sozinho.
 
-  placeBallInstant(startPos);
+   Convenção de coordenadas (igual ao campo.js): cx 0→100 da própria
+   baliza até à baliza atacada; cy 0→100 de uma linha lateral à outra.
+   mapCampoToField() converte isto para o referencial do campo vertical
+   usado no resto do dashboard (x=largura, y=profundidade). ---------- */
 
-  const links = Math.min(carrierIds.length - 1, 4);
-  for(let i = 1; i <= links; i += 1){
-    const nextId = carrierIds[i];
-    const progress = i / (links + 1);
-    // ponto de receção: sobe o campo e alterna de corredor, como numa
-    // circulação real (não é uma linha reta até à baliza)
-    const depth = distFromGoal(side, startPos.y) +
-      (endDepthPct - distFromGoal(side, startPos.y)) * progress;
-    const receive = {
-      x: Math.max(8, Math.min(92, 50 + Math.sin(i * 1.9) * rand(16, 30))),
-      y: depthY(side, depth),
-    };
+const BASE_ATTACK = {
+  A1: [6, 50], A2: [22, 18], A3: [22, 38], A4: [22, 62], A5: [22, 82],
+  A6: [45, 22], A7: [45, 40], A8: [45, 60], A9: [45, 78],
+  A10: [65, 38], A11: [65, 62],
+};
+const BASE_DEFEND = {
+  D1: [94, 50], D2: [78, 18], D3: [78, 38], D4: [78, 62], D5: [78, 82],
+  D6: [58, 22], D7: [58, 40], D8: [58, 60], D9: [58, 78],
+  D10: [38, 38], D11: [38, 62],
+};
 
-    // o recetor desloca-se para o espaço enquanto a bola viaja
-    moveTokenSmooth(nextId, board, receive, T(420));
-    defensiveBlock(ctx, receive, T(480));
+const PRESET_PLAYS = [
+  { category: 'corner', header: true, ball: [98.5, 4],
+    attack: { A7: [98, 4], A9: [90, 40], A8: [86, 55], A10: [85, 50], A2: [88, 62], A4: [84, 45], A11: [90, 60], A3: [45, 40], A5: [45, 60], A6: [55, 50] },
+    defend: { D1: [97, 50], D2: [89, 25], D3: [85, 35], D4: [87, 45], D5: [85, 55], D6: [88, 65], D7: [84, 75], D8: [90, 72], D9: [86, 60], D10: [55, 45], D11: [55, 55] } },
+  { category: 'corner', header: true, ball: [98.5, 4],
+    attack: { A7: [98, 4], A6: [90, 12], A9: [88, 45], A10: [85, 55], A8: [84, 42], A2: [87, 65], A11: [90, 60], A4: [85, 48], A3: [45, 40], A5: [45, 60] },
+    defend: { D1: [97, 50], D6: [92, 12], D2: [90, 25], D3: [85, 38], D4: [87, 50], D5: [85, 62], D7: [88, 72], D8: [84, 45], D9: [86, 58], D11: [90, 68], D10: [55, 50] } },
+  { category: 'corner', header: true, ball: [98.5, 4],
+    attack: { A7: [98, 4], A8: [78, 50], A9: [88, 25], A10: [85, 45], A11: [88, 62], A2: [90, 50], A4: [86, 70], A6: [84, 35], A3: [45, 40], A5: [45, 60] },
+    defend: { D1: [97, 50], D2: [90, 25], D3: [85, 38], D4: [87, 58], D5: [85, 68], D6: [85, 50], D7: [88, 30], D8: [90, 45], D9: [86, 62], D10: [55, 50], D11: [55, 60] } },
+  { category: 'corner', header: true, ball: [98.5, 4],
+    attack: { A7: [98, 4], A6: [90, 12], A9: [88, 40], A10: [85, 55], A8: [84, 45], A2: [87, 65], A11: [90, 60], A4: [85, 50], A3: [45, 40], A5: [45, 60] },
+    defend: { D1: [97, 50], D2: [90, 25], D3: [85, 38], D4: [87, 50], D5: [85, 62], D6: [88, 70], D7: [84, 45], D8: [90, 58], D9: [86, 72], D10: [55, 50], D11: [55, 60] } },
 
-    const meters = metersBetween(ballPos, receive);
-    const passMs = Math.max(240, Math.min(620, meters * 13));
-    await moveBallLinearField(receive, passMs);
+  { category: 'contra', header: false, ball: [6, 50],
+    attack: { A1: [6, 50], A3: [18, 45], A10: [45, 42], A11: [45, 58], A6: [38, 50] },
+    defend: { D6: [55, 45], D7: [55, 55], D10: [65, 40], D11: [65, 60], D2: [75, 25], D3: [75, 50], D1: [94, 50] } },
+  { category: 'contra', header: false, ball: [35, 50],
+    attack: { A10: [35, 50], A9: [70, 35], A11: [70, 65], A6: [45, 50] },
+    defend: { D10: [50, 50], D6: [60, 48], D7: [68, 52], D3: [80, 45], D1: [94, 50] } },
+  { category: 'contra', header: false, ball: [30, 15],
+    attack: { A11: [30, 15], A9: [55, 50], A10: [70, 60], A6: [40, 45] },
+    defend: { D2: [55, 15], D6: [60, 45], D7: [65, 55], D10: [75, 40], D11: [75, 60], D3: [80, 50], D1: [94, 50] } },
 
-    // o passador acompanha a jogada em vez de ficar para trás
-    const followPos = {
-      x: Math.max(6, Math.min(94, ballPos.x + (receive.x - ballPos.x) * 0.35)),
-      y: depthY(side, distFromGoal(side, ballPos.y) - rand(3, 7)),
-    };
-    moveTokenSmooth(holderId, board, followPos, T(520));
+  { category: 'triangulacao', header: false, ball: [65, 50],
+    attack: { A8: [65, 50], A10: [78, 45], A9: [70, 66] },
+    defend: { D7: [75, 48], D6: [70, 55], D1: [97, 50], D3: [85, 45] } },
+  { category: 'triangulacao', header: false, ball: [68, 40],
+    attack: { A7: [68, 40], A8: [76, 55], A9: [65, 60], A10: [40, 50] },
+    defend: { D6: [72, 48], D7: [78, 50], D1: [97, 50], D2: [85, 30] } },
+  { category: 'triangulacao', header: false, ball: [70, 55],
+    attack: { A6: [70, 55], A7: [75, 48], A11: [55, 66] },
+    defend: { D6: [74, 52], D3: [82, 50], D4: [85, 65], D1: [97, 50] } },
+  { category: 'triangulacao', header: false, ball: [55, 30],
+    attack: { A7: [55, 30], A8: [60, 55], A6: [65, 45], A10: [80, 60] },
+    defend: { D6: [62, 35], D9: [65, 55], D7: [70, 48], D1: [97, 50], D4: [85, 55] } },
 
-    ballPos = receive;
-    holderId = nextId;
-    await wait(T(70));
+  { category: 'ensaiada', header: false, ball: [70, 50],
+    attack: { A8: [65, 50], A9: [80, 38], A10: [80, 62], A11: [73, 58] },
+    defend: { D6: [78, 46], D7: [78, 50], D8: [78, 54], D2: [85, 25], D3: [85, 75], D1: [97, 50] } },
+  { category: 'ensaiada', header: false, ball: [70, 50],
+    attack: { A8: [70, 50], A9: [82, 40], A11: [82, 60] },
+    defend: { D6: [74, 47], D7: [74, 50], D8: [74, 53], D2: [85, 25], D3: [85, 75], D1: [97, 50] } },
+
+  { category: 'cruzamento', header: true, ball: [70, 90],
+    attack: { A11: [70, 90], A9: [78, 50], A10: [83, 58], A8: [65, 70] },
+    defend: { D5: [75, 85], D4: [85, 52], D3: [83, 60], D1: [97, 50] } },
+  { category: 'cruzamento', header: true, ball: [75, 85],
+    attack: { A11: [75, 85], A9: [85, 45], A10: [80, 55], A8: [60, 70] },
+    defend: { D5: [78, 80], D4: [85, 50], D3: [83, 58], D1: [97, 50] } },
+];
+
+/* cx medido a partir da PRÓPRIA baliza de quem ataca (0) até à baliza
+   adversária (100); cy é a largura (0-100). O 'home' ataca para
+   y=0 no resto do dashboard, o 'away' para y=100 — por isso o cx
+   inverte consoante o lado, e cy passa directamente para x. */
+function mapCampoToField(side, cx, cy){
+  const y = side === 'home' ? (100 - cx) : cx;
+  const x = cy;
+  return { x: Math.max(2, Math.min(98, x)), y: Math.max(1, Math.min(99, y)) };
+}
+
+// GR primeiro, depois defesas, médios e avançados, para a atribuição
+// de papéis (A2..A11 / D2..D11) fazer algum sentido tático.
+function orderedOutfieldIds(teamState){
+  const rank = { DC: 0, MC: 1, PL: 2 };
+  return teamState.on_pitch
+    .filter((p) => p.category !== 'GR')
+    .slice()
+    .sort((a, b) => (rank[a.category] ?? 1) - (rank[b.category] ?? 1) || String(a.id).localeCompare(String(b.id)))
+    .map((p) => p.id);
+}
+
+/* Atribui os 11 jogadores reais de uma equipa aos papéis A1..A11 (ou
+   D1..D11) de uma jogada. `pins` fixa papéis específicos a jogadores
+   específicos — é assim que o marcador e o assistente REAIS acabam a
+   fazer o papel de "finalizador" e "passador" da coreografia, com o
+   resto da equipa a preencher os restantes papéis. */
+function buildRoleMap(teamState, prefix, pins){
+  const map = { ...pins };
+  const used = new Set(Object.values(pins).filter(Boolean));
+  const gk = teamState.on_pitch.find((p) => p.category === 'GR');
+  const gkRole = `${prefix}1`;
+  if(!map[gkRole] && gk){ map[gkRole] = gk.id; used.add(gk.id); }
+  const pool = orderedOutfieldIds(teamState).filter((id) => !used.has(id));
+  let p = 0;
+  for(let n = 2; n <= 11; n += 1){
+    const role = `${prefix}${n}`;
+    if(map[role]) continue;
+    map[role] = pool[p] || null;
+    p += 1;
   }
-
-  return { ballPos, holderId };
+  return map;
 }
 
-/* Escolhe uma cadeia de colegas para a construção, começando pelos mais
-   recuados e acabando perto do marcador — assim a bola sobe mesmo o
-   campo de trás para a frente, passando por muita gente. */
-function buildUpSquad(ctx, links){
-  const { side, teamState, data, scorerId, assisterId } = ctx;
-  const outfield = teamState.on_pitch
-    .filter((p) => p.category !== 'GR' && p.id !== scorerId && p.id !== assisterId)
-    .map((p) => ({ id: p.id, pos: findLiveTokenPosition(p.id, side, data) }))
-    .filter((p) => p.pos)
-    // mais recuado primeiro (maior distância à baliza que se ataca)
-    .sort((a, b) => distFromGoal(side, b.pos.y) - distFromGoal(side, a.pos.y));
-
-  const chain = outfield.slice(0, Math.max(2, links)).map((p) => p.id);
-  if(assisterId) chain.push(assisterId);
-  return chain;
+/* Descobre sozinho quem "tem a bola" no arranque da jogada (o papel
+   mais próximo do ponto de partida) e quem remata (o papel mais
+   adiantado, ou seja, mais perto da baliza adversária) — evita ter de
+   etiquetar isto à mão nas 15 coreografias acima. */
+function inferRoles(preset){
+  const entries = Object.entries(preset.attack);
+  let passer = entries[0][0];
+  let passerDist = Infinity;
+  entries.forEach(([role, [x, y]]) => {
+    const d = Math.hypot(x - preset.ball[0], y - preset.ball[1]);
+    if(d < passerDist){ passerDist = d; passer = role; }
+  });
+  let finisher = null;
+  let bestX = -1;
+  entries.forEach(([role, [x]]) => {
+    if(role === passer) return;
+    if(x > bestX){ bestX = x; finisher = role; }
+  });
+  if(!finisher) finisher = passer;
+  return { passer, finisher };
 }
 
-// Cruzamento: construção por vários jogadores até ao ala, que leva a
-// bola à linha de fundo e cruza; vários colegas atacam a área e toda a
-// defesa recua para a proteger.
-async function seqCruzamento(ctx){
-  const { board, data, side, scorerId, assisterId, teammateIds, scorerPos } = ctx;
-  const wingerId = assisterId || teammateIds[0] || scorerId;
+function placeTokenInstant(playerId, board, fieldPos){
+  const tokenEl = board.querySelector(`.live-token[data-player-id="${playerId}"]`);
+  if(!tokenEl) return;
+  const screen = toScreenPct(fieldPos);
+  tokenEl.style.transition = 'none';
+  tokenEl.style.left = `${screen.left}%`;
+  tokenEl.style.top = `${screen.top}%`;
+  void tokenEl.offsetWidth;
+}
 
-  // construção coletiva até ao meio-campo ofensivo
-  const chain = buildUpSquad(ctx, 3);
-  chain.push(wingerId);
-  const startPos = findLiveTokenPosition(chain[0], side, data) || scorerPos;
-  const built = await buildUpChain(ctx, chain, startPos, AREA.FINAL_THIRD + 6);
+/* Teleporta os 22 jogadores + bola para a coreografia sorteada, tal
+   como applySetup() no protótipo — sem transição, como um corte de
+   câmara para a jogada de perigo. Devolve as posições (já no
+   referencial do campo) do passador e do finalizador. */
+function applyPresetSetup(ctx, preset){
+  const { side, teamState, defendState, board, scorerId, assisterId, keeperId } = ctx;
+  const { passer, finisher } = inferRoles(preset);
 
-  // ala vai à linha de fundo, do lado onde a bola já está
-  const flank = built.ballPos.x >= 50 ? 1 : -1;
-  const wideSpot = { x: 50 + flank * rand(30, 38), y: depthY(side, rand(4, 9)) };
-  defensiveBlock(ctx, wideSpot, T(560));
-  await advanceToFinalThird(ctx, built.holderId, built.ballPos, wideSpot);
-  await attemptTackle(ctx, wideSpot, T(300));
+  const attackPins = { [finisher]: scorerId };
+  if(assisterId && passer !== finisher) attackPins[passer] = assisterId;
+  const defendPins = keeperId ? { D1: keeperId } : {};
 
-  // vários atacantes carregam a área: 1º poste, 2º poste e entrada
-  const headerSpot = {
-    x: 50 - flank * rand(2, 12),
-    y: depthY(side, rand(AREA.SIX_YARD, AREA.PEN_SPOT + 2)),
+  const attackRoles = buildRoleMap(teamState, 'A', attackPins);
+  const defendRoles = buildRoleMap(defendState, 'D', defendPins);
+  ctx.roleMaps = { attack: attackRoles, defend: defendRoles, finisherRole: finisher, passerRole: passer };
+
+  Object.entries(attackRoles).forEach(([role, id]) => {
+    if(!id) return;
+    const [cx, cy] = preset.attack[role] || BASE_ATTACK[role];
+    placeTokenInstant(id, board, mapCampoToField(side, cx, cy));
+  });
+  // as coordenadas de defesa já estão no MESMO referencial do ataque
+  // (a baliza atacada é sempre x=100), por isso usam o 'side' de quem
+  // ataca, não o da própria equipa que defende.
+  Object.entries(defendRoles).forEach(([role, id]) => {
+    if(!id) return;
+    const [cx, cy] = preset.defend[role] || BASE_DEFEND[role];
+    placeTokenInstant(id, board, mapCampoToField(side, cx, cy));
+  });
+
+  placeBallInstant(mapCampoToField(side, preset.ball[0], preset.ball[1]));
+
+  return {
+    finisherPos: mapCampoToField(side, ...(preset.attack[finisher] || BASE_ATTACK[finisher])),
+    passerPos: mapCampoToField(side, ...(preset.attack[passer] || BASE_ATTACK[passer])),
   };
-  const runners = teammateIds.filter((id) => id !== wingerId).slice(0, 3);
-  runners.forEach((id, i) => {
-    moveTokenSmooth(id, board, {
-      x: Math.max(10, Math.min(90, 50 + flank * (i === 0 ? -18 : (i === 1 ? 12 : 0)))),
-      y: depthY(side, [AREA.SIX_YARD - 1, AREA.PEN_SPOT + 1, AREA.PEN_AREA + 2][i]),
-    }, T(520));
-  });
-  moveTokenSmooth(scorerId, board, headerSpot, T(500));
-  defensiveBlock(ctx, headerSpot, T(540));
-  await wait(T(320));
-
-  const crossMid = { x: (wideSpot.x + headerSpot.x) / 2, y: depthY(side, rand(2, 5)) };
-  await moveBallCurveField(wideSpot, crossMid, headerSpot, 620);
-
-  tokenClass(scorerId, board, 'jump', true);
-  await wait(T(190));
-  tokenClass(scorerId, board, 'jump', false);
-
-  await strikeAtGoal(ctx, headerSpot);
 }
 
-// Contra-ataque: saída rápida com 3-4 jogadores a correr em conjunto,
-// com a defesa a recuar em bloco a tentar chegar a tempo.
-async function seqContraAtaque(ctx){
-  const { board, data, side, teammateIds, scorerId, scorerPos } = ctx;
+/* A coreografia em si: a defesa reage à zona de perigo, a bola viaja
+   do passador até ao finalizador (em curva e com cabeceamento nas
+   jogadas de cruzamento/canto, rasteira nas restantes), e remata-se
+   à baliza com o strikeAtGoal já existente (que trata do guarda-redes,
+   da curva do remate, e guarda a jogada para a repetição em câmara
+   lenta). */
+async function playPresetSequence(ctx, preset){
+  const { board, defendSide, scorerId, keeperId } = ctx;
+  const { finisherPos, passerPos } = applyPresetSetup(ctx, preset);
 
-  const chain = buildUpSquad(ctx, 2);
-  chain.push(scorerId);
-  const startPos = findLiveTokenPosition(chain[0], side, data) || scorerPos;
+  if(keeperId) moveTokenSmooth(keeperId, board, keeperHomeSpot(defendSide), 260);
 
-  // colegas acompanham a transição em vários corredores
-  const support = teammateIds.filter((id) => !chain.includes(id)).slice(0, 3);
-  support.forEach((id, i) => {
-    moveTokenSmooth(id, board, {
-      x: Math.max(10, Math.min(90, 50 + (i - 1) * rand(22, 30))),
-      y: depthY(side, rand(AREA.FINAL_THIRD - 4, AREA.FINAL_THIRD + 8)),
-    }, T(900));
-  });
+  defensiveBlock(ctx, finisherPos, T(520));
+  await wait(T(260));
 
-  const built = await buildUpChain(ctx, chain, startPos, AREA.FINAL_THIRD - 2);
-  defensiveBlock(ctx, built.ballPos, T(620));
-
-  const finish = shotSpot(side, SHOT_ZONES[1]);
-  // os apoios entram na área com o portador
-  support.forEach((id, i) => {
-    moveTokenSmooth(id, board, {
-      x: Math.max(10, Math.min(90, finish.x + (i - 1) * rand(12, 20))),
-      y: depthY(side, rand(AREA.SIX_YARD, AREA.PEN_AREA)),
-    }, T(620));
-  });
-  await advanceToFinalThird(ctx, built.holderId, built.ballPos, finish);
-  await attemptTackle(ctx, finish, T(280));
-  defensiveBlock(ctx, finish, T(420));
-  await strikeAtGoal(ctx, finish);
-}
-
-// Triangulação: circulação por vários jogadores à entrada da área,
-// contra um bloco defensivo fechado, terminando num um-dois.
-async function seqTriangulacao(ctx){
-  const { board, data, side, teammateIds, scorerId, scorerPos } = ctx;
-  const wallId = teammateIds[0] || scorerId;
-
-  const chain = buildUpSquad(ctx, 4);
-  const startPos = findLiveTokenPosition(chain[0], side, data) || scorerPos;
-  const built = await buildUpChain(ctx, chain, startPos, AREA.EDGE_D + 8);
-
-  // entrada da área, com o bloco todo a fechar o centro
-  const entry = { x: 50 + rand(-18, 18), y: depthY(side, rand(AREA.PEN_AREA + 1, AREA.EDGE_D + 3)) };
-  const wallUp = { x: entry.x + rand(-18, -9), y: depthY(side, rand(AREA.PEN_AREA, AREA.EDGE_D)) };
-  moveTokenSmooth(wallId, board, wallUp, T(620));
-  moveTokenSmooth(scorerId, board, entry, T(620));
-  defensiveBlock(ctx, entry, T(660));
-  await moveBallLinearField(entry, 600);
-
-  await attemptTackle(ctx, entry, T(300));
-
-  // um-dois a abrir o bloco
-  await moveBallLinearField(wallUp, 320);
-  defensiveBlock(ctx, wallUp, T(360));
-
-  const finish = shotSpot(side, SHOT_ZONES[1]);
-  moveTokenSmooth(scorerId, board, finish, T(400));
-  defensiveBlock(ctx, finish, T(420));
-  await moveBallLinearField(finish, 380);
-
-  await strikeAtGoal(ctx, finish);
-}
-
-// Jogada individual, mas com a equipa a dar opções e a defesa a
-// fechar-lhe o caminho jogador a jogador.
-async function seqSolo(ctx){
-  const { board, side, scorerId, scorerPos, teammateIds } = ctx;
-  placeBallInstant(scorerPos);
-
-  // colegas abrem o campo para arrastar marcações
-  teammateIds.slice(0, 3).forEach((id, i) => {
-    moveTokenSmooth(id, board, {
-      x: Math.max(8, Math.min(92, 50 + (i - 1) * rand(24, 32))),
-      y: depthY(side, rand(AREA.PEN_AREA, AREA.FINAL_THIRD)),
-    }, T(880));
-  });
-
-  const finish = shotSpot(side, Math.random() < 0.6 ? SHOT_ZONES[1] : SHOT_ZONES[2]);
-  let current = scorerPos;
-  const steps = 4;
-
-  for(let i = 0; i < steps; i += 1){
-    const t = (i + 1) / (steps + 1);
-    const next = {
-      x: Math.max(8, Math.min(92, current.x + (finish.x - current.x) * t + rand(-9, 9))),
-      y: current.y + (finish.y - current.y) * (0.38 + i * 0.05),
-    };
-    // todo o bloco reage, e o mais próximo tenta mesmo o desarme
-    defensiveBlock(ctx, next, T(400));
-    const beaten = closestDefendersTo(ctx, next, 1)[0];
-    if(beaten){
-      moveTokenSmooth(beaten.id, board, {
-        x: beaten.pos.x + (next.x - beaten.pos.x) * 0.85,
-        y: beaten.pos.y + (next.y - beaten.pos.y) * 0.85,
-      }, T(340));
+  const samePlayer = Math.abs(passerPos.x - finisherPos.x) < 0.5 && Math.abs(passerPos.y - finisherPos.y) < 0.5;
+  if(!samePlayer){
+    attemptTackle(ctx, finisherPos, T(240));
+    if(preset.header){
+      const mid = { x: (passerPos.x + finisherPos.x) / 2 + rand(-6, 6), y: (passerPos.y + finisherPos.y) / 2 };
+      await moveBallCurveField(passerPos, mid, finisherPos, 640);
+    }else{
+      await moveBallLinearField(finisherPos, 420);
     }
-    const legMs = Math.max(240, Math.min(520, metersBetween(current, next) * 12));
-    await Promise.all([
-      moveBallLinearField(next, legMs),
-      moveTokenSmooth(scorerId, board, next, legMs),
-    ]);
-    current = next;
+  }else{
+    await wait(T(120));
   }
 
-  await Promise.all([
-    moveBallLinearField(finish, 320),
-    moveTokenSmooth(scorerId, board, finish, 320),
-  ]);
-  defensiveBlock(ctx, finish, T(360));
-  await strikeAtGoal(ctx, finish);
-}
-
-// Remate de fora: muita circulação a puxar o bloco de um lado para o
-// outro até abrir espaço para o pontapé.
-async function seqRemateDeFora(ctx){
-  const { board, data, side, scorerId, scorerPos } = ctx;
-
-  const chain = buildUpSquad(ctx, 4);
-  chain.push(scorerId);
-  const startPos = findLiveTokenPosition(chain[0], side, data) || scorerPos;
-  const built = await buildUpChain(ctx, chain, startPos, AREA.EDGE_D + 10);
-
-  const spot = shotSpot(side, SHOT_ZONES[3]);
-  moveTokenSmooth(scorerId, board, spot, T(520));
-  defensiveBlock(ctx, spot, T(560));
-  await moveBallLinearField(spot, 460);
-
-  // alguém sai à pressão, mas tarde
-  await attemptTackle(ctx, spot, T(340));
-  await wait(T(120));
-  await strikeAtGoal(ctx, spot);
-}
-const GOAL_SEQUENCES = [seqCruzamento, seqContraAtaque, seqTriangulacao, seqSolo, seqRemateDeFora];
-let lastGoalSequenceIndex = -1;
-
-function pickGoalSequence(){
-  let idx = Math.floor(Math.random() * GOAL_SEQUENCES.length);
-  if(GOAL_SEQUENCES.length > 1 && idx === lastGoalSequenceIndex){
-    idx = (idx + 1) % GOAL_SEQUENCES.length;
+  if(preset.header){
+    tokenClass(scorerId, board, 'jump', true);
+    await wait(T(190));
+    tokenClass(scorerId, board, 'jump', false);
   }
-  lastGoalSequenceIndex = idx;
-  return GOAL_SEQUENCES[idx];
+
+  await strikeAtGoal(ctx, finisherPos);
 }
 
+let lastPresetIndex = -1;
+function pickPreset(){
+  let idx = Math.floor(Math.random() * PRESET_PLAYS.length);
+  if(PRESET_PLAYS.length > 1 && idx === lastPresetIndex){
+    idx = (idx + 1) % PRESET_PLAYS.length;
+  }
+  lastPresetIndex = idx;
+  return PRESET_PLAYS[idx];
+}
+/* ---------- Repetição em câmara lenta ----------
+   Depois do festejo, repete só o remate (a parte que interessa ver bem)
+   em câmara lenta, com o campo a ganhar um tom mais escuro/contrastado
+   (ver .live-pitch-board.replay-active em dashboard.css) e um botão
+   para saltar a repetição a qualquer momento. */
+function showReplayControls(onSkip){
+  const banner = el('liveReplayBanner');
+  const skipBtn = el('liveReplaySkipBtn');
+  if(!banner || !skipBtn) return () => {};
+  banner.classList.remove('hidden');
+  const handler = () => onSkip();
+  skipBtn.addEventListener('click', handler);
+  return () => {
+    banner.classList.add('hidden');
+    skipBtn.removeEventListener('click', handler);
+  };
+}
+
+async function playGoalReplay(shot){
+  if(!shot) return;
+  const pitchBoard = el('livePitchBoard');
+  const ball = el('livePitchBall');
+  const idleBall = el('livePitchIdleBall');
+  if(!ball) return;
+
+  await wait(320); // pequena pausa depois do festejo, antes de "voltar atrás"
+
+  if(pitchBoard) pitchBoard.classList.add('replay-active');
+  placeBallInstant(shot.fromPos);
+
+  const scorerToken = document.querySelector(`.live-token[data-player-id="${shot.scorerId}"]`);
+  if(scorerToken){
+    scorerToken.classList.remove('kick-pulse');
+    void scorerToken.offsetWidth;
+    scorerToken.classList.add('kick-pulse');
+  }
+
+  // câmara lenta: quase 3x mais devagar do que o remate real, com um
+  // teto para nunca se tornar arrastado mesmo em remates de longe.
+  const slowMs = Math.max(1500, Math.min(3200, shot.flightMs * 2.8));
+  const mover = moveBallCurveRaw(shot.fromPos, shot.mid, shot.target, slowMs);
+
+  let skipped = false;
+  const hideControls = showReplayControls(() => {
+    skipped = true;
+    mover.cancel();
+  });
+
+  await mover.promise;
+  hideControls();
+
+  if(!skipped) pulseGoalNet(shot.side);
+  await wait(skipped ? 60 : 260);
+
+  if(pitchBoard) pitchBoard.classList.remove('replay-active');
+  ball.style.opacity = '0';
+  if(idleBall) idleBall.style.opacity = '.85';
+}
 async function playGoalSequence(ev, data){
   const board = el('livePitchTokens');
   const ball = el('livePitchBall');
@@ -4842,46 +4934,23 @@ async function playGoalSequence(ev, data){
   const defendSide = side === 'home' ? 'away' : 'home';
   const teamState = data[side];
   const defendState = data[defendSide];
-  const scorerId = ev.player_id;
-  const scorerPos = findLiveTokenPosition(scorerId, side, data);
-  if(!scorerPos) return;
-
-  const teammateIds = teamState.on_pitch
-    .filter((p) => p.category !== 'GR' && p.id !== scorerId && p.id !== ev.assister_id)
-    .map((p) => p.id)
-    .sort(() => Math.random() - 0.5);
-  if(ev.assister_id) teammateIds.unshift(ev.assister_id);
-  const defenderIds = defendState.on_pitch.filter((p) => p.category !== 'GR').map((p) => p.id).sort(() => Math.random() - 0.5);
   const keeper = defendState.on_pitch.find((p) => p.category === 'GR');
 
   const idleBall = el('livePitchIdleBall');
   if(idleBall) idleBall.style.opacity = '0';
 
-  // O GR começa o lance em cima da própria linha, não no slot da
-  // formação — é de lá que depois sai à bola em strikeAtGoal.
-  if(keeper) moveTokenSmooth(keeper.id, board, keeperHomeSpot(defendSide), 300);
-
   const ctx = {
     ev, data, board, side, defendSide, teamState, defendState,
-    scorerId, assisterId: ev.assister_id || null, teammateIds, defenderIds,
+    scorerId: ev.player_id, assisterId: ev.assister_id || null,
     keeperId: keeper ? keeper.id : null,
-    scorerPos, goalMouth: liveGoalMouthFor(side),
+    goalMouth: liveGoalMouthFor(side),
   };
 
   try{
-    // O bloco inteiro (10 jogadores de cada lado) reage à jogada como
-    // numa fase de ataque real — atacantes sobem, defesas recuam e
-    // fecham o centro — enquanto os intervenientes da coreografia
-    // sorteada (ver abaixo) fazem o movimento específico por cima.
-    // Com a construção a passar por vários jogadores, a jogada é bem mais
-    // longa — o bloco tem de aguentar a posição até ao fim, senão os
-    // bonecos saltavam de volta à formação a meio do lance.
-    playOrganizedMovement(ev, data, scorerPos, ctx.goalMouth, defendSide, T(7000), T(1000));
+    const preset = pickPreset();
+    await playPresetSequence(ctx, preset);
 
-    const sequence = pickGoalSequence();
-    await sequence(ctx);
-
-    const attackerToken = board.querySelector(`.live-token[data-player-id="${scorerId}"]`);
+    const attackerToken = board.querySelector(`.live-token[data-player-id="${ctx.scorerId}"]`);
     if(attackerToken){
       attackerToken.classList.remove('kick-pulse');
       void attackerToken.offsetWidth;
@@ -4889,56 +4958,45 @@ async function playGoalSequence(ev, data){
     }
 
     await finishGoalOnPitch(ctx);
+    await playGoalReplay(ctx.lastShot);
   } finally {
     ball.style.opacity = '0';
     if(idleBall) idleBall.style.opacity = '.85';
+    renderLivePitch(data); // repõe as duas equipas na formação normal fora do lance
   }
 }
 
 /* ---------- Lances sem golo (defesa, corte, para fora, ao poste) ----------
-   Usa a mesma geometria real das jogadas de golo: o atacante leva a bola
-   ao último terço e remata de uma zona plausível. O que muda é o
-   desfecho — o GR defende, um defesa corta, ou a bola sai ao lado. */
+   Sorteia a MESMA biblioteca de jogadas pré-definidas; o que muda é só
+   o desfecho — o GR defende, um defesa corta, ou a bola sai ao lado. */
 async function playLiveChanceAnimation(ev, data){
   const board = el('livePitchTokens');
   const ball = el('livePitchBall');
-  if(!board || !ball) return wait(400);
+  if(!board || !ball || !ev.player_id) return wait(400);
 
   const side = ev.side;
   const defendSide = side === 'home' ? 'away' : 'home';
-  const origin = findLiveTokenPosition(ev.player_id, side, data);
-  if(!origin) return wait(200); // jogador já não está em campo — sem animação
-
   const teamState = data[side];
   const defendState = data[defendSide];
+
   const ctx = {
     ev, data, board, side, defendSide, teamState, defendState,
     scorerId: ev.player_id, assisterId: ev.assister_id || null,
     keeperId: ev.keeper_id || null,
-    scorerPos: origin, goalMouth: liveGoalMouthFor(side),
+    goalMouth: liveGoalMouthFor(side),
   };
 
   const idleBall = el('livePitchIdleBall');
   if(idleBall) idleBall.style.opacity = '0';
 
-  // remates bloqueados nascem tipicamente mais perto; os que saem ao
-  // lado, de zonas mais abertas.
-  const zone = ev.outcome === 'blocked' ? SHOT_ZONES[1]
-    : (ev.outcome === 'saved' ? null : SHOT_ZONES[2]);
-  const spot = shotSpot(side, zone);
-
-  playOrganizedMovement(ev, data, origin, spot, defendSide, T(3400), T(900));
-
   try{
-    // construção com vários jogadores também nos lances sem golo
-    const chain = buildUpSquad(ctx, 2);
-    chain.push(ev.player_id);
-    const startPos = findLiveTokenPosition(chain[0], side, data) || origin;
-    const built = await buildUpChain(ctx, chain, startPos, AREA.FINAL_THIRD);
-    defensiveBlock(ctx, built.ballPos, T(560));
-    await advanceToFinalThird(ctx, built.holderId, built.ballPos, spot);
-    defensiveBlock(ctx, spot, T(460));
-    await attemptTackle(ctx, spot, T(300));
+    const preset = pickPreset();
+    const { finisherPos } = applyPresetSetup(ctx, preset);
+
+    if(ctx.keeperId) moveTokenSmooth(ctx.keeperId, board, keeperHomeSpot(defendSide), 260);
+    defensiveBlock(ctx, finisherPos, T(480));
+    await wait(T(220));
+    await attemptTackle(ctx, finisherPos, T(260));
 
     const attackerToken = board.querySelector(`.live-token[data-player-id="${ev.player_id}"]`);
     if(attackerToken){
@@ -4949,10 +5007,10 @@ async function playLiveChanceAnimation(ev, data){
 
     if(ev.outcome === 'blocked'){
       // um defesa atira-se à frente e corta o remate
-      const blocker = closestDefendersTo(ctx, spot, 1)[0];
+      const blocker = closestDefendersTo(ctx, finisherPos, 1)[0];
       const blockPoint = blocker
-        ? { x: (spot.x + blocker.pos.x) / 2, y: (spot.y + blocker.pos.y) / 2 }
-        : { x: spot.x, y: depthY(side, distFromGoal(side, spot.y) - 4) };
+        ? { x: (finisherPos.x + blocker.pos.x) / 2, y: (finisherPos.y + blocker.pos.y) / 2 }
+        : { x: finisherPos.x, y: depthY(side, distFromGoal(side, finisherPos.y) - 4) };
       if(blocker) moveTokenSmooth(blocker.id, board, blockPoint, 260);
       await moveBallLinearField(blockPoint, 280);
       // ressalta para fora da área
@@ -4961,11 +5019,10 @@ async function playLiveChanceAnimation(ev, data){
         { x: Math.max(6, Math.min(94, blockPoint.x + rand(-22, 22))), y: depthY(side, distFromGoal(side, blockPoint.y) + 17) },
         420);
     } else if(ev.outcome === 'saved'){
-      const keeperPos = ev.keeper_id ? findLiveTokenPosition(ev.keeper_id, defendSide, data) : null;
-      const target = keeperPos ? keeperRushSpot(side, spot) : goalTarget(side);
-      if(ev.keeper_id) moveTokenSmooth(ev.keeper_id, board, target, 320);
-      await strikeAtGoal(ctx, spot, { target });
-      const keeperToken = board.querySelector(`.live-token[data-player-id="${ev.keeper_id}"]`);
+      const target = ctx.keeperId ? keeperRushSpot(side, finisherPos) : goalTarget(side);
+      if(ctx.keeperId) moveTokenSmooth(ctx.keeperId, board, target, 320);
+      await strikeAtGoal(ctx, finisherPos, { target });
+      const keeperToken = board.querySelector(`.live-token[data-player-id="${ctx.keeperId}"]`);
       if(keeperToken){
         keeperToken.classList.remove('save-pulse');
         void keeperToken.offsetWidth;
@@ -4978,8 +5035,8 @@ async function playLiveChanceAnimation(ev, data){
         380);
     } else {
       // ao lado / à trave: passa perto do poste e sai pela linha de fundo
-      const post = 50 + (spot.x >= 50 ? 1 : -1) * rand(HALF_W.GOAL, HALF_W.GOAL + 6);
-      await strikeAtGoal(ctx, spot, { target: { x: post, y: depthY(side, rand(-3, 0)) } });
+      const post = 50 + (finisherPos.x >= 50 ? 1 : -1) * rand(HALF_W.GOAL, HALF_W.GOAL + 6);
+      await strikeAtGoal(ctx, finisherPos, { target: { x: post, y: depthY(side, rand(-3, 0)) } });
     }
   } finally {
     ball.style.opacity = '0';
@@ -4997,10 +5054,14 @@ function queueLiveAnimations(newEvents, data){
     if((ev.kind === 'goal' || ev.kind === 'chance') && ev.player_id) liveAnimQueue.push({ ev, data });
   });
   playNextLiveAnimation();
+  resyncScoreDisplayIfIdle(); // não havia nada para animar desta vez — sincroniza já
 }
 
 function playNextLiveAnimation(){
-  if(liveAnimPlaying || !liveAnimQueue.length) return;
+  if(liveAnimPlaying || !liveAnimQueue.length){
+    resyncScoreDisplayIfIdle();
+    return;
+  }
   liveAnimPlaying = true;
   const { ev, data } = liveAnimQueue.shift();
   Promise.resolve(playLiveBallAnimation(ev, data)).then(() => {
@@ -5079,7 +5140,6 @@ function stepLiveIdleMotion(){
 function applyLiveState(data, newEvents){
 
 
-  const prevScoreText = liveState ? `${liveState.home_score} - ${liveState.away_score}` : null;
   liveState = data;
   liveMySide = data.home.is_user ? 'home' : (data.away.is_user ? 'away' : null);
 
@@ -5088,14 +5148,18 @@ function applyLiveState(data, newEvents){
   el('liveHomeTeam').textContent = data.home.team_name;
   el('liveAwayTeam').textContent = data.away.team_name;
 
-  const scoreText = `${data.home_score} - ${data.away_score}`;
-  const scoreEl = el('liveScoreNumbers');
-  scoreEl.textContent = scoreText;
-  if(prevScoreText !== null && prevScoreText !== scoreText){
-    scoreEl.classList.remove('pop');
-    void scoreEl.offsetWidth; // reinicia a animação mesmo em golos seguidos
-    scoreEl.classList.add('pop');
+  /* O placar visível só avança quando a animação do golo chega ao
+     "GOLO!" (ver bumpScoreDisplay, chamado de dentro de
+     finishGoalOnPitch) — nunca aqui. Antes disto, o número mudava
+     assim que os dados chegavam do servidor, ainda antes de a bola
+     sequer começar a andar no ecrã. Se for a primeira vez que a página
+     carrega, não há nada para animar, por isso sincroniza-se logo. */
+  if(!liveScoreInitialized){
+    liveDisplayedScore.home = data.home_score;
+    liveDisplayedScore.away = data.away_score;
+    liveScoreInitialized = true;
   }
+  el('liveScoreNumbers').textContent = `${liveDisplayedScore.home} - ${liveDisplayedScore.away}`;
 
   el('liveMinute').textContent = data.status === 'finished' ? 'Fim' : `${data.minute}'`;
   el('liveProgressFill').style.width = `${Math.min(100, (data.minute / 90) * 100)}%`;

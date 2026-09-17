@@ -577,7 +577,37 @@ function buildSchedule(homeState, awayState, fromMinute = 0) {
       const wasteCount = Math.max(0, Math.round(2 * remainingFraction));
       for (let i = 0; i < wasteCount; i += 1) events.push({ minute: minuteInRange(), type: 'time_waste', side });
     }
+
+    /* ---------- Fora de jogo — mais frequente em posturas mais verticais
+       (atacante / contra-ataque), que arriscam mais a última linha. ---------- */
+    const offsideBase = 1 + (attackMentality === 'atacante' ? 1 : 0) + (attackMentality === 'contra_ataque' ? 0.5 : 0);
+    const offsideCount = Math.max(0, Math.round(offsideBase * remainingFraction)) + (Math.random() < 0.4 ? 1 : 0);
+    for (let i = 0; i < offsideCount; i += 1) events.push({ minute: minuteInRange(), type: 'offside', side });
+
+    /* ---------- Faltas sem cartão — textura extra, sobem com a pressão alta
+       (mesma ideia do pressFatigue usado acima para os amarelos). ---------- */
+    const foulBase = 2 + Math.round(Math.max(0, (ownTactics.pressing - 50) / 100) * 3);
+    const foulCount = Math.max(0, Math.round(foulBase * remainingFraction)) + Math.floor(Math.random() * 2);
+    for (let i = 0; i < foulCount; i += 1) events.push({ minute: minuteInRange(), type: 'foul', side });
+
+    /* ---------- Lesões — raras, uma ou nenhuma por equipa na maioria dos jogos ---------- */
+    if (Math.random() < 0.5 * remainingFraction) events.push({ minute: minuteInRange(), type: 'injury', side });
+
+    /* ---------- Revisão VAR — muito rara, no máximo uma por equipa ---------- */
+    if (Math.random() < 0.18 * remainingFraction) events.push({ minute: minuteInRange(), type: 'var_check', side });
   });
+
+  /* ---------- Ambiente / bancada — não pertence a nenhuma equipa em
+     particular, por isso é gerado uma única vez para o jogo todo (não
+     dentro do forEach por lado), com mais probabilidade perto do fim. */
+  const atmosphereCount = 1 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < atmosphereCount; i += 1) {
+    const lateBias = Math.random() < 0.6;
+    const minute = lateBias
+      ? Math.max(1, MATCH_LENGTH - Math.floor(Math.random() * 20))
+      : minuteInRange();
+    events.push({ minute, type: 'atmosphere', side: Math.random() < 0.5 ? 'home' : 'away' });
+  }
 
   events.sort((a, b) => a.minute - b.minute);
   return events;
@@ -610,24 +640,214 @@ const GOAL_TEMPLATES_SOLO = [
   (a) => `⚽ Belo remate de ${a.scorer} — o ${a.team} chega ao golo!`,
 ];
 
+/* ---------- Golos de canto (sempre com assistência do batedor) ---------- */
+const GOAL_TEMPLATES_CORNER = [
+  (a) => `⚽ Golo de canto! ${a.assister} bate ao segundo poste e ${a.scorer} cabeceia para o fundo da baliza — festa do ${a.team}!`,
+  (a) => `⚽ ${a.scorer} aparece na área a cabecear o canto batido por ${a.assister} — golo do ${a.team}!`,
+  (a) => `⚽ Bola parada com perigo: canto de ${a.assister}, ${a.scorer} antecipa-se a todos e marca para o ${a.team}.`,
+  (a) => `⚽ Confusão na área após o canto de ${a.assister} — ${a.scorer} aparece livre e não perdoa, golo do ${a.team}!`,
+];
+
+/* ---------- Golos de cabeça em jogo corrido (cruzamento, não canto) ---------- */
+const GOAL_TEMPLATES_HEADER = [
+  (a) => `⚽ Cabeceamento certeiro de ${a.scorer}! Cruzamento de ${a.assister}, golo do ${a.team}.`,
+  (a) => `⚽ Golo de cabeça do ${a.team}: ${a.scorer} salta mais alto do que a defesa e desvia o cruzamento de ${a.assister} para dentro.`,
+  (a) => `⚽ ${a.assister} cruza tenso para a área e ${a.scorer} cabeceia sem hipóteses para o guarda-redes — golo do ${a.team}!`,
+];
+const GOAL_TEMPLATES_HEADER_SOLO = [
+  (a) => `⚽ ${a.scorer} cabeceia na sequência de um ressalto na área e marca para o ${a.team}!`,
+];
+
+/* ---------- Golos construídos com muitos passes / triangulações ---------- */
+const GOAL_TEMPLATES_BUILDUP = [
+  (a) => `⚽ Jogada construída com muitos passes e triangulações! Depois de uma bela troca de bola, ${a.assister} encontra ${a.scorer}, que não perdoa — golo do ${a.team}!`,
+  (a) => `⚽ Lance de bilhar entre vários jogadores do ${a.team}: ${a.assister} serve ${a.scorer} de forma primorosa para fechar a jogada em golo.`,
+  (a) => `⚽ Golo construído com paciência — sucessivas triangulações até ${a.assister} encontrar ${a.scorer} na área para o golo do ${a.team}.`,
+  (a) => `⚽ Lance longo, com o ${a.team} a trocar a bola de um lado ao outro sem pressa, até ${a.assister} lançar ${a.scorer} para o golo.`,
+];
+
+/* ---------- Golos resultantes de erro do adversário (defesa ou guarda-redes) ---------- */
+const GOAL_TEMPLATES_OPPONENT_ERROR = [
+  (a) => `⚽ Erro incrível da defesa do ${a.oppTeam}! ${a.scorer} aproveita a prenda e não perdoa — golo do ${a.team}.`,
+  (a) => `⚽ Perda de bola incompreensível do ${a.oppTeam} junto à própria área — ${a.scorer} aproveita e marca para o ${a.team}.`,
+  (a) => `⚽ O guarda-redes do ${a.oppTeam} falha o encaixe da bola e ${a.scorer} só tem de empurrar para a baliza vazia — golo do ${a.team}!`,
+  (a) => `⚽ Recuo mal medido da defesa do ${a.oppTeam} apanha o guarda-redes desprevenido — ${a.scorer} não perdoa, golo do ${a.team}.`,
+];
+
+/* ---------- Golos acrobáticos (raros) ---------- */
+const GOAL_TEMPLATES_ACROBATIC = [
+  (a) => `⚽🤯 GOLO FANTÁSTICO! ${a.scorer} atira-se ao chão num pontapé de bicicleta espetacular — o ${a.team} está em êxtase!`,
+  (a) => `⚽🤯 Que golo de ${a.scorer}! Remate acrobático em pleno ar, de costas para a baliza — vai ficar na memória dos adeptos do ${a.team}!`,
+  (a) => `⚽🤯 Obra de arte de ${a.scorer}: recorte e meio-voleio em suspensão, a bola morre no fundo da baliza — golo do ${a.team}!`,
+];
+const GOAL_TEMPLATES_ACROBATIC_ASSISTED = [
+  (a) => `⚽🤯 Golo do campeonato? ${a.assister} cruza e ${a.scorer} atira-se num pontapé de bicicleta acrobático — golo espetacular do ${a.team}!`,
+  (a) => `⚽🤯 ${a.assister} levanta a bola na área e ${a.scorer} resolve com um violento voleio em suspensão — golo de antologia do ${a.team}!`,
+];
+
+/* ---------- Golos de grande penalidade ----------
+   Não altera a decisão de quem sofre a falta na área nem cria um evento
+   próprio no marcador — é só o "como" de um golo já decidido, com a
+   flavor certa (cobrança fria, panenka, etc). ${a.fouled} é o jogador
+   que sofreu a falta; normalmente diferente do marcador, mas pode
+   coincidir (o mesmo jogador sofre e marca). Grande penalidade não
+   conta assistência nas estatísticas — é só narrativa. */
+const GOAL_TEMPLATES_PENALTY = [
+  (a) => `⚽ Grande penalidade! ${a.fouled} foi derrubado na área e ${a.scorer} não desperdiça da marca dos onze metros — golo do ${a.team}!`,
+  (a) => `⚽ Pontapé de saída da marca de grande penalidade: ${a.scorer} engana o guarda-redes e faz o golo do ${a.team}.`,
+  (a) => `⚽ Sem hipóteses para o guarda-redes! ${a.scorer} converte a grande penalidade com frieza — golo do ${a.team}.`,
+  (a) => `⚽ Golo à Panenka! ${a.scorer} arrisca a cavadinha da marca de grande penalidade e acerta — o ${a.team} delira!`,
+];
+
+/* ---------- Golos de fora da área (remate de longa distância) ---------- */
+const GOAL_TEMPLATES_LONG_RANGE = [
+  (a) => `⚽ GOLAÇO! ${a.scorer} atira de longe, sem contemplações, e a bola vai parar ao ângulo — golo do ${a.team}!`,
+  (a) => `⚽ ${a.scorer} não pensa duas vezes e arrisca de fora da área — bola entra rasteira, sem hipóteses para o guarda-redes, golo do ${a.team}!`,
+  (a) => `⚽ Pontapé colocado de longa distância por ${a.scorer} — golo espetacular do ${a.team}!`,
+];
+
+/* ---------- Golos de livre direto ---------- */
+const GOAL_TEMPLATES_FREE_KICK = [
+  (a) => `⚽ Livre direto perfeito de ${a.scorer}! A bola contorna a barreira e entra no ângulo — golo do ${a.team}!`,
+  (a) => `⚽ ${a.scorer} coloca a bola por cima da barreira com um efeito soberbo — golo de livre direto do ${a.team}!`,
+  (a) => `⚽ Cobrança de falta de ${a.scorer} que faz a bola dançar até ao fundo da baliza — golo do ${a.team}!`,
+];
+
+/* ---------- Golos de ressalto (segunda bola após defesa do guarda-redes) ---------- */
+const GOAL_TEMPLATES_REBOUND = [
+  (a) => `⚽ Ressalto na área! O guarda-redes adversário afasta o primeiro remate, mas ${a.scorer} está atento e empurra para dentro — golo do ${a.team}!`,
+  (a) => `⚽ Bola volta a sobrar após a defesa do guarda-redes e ${a.scorer} não perdoa na recarga — golo do ${a.team}!`,
+  (a) => `⚽ Segunda bola mal aliviada pela defesa cai nos pés de ${a.scorer}, que finaliza sem hesitar — golo do ${a.team}!`,
+];
+
+/* ---------- Nota extra quando quem marca é um jogador defensivo ----------
+   Situação rara o suficiente para merecer destaque próprio no comentário,
+   seja qual for o estilo do golo (canto, cabeça, jogada construída, etc). */
+const DEFENDER_GOAL_EXTRA = [
+  ' Um defesa a decidir a partida!',
+  ' Raro golo de um jogador defensivo — mas conta a dobrar em festa!',
+  ' A defesa também sabe finalizar quando é preciso!',
+  ' Golo de quem normalmente está lá atrás a defender — noite especial!',
+];
+
+/* ---------- Nota extra para bisos, hat-tricks e pokers ----------
+   scorer.goals já vem incrementado quando isto é usado, por isso 2
+   é o segundo golo do jogador na partida, 3 o terceiro, etc. */
+const MULTI_GOAL_EXTRA = {
+  2: [
+    ' Bisou! Segundo golo de {name} na partida.',
+    ' {name} está em grande noite — já vai no segundo golo!',
+  ],
+  3: [
+    ' HAT-TRICK! {name} fecha o chapéu com o terceiro golo da partida!',
+    ' Três golos de {name} nesta partida — noite mágica!',
+  ],
+  4: [
+    ' Póquer de {name}! Já são quatro golos na partida!',
+  ],
+};
+
+/* ---------- Estilo do golo — sorteado por peso (não precisa somar 100) ----------
+   Isto dá textura ao feed sem mudar a frequência total de golos já
+   decidida em rollGoalsFromLambda: só decide COMO cada golo aconteceu. */
+const GOAL_STYLE_WEIGHTS = [
+  { key: 'normal', weight: 30 },
+  { key: 'corner', weight: 11 },
+  { key: 'header', weight: 9 },
+  { key: 'buildup', weight: 14 },
+  { key: 'opponent_error', weight: 9 },
+  { key: 'penalty', weight: 8 },
+  { key: 'long_range', weight: 8 },
+  { key: 'free_kick', weight: 4 },
+  { key: 'rebound', weight: 6 },
+  { key: 'acrobatic', weight: 3 },
+];
+function pickGoalStyle() {
+  const total = GOAL_STYLE_WEIGHTS.reduce((sum, o) => sum + o.weight, 0);
+  let roll = Math.random() * total;
+  for (const o of GOAL_STYLE_WEIGHTS) {
+    roll -= o.weight;
+    if (roll <= 0) return o.key;
+  }
+  return 'normal';
+}
+
 const CHANCE_OUTCOME_TEMPLATES = {
   saved: [
     (a) => `🧤 Grande defesa de ${a.keeper} a negar o golo a ${a.attacker} (${a.team}).`,
     (a) => `🧤 ${a.keeper} evita o pior e defende o remate perigoso de ${a.attacker} (${a.team}).`,
+    (a) => `🧤 Reflexo felino de ${a.keeper}! Desvia para canto o remate colocado de ${a.attacker} (${a.team}).`,
+    (a) => `🧤 Frente a frente com ${a.attacker} (${a.team}), ${a.keeper} sai bem e fecha o ângulo — grande defesa!`,
+    (a) => `🧤 ${a.keeper} soca a bola para longe da área, negando o golo a ${a.attacker} (${a.team}).`,
+    (a) => `🧤 Defesa espetacular de ${a.keeper}! Estica-se todo para desviar o remate forte de ${a.attacker} (${a.team}).`,
   ],
   off_target: [
     (a) => `🎯 ${a.attacker} (${a.team}) desperdiça boa oportunidade, atira para fora.`,
     (a) => `🎯 Remate de ${a.attacker} (${a.team}) sai muito por cima da baliza.`,
+    (a) => `🎯 ${a.attacker} (${a.team}) atrasa-se na decisão e o remate sai fraco, bem por fora.`,
+    (a) => `🎯 Grande oportunidade desperdiçada! ${a.attacker} (${a.team}) atira ao lado com a baliza escancarada.`,
   ],
   blocked: [
-    (a) => `🛡️ A defesa do ${a.defTeam} corta em cima da linha e evita o golo de ${a.attacker}.`,
-    (a) => `🛡️ Bloqueio decisivo da defesa do ${a.defTeam} ao remate de ${a.attacker}.`,
+    (a) => `🛡️ ${a.defender} corta em cima da linha e evita o golo de ${a.attacker} (${a.team}).`,
+    (a) => `🛡️ Bloqueio decisivo de ${a.defender} ao remate de ${a.attacker} (${a.team}).`,
+    (a) => `🛡️ Grande desarme de ${a.defender}, que chega primeiro à bola e afasta o perigo do remate de ${a.attacker} (${a.team}).`,
+    (a) => `🛡️ ${a.defender} atira-se ao chão para cortar o remate de ${a.attacker} (${a.team}) já dentro da área.`,
+    (a) => `🛡️ Corte impecável de ${a.defender} tira a bola dos pés de ${a.attacker} (${a.team}) na hora do remate.`,
   ],
-  woodwork: [
-    (a) => `🥅 Na trave! ${a.attacker} (${a.team}) acerta na madeira, a bola não entra por centímetros.`,
-    (a) => `🥅 O poste nega o golo a ${a.attacker} (${a.team})!`,
+  crossbar: [
+    (a) => `🥅 Na trave! O remate de ${a.attacker} (${a.team}) bate no travessão e sai.`,
+    (a) => `🥅 O travessão nega o golo a ${a.attacker} (${a.team}) — a bola bate com um estrondo na madeira!`,
+  ],
+  post: [
+    (a) => `🥅 No poste! ${a.attacker} (${a.team}) acerta na madeira, a bola não entra por centímetros.`,
+    (a) => `🥅 O poste salva o ${a.defTeam}! Remate perigoso de ${a.attacker} bate no ferro e sai.`,
+  ],
+  penalty_missed: [
+    (a) => `❌ Grande penalidade desperdiçada! ${a.keeper} adivinha o canto e defende o remate de ${a.attacker} (${a.team}).`,
+    (a) => `❌ ${a.attacker} (${a.team}) atira a grande penalidade para fora — falha incrível da marca dos onze metros!`,
+    (a) => `❌ ${a.attacker} (${a.team}) bate a grande penalidade no poste — a sorte não sorri ao ${a.team}.`,
   ],
 };
+
+/* ---------- Fora de jogo (textura, sem afetar o marcador) ---------- */
+const OFFSIDE_TEMPLATES = [
+  (a) => `🚩 Fora de jogo assinalado a ${a.attacker} (${a.team}) — o lance ia a ficar perigoso.`,
+  (a) => `🚩 O assistente de bandeira levanta a bandeirola: ${a.attacker} (${a.team}) estava fora de jogo.`,
+  (a) => `🚩 Golo anulado por fora de jogo! ${a.attacker} (${a.team}) tinha marcado, mas o lance é invalidado.`,
+  (a) => `🚩 ${a.attacker} (${a.team}) sai em fuga para a baliza, mas a bandeirola já estava levantada.`,
+];
+
+/* ---------- Faltas sem cartão (textura, sem afetar o marcador) ---------- */
+const FOUL_TEMPLATES = [
+  (a) => `⚠️ Falta de ${a.defender} sobre ${a.attacker} — o árbitro manda parar o jogo.`,
+  (a) => `⚠️ Falta dura de ${a.defender} (${a.team}) — o árbitro chama a atenção, mas não mostra cartão.`,
+  (a) => `⚠️ Falta tática de ${a.defender} (${a.team}) para cortar o contra-ataque adversário.`,
+  (a) => `⚠️ Entrada atrasada de ${a.defender} (${a.team}) sobre ${a.attacker} — falta assinalada.`,
+];
+
+/* ---------- Lesões (textura, sem afetar o onze nem forçar substituição) ---------- */
+const INJURY_TEMPLATES = [
+  (a) => `🩹 ${a.player} (${a.team}) fica no relvado após um choque, mas levanta-se e continua em campo.`,
+  (a) => `🩹 Momento de preocupação: ${a.player} (${a.team}) pede assistência médica, a equipa técnica já entra no relvado.`,
+  (a) => `🩹 ${a.player} (${a.team}) queixa-se de dores musculares — o banco do ${a.team} já aquece uma opção por precaução.`,
+  (a) => `🩹 Choque de cabeças na disputa da bola — ${a.player} (${a.team}) recebe tratamento junto à linha lateral.`,
+];
+
+/* ---------- Revisão VAR (textura, sem afetar o marcador ou os cartões
+   já decididos) — comenta o lance mais recente com um veredito neutro. ---------- */
+const VAR_CHECK_TEMPLATES = [
+  (a) => `📺 O árbitro é chamado ao monitor para rever o lance na área do ${a.team}... após a análise, o jogo continua sem alterações.`,
+  (a) => `📺 Silêncio no estádio enquanto o VAR revê o último lance — decisão confirmada em campo, sem novidades no marcador.`,
+  (a) => `📺 Demora na decisão: o VAR pede uma nova visualização do lance envolvendo o ${a.team}, mas nada é alterado.`,
+];
+
+/* ---------- Ambiente / bancada (textura pura, mais comum perto do fim) ---------- */
+const ATMOSPHERE_TEMPLATES = [
+  () => `📢 A bancada está a ferver — ambiente eletrizante nesta fase do jogo!`,
+  () => `📢 Cânticos das claques acompanham cada lance — noite de grande ambiente.`,
+  () => `📢 Tensão crescente nas bancadas à medida que o relógio avança.`,
+  () => `📢 Golo ou não, o público está a apoiar as duas equipas com intensidade.`,
+];
 
 /* ---------- Resolve um único acontecimento agendado, mutando o estado ---------- */
 function resolveEvent(ev, homeState, awayState, scoreRef) {
@@ -637,13 +857,14 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
   if (ev.type === 'goal') {
     const outfield = state.on_pitch.filter((p) => p.category !== 'GR');
     const prefix = eventPrefix(state.mentality, state.tactics);
+    const defendState = ev.side === 'home' ? awayState : homeState;
 
     /* Plantel muito curto (menos de 6 em campo) — nem todo golo tem de
        ficar atribuído a alguém; conta na mesma para o marcador, mas sem
        nome (ver mesma ideia em routes/game.js e routes/competitionStats.js). */
     if (outfield.length < 6 && Math.random() < 0.35) {
       scoreRef[ev.side] += 1;
-      return { minute: ev.minute, kind: 'goal', side: ev.side, text: `${prefix}⚽ Golo do ${teamLabel}! A confusão na área não deixou ver quem marcou.` };
+      return { minute: ev.minute, kind: 'goal', side: ev.side, style: 'normal', text: `${prefix}⚽ Golo do ${teamLabel}! A confusão na área não deixou ver quem marcou.` };
     }
 
     const scorer = pickWeightedWithFocusAndStyle(outfield, SCORE_WEIGHT, 'Goleador', state.tactics);
@@ -651,21 +872,77 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
     scorer.goals += 1;
     scoreRef[ev.side] += 1;
 
+    /* ---------- Estilo do golo (canto, cabeça, jogada construída, erro do
+       adversário, grande penalidade, fora da área, livre direto, ressalto
+       ou acrobático) — ver GOAL_STYLE_WEIGHTS. Alguns estilos exigem
+       assistência (quem bateu o canto/cruzou/lançou); se não houver
+       ninguém disponível para assistir, cai-se de volta ao golo "normal"
+       em vez de mostrar um texto com assistente em falta. */
+    let style = pickGoalStyle();
+    const requiresAssist = style === 'corner' || style === 'header' || style === 'buildup';
+    const noAssistStyles = style === 'penalty' || style === 'long_range' || style === 'free_kick' || style === 'rebound';
+    const assistChance = requiresAssist ? 0.97 : (noAssistStyles || style === 'opponent_error' ? 0 : 0.8);
+
     let assister = null;
-    if (Math.random() < 0.8) {
+    if (Math.random() < assistChance) {
       const assistCandidates = outfield.filter((p) => p.id !== scorer.id);
       assister = pickWeightedWithFocusAndStyle(assistCandidates, ASSIST_WEIGHT, 'Garçom', state.tactics);
       if (assister) assister.assists += 1;
     }
+    if (requiresAssist && !assister) style = 'normal';
 
-    const templates = assister ? GOAL_TEMPLATES_ASSISTED : GOAL_TEMPLATES_SOLO;
+    /* Grande penalidade: precisa de um jogador que sofreu a falta — pode
+       ser o próprio marcador (mais comum) ou um colega de equipa. Não
+       conta como assistência nas estatísticas, é só a história do lance. */
+    let fouled = null;
+    if (style === 'penalty') {
+      fouled = Math.random() < 0.55
+        ? scorer
+        : (outfield.filter((p) => p.id !== scorer.id)[Math.floor(Math.random() * Math.max(1, outfield.length - 1))] || scorer);
+    }
+
+    const payload = {
+      team: teamLabel, oppTeam: defendState.team_name,
+      scorer: scorer.name, assister: assister ? assister.name : null,
+      fouled: fouled ? fouled.name : null,
+    };
+
+    let templates;
+    if (style === 'corner') templates = GOAL_TEMPLATES_CORNER;
+    else if (style === 'header') templates = assister ? GOAL_TEMPLATES_HEADER : GOAL_TEMPLATES_HEADER_SOLO;
+    else if (style === 'buildup') templates = GOAL_TEMPLATES_BUILDUP;
+    else if (style === 'opponent_error') templates = GOAL_TEMPLATES_OPPONENT_ERROR;
+    else if (style === 'penalty') templates = GOAL_TEMPLATES_PENALTY;
+    else if (style === 'long_range') templates = GOAL_TEMPLATES_LONG_RANGE;
+    else if (style === 'free_kick') templates = GOAL_TEMPLATES_FREE_KICK;
+    else if (style === 'rebound') templates = GOAL_TEMPLATES_REBOUND;
+    else if (style === 'acrobatic') templates = assister ? GOAL_TEMPLATES_ACROBATIC_ASSISTED : GOAL_TEMPLATES_ACROBATIC;
+    else templates = assister ? GOAL_TEMPLATES_ASSISTED : GOAL_TEMPLATES_SOLO;
+
     const template = templates[Math.floor(Math.random() * templates.length)];
-    const text = prefix + template({ team: teamLabel, scorer: scorer.name, assister: assister ? assister.name : null });
-    /* player_id / assister_id / side vão no evento (além do texto) para o
-       frontend poder animar o lance no campo — ver playLiveBallAnimation
-       em public/dashboard.js — associando o golo ao boneco certo. */
+    let text = prefix + template(payload);
+
+    /* Golo marcado por um jogador defensivo — situação rara o suficiente
+       para merecer uma nota extra no comentário, seja qual for o estilo. */
+    if (scorer.category === 'DEF' && Math.random() < 0.7) {
+      const extra = DEFENDER_GOAL_EXTRA[Math.floor(Math.random() * DEFENDER_GOAL_EXTRA.length)];
+      text += extra;
+    }
+
+    /* Bis, hat-trick ou póquer do mesmo jogador nesta partida. */
+    const multiPool = MULTI_GOAL_EXTRA[scorer.goals];
+    if (multiPool) {
+      const extra = multiPool[Math.floor(Math.random() * multiPool.length)].replace('{name}', scorer.name);
+      text += extra;
+    }
+
+    /* player_id / assister_id / side / style vão no evento (além do
+       texto) para o frontend poder animar o lance no campo — ver
+       playGoalSequence em public/dashboard.js — escolhendo a coreografia
+       (canto, penálti, livre, ressalto, etc.) que corresponde ao que
+       realmente aconteceu, em vez de sortear uma ao acaso. */
     return {
-      minute: ev.minute, kind: 'goal', side: ev.side, text,
+      minute: ev.minute, kind: 'goal', side: ev.side, text, style,
       player_id: scorer.id, assister_id: assister ? assister.id : null,
     };
   }
@@ -677,13 +954,33 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
 
     const attacker = pickWeightedWithFocusAndStyle(outfield, SCORE_WEIGHT, 'Goleador', state.tactics) || outfield[Math.floor(Math.random() * outfield.length)];
     const keeper = defendState.on_pitch.find((p) => p.category === 'GR');
+    const defenders = defendState.on_pitch.filter((p) => p.category !== 'GR');
 
-    const roll = Math.random();
+    /* Pequena hipótese de o próprio lance ser uma grande penalidade
+       desperdiçada — dá textura extra ao 'chance' sem tocar no marcador
+       nem na contagem de golos já decidida à partida. */
+    const isPenaltyMiss = keeper && Math.random() < 0.05;
+
     let outcomeKey;
-    if (keeper && roll < 0.45) outcomeKey = 'saved';
-    else if (roll < 0.7) outcomeKey = 'off_target';
-    else if (roll < 0.9) outcomeKey = 'blocked';
-    else outcomeKey = 'woodwork';
+    if (isPenaltyMiss) {
+      outcomeKey = 'penalty_missed';
+    } else {
+      const roll = Math.random();
+      if (keeper && roll < 0.40) outcomeKey = 'saved';
+      else if (roll < 0.62) outcomeKey = 'off_target';
+      else if (roll < 0.82) outcomeKey = 'blocked';
+      else if (roll < 0.91) outcomeKey = 'crossbar';
+      else outcomeKey = 'post';
+    }
+
+    /* Sem guarda-redes ou sem defesas disponíveis (plantel muito curto),
+       recua-se para um desfecho que não dependa dessa peça em falta. */
+    if ((outcomeKey === 'saved' || outcomeKey === 'penalty_missed') && !keeper) outcomeKey = 'off_target';
+    if (outcomeKey === 'blocked' && !defenders.length) outcomeKey = 'off_target';
+
+    const defender = defenders.length
+      ? (pickWeighted(defenders, TACKLE_BASE) || defenders[Math.floor(Math.random() * defenders.length)])
+      : null;
 
     const templates = CHANCE_OUTCOME_TEMPLATES[outcomeKey];
     const template = templates[Math.floor(Math.random() * templates.length)];
@@ -691,6 +988,7 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
     const text = prefix + template({
       attacker: attacker.name, team: teamLabel, defTeam: defendState.team_name,
       keeper: keeper ? keeper.name : 'o guarda-redes',
+      defender: defender ? defender.name : 'a defesa',
     });
     /* Mesma ideia do golo: player_id (quem remata) + keeper_id (quem
        defende, quando aplicável) + outcome, para a animação do lance no
@@ -699,6 +997,50 @@ function resolveEvent(ev, homeState, awayState, scoreRef) {
       minute: ev.minute, kind: 'chance', side: ev.side, text,
       player_id: attacker.id, keeper_id: keeper ? keeper.id : null, outcome: outcomeKey,
     };
+  }
+
+  if (ev.type === 'offside') {
+    const outfield = state.on_pitch.filter((p) => p.category !== 'GR');
+    if (!outfield.length) return null;
+    const attacker = pickWeightedWithFocusAndStyle(outfield, SCORE_WEIGHT, 'Goleador', state.tactics) || outfield[Math.floor(Math.random() * outfield.length)];
+    const template = OFFSIDE_TEMPLATES[Math.floor(Math.random() * OFFSIDE_TEMPLATES.length)];
+    const text = template({ attacker: attacker.name, team: teamLabel });
+    return { minute: ev.minute, kind: 'offside', side: ev.side, text, player_id: attacker.id };
+  }
+
+  if (ev.type === 'foul') {
+    /* Aqui `state`/`teamLabel` são a equipa que COMETE a falta (ev.side);
+       a vítima é escolhida do lado adversário. */
+    const defendState = ev.side === 'home' ? awayState : homeState;
+    const committers = state.on_pitch.filter((p) => !p.sentOff);
+    const victims = defendState.on_pitch.filter((p) => !p.sentOff);
+    if (!committers.length || !victims.length) return null;
+    const defender = pickWeighted(committers, CARD_WEIGHT) || committers[Math.floor(Math.random() * committers.length)];
+    const attacker = victims[Math.floor(Math.random() * victims.length)];
+    const template = FOUL_TEMPLATES[Math.floor(Math.random() * FOUL_TEMPLATES.length)];
+    const text = template({ defender: defender.name, attacker: attacker.name, team: teamLabel });
+    return { minute: ev.minute, kind: 'foul', side: ev.side, text, player_id: defender.id };
+  }
+
+  if (ev.type === 'injury') {
+    const onPitch = state.on_pitch.filter((p) => !p.sentOff);
+    if (!onPitch.length) return null;
+    const player = onPitch[Math.floor(Math.random() * onPitch.length)];
+    const template = INJURY_TEMPLATES[Math.floor(Math.random() * INJURY_TEMPLATES.length)];
+    const text = template({ player: player.name, team: teamLabel });
+    return { minute: ev.minute, kind: 'injury', side: ev.side, text, player_id: player.id };
+  }
+
+  if (ev.type === 'var_check') {
+    const template = VAR_CHECK_TEMPLATES[Math.floor(Math.random() * VAR_CHECK_TEMPLATES.length)];
+    const text = template({ team: teamLabel });
+    return { minute: ev.minute, kind: 'var_check', side: ev.side, text };
+  }
+
+  if (ev.type === 'atmosphere') {
+    const template = ATMOSPHERE_TEMPLATES[Math.floor(Math.random() * ATMOSPHERE_TEMPLATES.length)];
+    const text = template();
+    return { minute: ev.minute, kind: 'atmosphere', side: ev.side, text };
   }
 
   if (ev.type === 'time_waste') {
