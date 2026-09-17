@@ -1691,7 +1691,7 @@ body{
 
 /* ---------- Jogo ao Vivo: ecrã inteiro, sem o "cartão" central dos outros
    modais — a ideia é ocupar 100% do ecrã (e ficar orientado na horizontal,
-   ver .live-pitch-board) para o campo ter o máximo de espaço possível.
+   ver .live-stage) para o jogo ter o máximo de espaço possível.
    Nota: já não se usa a API nativa de Fullscreen do browser aqui (dava
    problemas em alguns browsers com modais abertos por cima, como a
    substituição) — isto já chega para dar a sensação de ecrã inteiro. ---------- */
@@ -1789,260 +1789,391 @@ body{
 
 .live-match-arena{display:flex;gap:0;align-items:stretch;flex:1;min-height:0;position:relative;}
 
-.live-pitch-col{display:flex;flex-direction:column;gap:6px;height:100%;flex:1;min-width:0;}
+.live-pitch-col{position:relative;display:flex;flex-direction:column;gap:6px;height:100%;flex:1;min-width:0;padding:2px;}
 .live-pitch-hint{font-size:11px;color:var(--text-2);text-align:center;margin:0;}
 
-/* ---------- Campo: orientado na HORIZONTAL (balizas à esquerda/direita) —
-   o motor de jogo em dashboard.js continua a pensar num campo "vertical"
-   clássico (x = largura, y = profundidade); é só a função toScreenPct()
-   que troca x↔y no momento de desenhar, para caber melhor num ecrã
-   inteiro em modo paisagem. ---------- */
-.live-pitch-board{
-  position:relative;width:100%;height:100%;
-  flex:1;min-height:0;
-  aspect-ratio:105/68;   /* proporção real de um campo de 11 */
-  max-height:100%;
-  margin:0 auto;
-  background:
-    repeating-linear-gradient(90deg, #1d3a28 0, #1d3a28 34px, #1a3424 34px, #1a3424 68px);
-  border:2px solid #2f5c3f;
-  border-radius:var(--radius-m);
-  overflow:hidden;
-  transition:filter .25s ease;
-}
-/* Repetição em câmara lenta: o campo ganha um tom mais escuro e
-   contrastado, como nas repetições de golo da televisão. */
-.live-pitch-board.replay-active{
-  filter:contrast(1.12) saturate(.72) brightness(.88);
-}
-.live-pitch-board.replay-active::after{
-  content:'';position:absolute;inset:0;pointer-events:none;
-  background:linear-gradient(180deg, rgba(0,0,0,.28), transparent 22%, transparent 78%, rgba(0,0,0,.28));
-  z-index:6;
-}
-
-.live-replay-banner{
-  position:absolute;top:10px;left:50%;transform:translateX(-50%);
-  z-index:9;display:flex;align-items:center;gap:10px;
-  background:rgba(10,14,20,.82);border:1px solid rgba(255,255,255,.16);
-  border-radius:999px;padding:6px 8px 6px 14px;
-  box-shadow:0 6px 18px rgba(0,0,0,.35);
-}
-.live-replay-banner.hidden{display:none;}
-.live-replay-label{
-  font-size:12px;font-weight:700;color:#f1f5fb;letter-spacing:.02em;
-  white-space:nowrap;
-}
-.live-replay-skip{
-  border:none;border-radius:999px;padding:6px 14px;
-  font-size:12px;font-weight:800;letter-spacing:.02em;
-  background:var(--gold, #e8b93a);color:#1a1406;cursor:pointer;
-  transition:filter .15s ease, transform .1s ease;
-  white-space:nowrap;
-}
-.live-replay-skip:hover{filter:brightness(1.08);}
-.live-replay-skip:active{transform:translateY(1px);}
+/* ---------- Botão que abre a gaveta lateral (táticas, banco, comentário)
+   em ecrãs estreitos — fica por cima do palco, canto superior direito. ---------- */
 .live-drawer-toggle{
-  position:absolute;top:8px;right:8px;z-index:20;
-  width:38px;height:38px;
+  position:absolute;top:8px;right:8px;z-index:50;
+  width:34px;height:34px;border-radius:50%;
   display:flex;align-items:center;justify-content:center;
-  background:rgba(20,28,43,.85);border:1px solid var(--line);border-radius:50%;
-  color:var(--text-0);font-size:16px;cursor:pointer;line-height:1;
-  box-shadow:0 2px 8px rgba(0,0,0,.4);
-  transition:border-color .15s ease, background .15s ease;
+  background:rgba(20,30,48,.85);border:1px solid var(--line);color:var(--text-0);
+  font-size:15px;cursor:pointer;
+  transition:border-color .15s ease, background .15s ease, transform .1s ease;
 }
 .live-drawer-toggle:hover{border-color:var(--accent);background:rgba(32,48,74,.9);}
 .live-drawer-toggle:active{transform:scale(.94);}
-.live-pitch-halfway{position:absolute;top:0;bottom:0;left:50%;width:0;border-left:1.5px solid rgba(223,232,242,.35);}
-/* Círculo central: 9,15m de raio = 18,3m de diâmetro -> 17,4% do
-   comprimento do campo. Em % do lado maior para ficar mesmo redondo. */
-.live-pitch-center-circle{
-  position:absolute;top:50%;left:50%;width:17.4%;aspect-ratio:1/1;height:auto;
-  transform:translate(-50%,-50%);
-  border:1.5px solid rgba(223,232,242,.35);border-radius:50%;
+
+/* ================================================================
+   JOGO AO VIVO — palco de duas telas
+   ----------------------------------------------------------------
+   1) .live-lineups  — os dois onzes com as notas ao vivo, as
+      estatísticas e as opções. É o que se vê enquanto não há lance.
+   2) .live-highlight — o campo de 11, desenhado exatamente como o
+      protótipo campo.css (relva às riscas, marcações a branco,
+      bonecos redondos, bola, "GOLO!"), que entra no ecrã só quando
+      há um golo ou um lance de perigo para mostrar.
+   ================================================================ */
+
+.live-stage{position:relative;flex:1;min-height:0;display:flex;}
+.live-stage > *{flex:1;min-width:0;}
+.live-lineups.hidden, .live-highlight.hidden{display:none;}
+
+/* ---------- TELA 1: os dois onzes ---------- */
+
+.live-lineups{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 300px;
+  gap:14px;
+  min-height:0;
+  overflow:hidden;
 }
-/* Grande área: 40,32m de 68m de largura = 59,3% -> 20,35% de margem
-   em cima e em baixo; 16,5m de 105m de comprimento = 15,7% de largura. */
-.live-pitch-box{
-  position:absolute;top:20.35%;bottom:20.35%;width:15.7%;
-  border:1.5px solid rgba(223,232,242,.35);
+
+.live-lineups-teams{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+  gap:10px;
+  align-items:stretch;
+  min-height:0;
 }
-/* Pequena área: 18,32m de largura (=26,9%) por 5,5m (=5,24%). */
-.live-pitch-six{
-  position:absolute;top:36.5%;bottom:36.5%;width:5.24%;
+
+.lineup-card{
+  display:flex;flex-direction:column;gap:8px;min-height:0;
+  background:var(--bg-2);
+  border:1px solid var(--line);
+  border-radius:var(--radius-m);
+  padding:10px 10px 8px;
+}
+
+.lineup-card-head{display:flex;align-items:center;gap:8px;}
+.lineup-card-shield{width:26px;height:26px;border-radius:50%;overflow:hidden;display:flex;align-items:center;justify-content:center;background:var(--bg-3);font-size:14px;flex-shrink:0;}
+.lineup-card-shield img{width:100%;height:100%;object-fit:cover;}
+.lineup-card-name{font-size:14px;font-weight:700;color:var(--text-0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lineup-card-side{margin-left:auto;font-size:10.5px;color:var(--text-2);font-weight:700;}
+
+.lineup-card-meta{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--text-2);}
+.lineup-card-meta span{background:var(--bg-3);border-radius:999px;padding:2px 8px;}
+.lineup-card-you{color:var(--accent);font-weight:700;}
+
+/* mini-campo de cada equipa, com as coordenadas da Tática */
+.lineup-pitch{
+  position:relative;flex:1;min-height:0;
+  border-radius:var(--radius-s);
+  background:repeating-linear-gradient(0deg, #1d3a28 0, #1d3a28 22px, #1a3424 22px, #1a3424 44px);
+  border:1px solid #2f5c3f;
+  overflow:hidden;
+}
+.lineup-pitch-lines{
+  position:absolute;inset:6px;
   border:1.5px solid rgba(223,232,242,.28);
+  border-radius:3px;
 }
-.live-pitch-six-top{left:0;border-left:none;}
-.live-pitch-six-bottom{right:0;border-right:none;}
-/* Marca de penálti: 11m da linha = 10,48%. */
-.live-pitch-penspot{
-  position:absolute;top:50%;width:4px;height:4px;border-radius:50%;
-  background:rgba(223,232,242,.5);transform:translate(-50%,-50%);
+.lineup-pitch-lines::before{
+  content:'';position:absolute;left:28%;right:28%;bottom:-1px;height:16%;
+  border:1.5px solid rgba(223,232,242,.28);border-bottom:none;
 }
-.live-pitch-penspot-top{left:10.48%;}
-.live-pitch-penspot-bottom{left:89.52%;}
-.live-pitch-box-top{left:0;border-left:none;}
-.live-pitch-box-bottom{right:0;border-right:none;}
+.lineup-pitch-lines::after{
+  content:'';position:absolute;left:34%;right:34%;top:-1px;height:13%;
+  border:1.5px solid rgba(223,232,242,.28);border-top:none;
+}
 
-/* ---------- Balizas ---------- */
-/* Baliza: 7,32m de 68m de largura = 10,8% -> 44,6% de margem cada lado. */
-.live-pitch-goal{
-  position:absolute;top:44.6%;bottom:44.6%;width:2.2%;
-  border:2px solid #eef3f8;
-  background:
-    repeating-linear-gradient(0deg, rgba(238,243,248,.55) 0 1px, transparent 1px 7px),
-    repeating-linear-gradient(90deg, rgba(238,243,248,.4) 0 1px, transparent 1px 7px);
-  z-index:1;
+.lineup-dot{
+  position:absolute;transform:translate(-50%,-50%);
+  display:flex;flex-direction:column;align-items:center;gap:1px;
+  width:64px;z-index:2;
 }
-.live-pitch-goal-top{left:0;border-left:none;transform-origin:right center;}
-.live-pitch-goal-bottom{right:0;border-right:none;transform-origin:left center;}
+.lineup-dot.selectable{cursor:pointer;}
+.lineup-dot.selectable:hover .lineup-dot-circle{filter:brightness(1.2);}
+.lineup-dot-circle{
+  width:clamp(22px,2.4vw,30px);height:clamp(22px,2.4vw,30px);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:clamp(10px,1.1vw,12px);font-weight:800;color:#fff;
+  background:#3a4358;border:2px solid #5c6a89;
+  box-shadow:0 2px 5px rgba(0,0,0,.4);
+}
+.lineup-dot-circle.team-home{background:#d6402f;border-color:#f0907f;}
+.lineup-dot-circle.team-away{background:#1d3557;border-color:#5c7ba8;}
+.lineup-dot-circle.gk{border-color:#f2b807;}
+/* a tua equipa leva ainda um aro à volta, sem mudar a cor do clube */
+.lineup-dot-circle.is-user{box-shadow:0 0 0 2px var(--accent), 0 2px 5px rgba(0,0,0,.4);}
+.lineup-dot-name{
+  font-size:10px;font-weight:700;color:#dfe8f2;text-shadow:0 1px 2px rgba(0,0,0,.75);
+  max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.lineup-dot-rating{
+  font-size:10.5px;font-weight:800;line-height:1.5;
+  padding:0 5px;border-radius:999px;background:rgba(6,10,16,.78);
+}
+.lineup-dot-rating.tone-great{color:#7ef0ad;}
+.lineup-dot-rating.tone-good{color:#b9e87f;}
+.lineup-dot-rating.tone-ok{color:var(--gold);}
+.lineup-dot-rating.tone-poor{color:#f38b7d;}
+.lineup-dot-marks{position:absolute;top:-6px;right:2px;display:flex;gap:1px;font-size:9px;}
 
-/* ---------- Baliza a "abanar" quando entra um golo (ver triggerGoalCelebration
-   em dashboard.js) — mesma ideia do .net.ripple do protótipo campo.css,
-   aplicada diretamente à própria baliza (que já tem o padrão de rede no
-   fundo), sem precisar de um elemento extra só para a rede. ---------- */
-.live-pitch-goal.net-ripple{animation:liveNetRipple .6s ease;}
-@keyframes liveNetRipple{
+.lineup-card-foot{
+  display:flex;align-items:center;justify-content:space-between;
+  font-size:11px;color:var(--text-2);padding-top:2px;
+}
+.lineup-card-foot strong{color:var(--text-0);font-size:12px;}
+
+.live-lineups-vs{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  padding:0 6px;min-width:76px;
+}
+.live-lineups-score{font-size:26px;font-weight:800;color:var(--text-0);}
+.live-lineups-minute{font-size:11.5px;font-weight:700;color:var(--gold);}
+.live-lineups-vs-label{font-size:10px;color:var(--text-2);margin-top:6px;}
+
+/* ---------- Coluna dos dados e das opções ---------- */
+
+.live-databox{
+  display:flex;flex-direction:column;gap:12px;overflow-y:auto;
+  background:var(--bg-2);border:1px solid var(--line);
+  border-radius:var(--radius-m);padding:12px;
+}
+.live-data-title{font-size:12px;font-weight:700;color:var(--text-0);margin-bottom:8px;}
+.live-data-block + .live-data-block{border-top:1px solid var(--line);padding-top:12px;}
+
+.live-stat + .live-stat{margin-top:8px;}
+.live-stat-line{display:flex;justify-content:space-between;font-size:11.5px;font-weight:700;color:var(--text-0);}
+.live-stat-label{color:var(--text-2);font-weight:600;}
+.live-stat-bar{height:4px;border-radius:999px;background:#3a4358;margin-top:4px;overflow:hidden;}
+.live-stat-bar span{display:block;height:100%;background:var(--accent);border-radius:999px;transition:width .4s ease;}
+
+.live-data-feed{display:flex;flex-direction:column;gap:6px;}
+.live-data-feed-item{
+  display:flex;gap:7px;font-size:11.5px;color:var(--text-1);
+  background:var(--bg-1);border-radius:var(--radius-s);padding:6px 8px;
+}
+.live-data-feed-item span{color:var(--text-2);font-weight:700;flex-shrink:0;}
+.live-data-feed-item p{margin:0;}
+.live-data-feed-item.evt-goal{border-left:3px solid var(--green);}
+.live-data-feed-item.evt-yellow{border-left:3px solid var(--gold);}
+.live-data-feed-item.evt-red{border-left:3px solid var(--red);}
+.live-data-empty{font-size:11.5px;color:var(--text-2);margin:0;}
+
+.live-data-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+.live-data-btn{
+  padding:8px 6px;border-radius:var(--radius-s);
+  background:var(--bg-3);border:1px solid var(--line);color:var(--text-0);
+  font-size:11.5px;font-weight:700;cursor:pointer;
+  transition:border-color .15s ease, background .15s ease;
+}
+.live-data-btn:hover:not(:disabled){border-color:var(--accent);background:var(--bg-1);}
+.live-data-btn:disabled{opacity:.45;cursor:not-allowed;}
+.live-data-hint{font-size:10.5px;color:var(--text-2);margin:8px 0 0;}
+
+/* ---------- TELA 2: campo de 11, igual ao protótipo campo.css ----------
+   As cores e as medidas abaixo são as mesmas do campo.css, só com os
+   nomes das classes prefixados por cp- para não colidirem com o resto
+   do dashboard. ---------- */
+
+.live-highlight{
+  display:flex;flex-direction:column;gap:8px;min-height:0;
+  animation:cpEnter .22s ease;
+}
+@keyframes cpEnter{from{opacity:0;transform:scale(.99);}to{opacity:1;transform:scale(1);}}
+
+.cp-highlight-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.cp-highlight-kicker{
+  font-size:11px;font-weight:800;color:#2a2205;background:var(--cp-amber, #f2b807);
+  border-radius:999px;padding:3px 10px;
+}
+.cp-highlight-teams{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--text-1);}
+.cp-team-chip{
+  display:inline-flex;align-items:center;gap:6px;font-weight:700;
+  padding:2px 10px;border-radius:999px;background:rgba(10,14,20,.55);
+}
+.cp-team-chip::before{content:'';width:9px;height:9px;border-radius:50%;}
+.cp-team-chip.team-home{color:#f0b4a9;}
+.cp-team-chip.team-home::before{background:#d6402f;}
+.cp-team-chip.team-away{color:#c7d2e0;}
+.cp-team-chip.team-away::before{background:#1d3557;box-shadow:0 0 0 1px rgba(255,255,255,.4);}
+.cp-team-dir{color:var(--text-2);font-size:11.5px;}
+.cp-skip-btn{
+  margin-left:auto;padding:5px 12px;border-radius:999px;cursor:pointer;
+  background:rgba(10,14,20,.8);border:1px solid rgba(255,255,255,.18);color:var(--text-0);
+  font-size:11.5px;font-weight:700;
+}
+.cp-skip-btn:hover{border-color:var(--accent);}
+
+.cp-pitch-frame{
+  flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
+  background:#0f1a13;border:1px solid rgba(255,255,255,.08);
+  border-radius:var(--radius-m);padding:10px;
+}
+
+.cp-pitch{
+  position:relative;
+  height:100%;max-height:100%;
+  aspect-ratio:105/68;
+  max-width:100%;
+  background:repeating-linear-gradient(90deg, #2f7d3f 0 5%, #347f45 5% 10%);
+  border-radius:4px;overflow:hidden;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.25);
+}
+
+.cp-pitch .cp-line, .cp-pitch .cp-box, .cp-pitch .cp-arc,
+.cp-pitch .cp-circle, .cp-pitch .cp-spot, .cp-pitch .cp-corner-arc{
+  position:absolute;border-color:rgba(255,255,255,.82);pointer-events:none;
+}
+
+.cp-line.outer{inset:2% 1.2%;border:2px solid rgba(255,255,255,.82);}
+.cp-line.halfway{left:50%;top:2%;bottom:2%;width:0;border-left:2px solid rgba(255,255,255,.82);}
+.cp-circle.center{left:50%;top:50%;width:16%;aspect-ratio:1/1;border:2px solid rgba(255,255,255,.82);border-radius:50%;transform:translate(-50%,-50%);}
+.cp-spot.center-spot{left:50%;top:50%;width:6px;height:6px;background:rgba(255,255,255,.82);border-radius:50%;transform:translate(-50%,-50%);}
+
+.cp-box.big-box{top:19%;height:62%;width:15.5%;border:2px solid rgba(255,255,255,.82);}
+.cp-box.big-box.left{left:1.2%;border-left:none;}
+.cp-box.big-box.right{right:1.2%;border-right:none;}
+.cp-box.small-box{top:36.5%;height:27%;width:5.5%;border:2px solid rgba(255,255,255,.82);}
+.cp-box.small-box.left{left:1.2%;border-left:none;}
+.cp-box.small-box.right{right:1.2%;border-right:none;}
+
+.cp-spot.pen-spot{top:50%;width:6px;height:6px;background:rgba(255,255,255,.82);border-radius:50%;transform:translate(-50%,-50%);}
+.cp-spot.pen-spot.left{left:12%;}
+.cp-spot.pen-spot.right{left:88%;}
+
+.cp-arc.pen-arc{top:50%;width:12%;aspect-ratio:1/1;border:2px solid rgba(255,255,255,.82);border-radius:50%;transform:translate(-50%,-50%);}
+.cp-arc.pen-arc.left{left:12%;clip-path:inset(0 0 0 55%);}
+.cp-arc.pen-arc.right{left:88%;clip-path:inset(0 55% 0 0);}
+
+.cp-corner-arc{width:2.4%;aspect-ratio:1/1;border:2px solid rgba(255,255,255,.82);border-radius:50%;}
+.cp-corner-arc.cl-top{left:-1.2%;top:.8%;clip-path:inset(50% 0 0 50%);}
+.cp-corner-arc.cl-bottom{left:-1.2%;bottom:.8%;clip-path:inset(0 0 50% 50%);}
+.cp-corner-arc.cr-top{right:-1.2%;top:.8%;clip-path:inset(50% 50% 0 0);}
+.cp-corner-arc.cr-bottom{right:-1.2%;bottom:.8%;clip-path:inset(0 50% 50% 0);}
+
+.cp-goal{
+  position:absolute;top:38.5%;height:23%;width:1.6%;
+  background:rgba(255,255,255,.06);border:2px solid rgba(255,255,255,.82);
+}
+.cp-goal.left{left:0;border-left:none;}
+.cp-goal.right{right:0;border-right:none;}
+
+.cp-net{
+  position:absolute;inset:0;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(255,255,255,.35) 0 1px, transparent 1px 6px),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.35) 0 1px, transparent 1px 6px);
+  transform-origin:center left;
+  transition:transform .5s ease;
+}
+.cp-goal.right .cp-net{transform-origin:center right;}
+.cp-net.ripple{animation:cpNetRipple .6s ease;}
+@keyframes cpNetRipple{
   0%{transform:scaleX(1);}
   35%{transform:scaleX(.72);}
   70%{transform:scaleX(1.08);}
   100%{transform:scaleX(1);}
 }
-.live-pitch-team-label{
-  position:absolute;top:8px;font-size:10px;font-weight:800;letter-spacing:.5px;
-  color:rgba(223,232,242,.55);text-transform:uppercase;
-}
-.live-pitch-team-label-top{left:10px;}
-.live-pitch-team-label-bottom{right:10px;}
 
-.live-pitch-tokens{position:absolute;inset:0;}
+#cpActors{position:absolute;inset:0;}
 
-/* ---------- Bola "fantasma" da animação de posse (ver startLiveIdleMotion
-   em dashboard.js) — mais discreta que a bola dos golos/lances (ver
-   .live-pitch-ball), só para dar a sensação de bola sempre em jogo. ---------- */
-.live-pitch-idle-ball{
+.cp-player{
   position:absolute;
-  width:clamp(10px, 1.1vw, 13px);height:clamp(10px, 1.1vw, 13px);
-  border-radius:50%;
-  background:radial-gradient(circle at 35% 30%, #ffffff, #cfd6de);
-  box-shadow:0 1px 4px rgba(0,0,0,.4);
+  width:4.4%;aspect-ratio:1/1;border-radius:50%;
+  transform:translate(-50%,-50%);
+  display:flex;align-items:center;justify-content:center;
+  font-size:clamp(9px,.85vw,12px);font-weight:800;color:#fff;
+  border:2px solid rgba(0,0,0,.35);
+  box-shadow:0 2px 4px rgba(0,0,0,.35);
+  transition:left .9s cubic-bezier(.4,0,.2,1), top .9s cubic-bezier(.4,0,.2,1), transform .35s ease;
+  z-index:2;
+}
+/* A cor identifica a EQUIPA e não muda de lance para lance: a equipa da
+   casa joga sempre de vermelho e a de fora sempre de azul, ataquem elas
+   ou defendam elas. O guarda-redes tem o aro amarelo por cima da cor da
+   sua equipa, como uma camisola diferente. */
+.cp-player.team-home{background:#d6402f;color:#fff;}
+.cp-player.team-away{background:#1d3557;color:#eef1ea;}
+.cp-player.gk{border-color:#f2b807;border-width:3px;box-shadow:0 0 0 2px rgba(242,184,7,.35), 0 2px 4px rgba(0,0,0,.35);}
+.cp-player.is-ghost{opacity:.35;}
+
+.cp-player-name{
+  position:absolute;top:100%;margin-top:2px;
+  font-size:9.5px;font-weight:700;color:#f3f7f1;
+  text-shadow:0 1px 3px rgba(0,0,0,.85);
+  white-space:nowrap;pointer-events:none;
+}
+
+.cp-player.jump{transform:translate(-50%,-50%) translateY(-14%) scale(1.08);}
+
+.cp-player.celebrate{animation:cpCelebrate .7s ease;}
+@keyframes cpCelebrate{
+  0%{transform:translate(-50%,-50%) scale(1);}
+  30%{transform:translate(-50%,-50%) scale(1.35);}
+  60%{transform:translate(-50%,-50%) scale(.95);}
+  100%{transform:translate(-50%,-50%) scale(1.1);}
+}
+
+.cp-player.slump{animation:cpSlump .6s ease forwards;}
+@keyframes cpSlump{
+  0%{opacity:1;}
+  100%{opacity:.45;transform:translate(-50%,-50%) scale(.9);}
+}
+
+.cp-ball{
+  position:absolute;width:1.7%;aspect-ratio:1/1;border-radius:50%;
+  background:radial-gradient(circle at 32% 28%, #fff 0 30%, #e8e8e3 32% 60%, #c9c9c2 100%);
+  box-shadow:0 2px 3px rgba(0,0,0,.4);
   transform:translate(-50%,-50%);
   z-index:3;
-  opacity:.85;
-  pointer-events:none;
-  transition:left 1.1s ease-in-out, top 1.1s ease-in-out;
 }
 
-/* ---------- Animação da bola nos golos e lances de perigo ----------
-   A bola desloca-se (via transition de left/top, controlada em JS —
-   ver playLiveBallAnimation em public/dashboard.js) do boneco que remata
-   até à baliza (golo), até ao guarda-redes (defesa) ou para fora da área
-   (remate ao lado / à figura / trave). */
-.live-pitch-ball{
-  position:absolute;
-  width:clamp(15px, 1.6vw, 19px);height:clamp(15px, 1.6vw, 19px);
-  border-radius:50%;
-  background:radial-gradient(circle at 35% 30%, #ffffff, #cfd6de);
-  box-shadow:0 2px 6px rgba(0,0,0,.45);
-  transform:translate(-50%,-50%);
-  z-index:5;
-  opacity:0;
-  pointer-events:none;
+.cp-goal-flash{
+  position:absolute;left:50%;top:42%;
+  transform:translate(-50%,-50%) scale(.6);
+  font-weight:900;font-size:clamp(28px,5vw,52px);letter-spacing:.06em;
+  color:#f2b807;text-shadow:0 3px 0 rgba(0,0,0,.4);
+  opacity:0;pointer-events:none;z-index:5;
 }
-.live-token.kick-pulse .live-token-circle{animation:liveKickPulse .55s ease;}
-@keyframes liveKickPulse{
-  0%{transform:scale(1);}
-  40%{transform:scale(1.4);box-shadow:0 0 0 7px rgba(124,92,255,.35);}
-  100%{transform:scale(1);}
+.cp-goal-flash.show{animation:cpFlashPop 1.3s ease forwards;}
+@keyframes cpFlashPop{
+  0%{opacity:0;transform:translate(-50%,-50%) scale(.4);}
+  18%{opacity:1;transform:translate(-50%,-50%) scale(1.12);}
+  30%{transform:translate(-50%,-50%) scale(1);}
+  82%{opacity:1;}
+  100%{opacity:0;transform:translate(-50%,-50%) scale(1);}
 }
-.live-token.save-pulse .live-token-circle{animation:liveSavePulse .55s ease;}
-@keyframes liveSavePulse{
-  0%{transform:scale(1) rotate(0);}
-  50%{transform:scale(1.3) rotate(-10deg);box-shadow:0 0 0 7px rgba(62,207,110,.35);}
-  100%{transform:scale(1) rotate(0);}
+
+.cp-status{
+  margin:0;min-height:2.4em;line-height:1.4;text-align:center;
+  font-size:12.5px;color:var(--text-1);
 }
-.live-goal-flash{
-  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  font-size:clamp(22px,5vw,40px);font-weight:900;color:#fff;
-  text-shadow:0 3px 14px rgba(0,0,0,.65);letter-spacing:2px;text-align:center;
-  pointer-events:none;opacity:0;z-index:6;
+
+/* ---------- Ecrãs estreitos: os onzes empilham-se e o campo continua
+   a ocupar o espaço todo ---------- */
+@media (max-width:1079px){
+  .live-lineups{grid-template-columns:1fr;overflow-y:auto;}
+  .live-databox{max-height:none;}
 }
-.live-goal-flash.show{animation:liveGoalFlash 1.15s ease;}
-@keyframes liveGoalFlash{
-  0%{opacity:0;transform:scale(.6);}
-  22%{opacity:1;transform:scale(1.15);}
-  70%{opacity:1;transform:scale(1);}
-  100%{opacity:0;transform:scale(1);}
+@media (max-width:700px){
+  .live-lineups-teams{grid-template-columns:1fr;}
+  .live-lineups-vs{flex-direction:row;gap:10px;min-width:0;padding:4px 0;}
+  .live-lineups-vs-label{display:none;}
+  .lineup-pitch{min-height:220px;}
 }
-.live-token{
-  position:absolute;transform:translate(-50%,-50%);
-  display:flex;flex-direction:column;align-items:center;gap:2px;
-  width:15%;z-index:2;
-  animation:liveIdleSway 2.6s ease-in-out infinite;
-  animation-delay:var(--sway-delay, 0s);
+
+@media (prefers-reduced-motion:reduce){
+  .cp-player,.cp-net{transition:none;}
+  .cp-player.celebrate,.cp-goal-flash.show,.cp-net.ripple,.live-highlight{animation:none;}
 }
-@keyframes liveIdleSway{
-  0%,100%{transform:translate(-50%,-50%);}
-  25%{transform:translate(calc(-50% + 2px), calc(-50% - 2px));}
-  50%{transform:translate(calc(-50% - 2px), calc(-50% + 1px));}
-  75%{transform:translate(calc(-50% + 1px), calc(-50% + 2px));}
-}
+
+/* ---------- Bolinha com o número da camisola — usada nas listas de
+   substituições e nos chips do banco (ver renderLiveSubPanel e a janela
+   de substituições em dashboard.js). ---------- */
 .live-token-circle{
-  position:relative;width:clamp(38px, 4.4vw, 50px);height:clamp(38px, 4.4vw, 50px);border-radius:50%;
+  position:relative;width:38px;height:38px;border-radius:50%;
   display:flex;align-items:center;justify-content:center;
-  font-size:clamp(12px, 1.4vw, 15px);font-weight:800;color:#fff;
+  font-size:13px;font-weight:800;color:#fff;
   background:var(--bg-3);border:2px solid var(--text-2);
   box-shadow:0 2px 6px rgba(0,0,0,.4);
 }
-.live-token.side-user .live-token-circle{background:var(--accent);border-color:#c3b0ff;}
-.live-token.side-opponent .live-token-circle{background:#3a4358;border-color:#5c6a89;}
-.live-token.selectable{cursor:pointer;}
-.live-token.selectable:hover .live-token-circle{filter:brightness(1.18);}
 .live-token-name{
-  font-size:clamp(10px, 1vw, 12px);font-weight:700;color:#dfe8f2;text-shadow:0 1px 2px rgba(0,0,0,.7);
+  font-size:11px;font-weight:700;color:#dfe8f2;
   max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;
-}
-.live-token-badges{position:absolute;top:-6px;right:-8px;display:flex;flex-direction:column;gap:1px;}
-.live-token-badge{font-size:9px;line-height:1;}
-.live-token-yellow{
-  position:absolute;bottom:-3px;right:-4px;width:8px;height:11px;background:var(--gold);
-  border-radius:1px;box-shadow:0 0 0 1px rgba(0,0,0,.4);
-}
-
-/* Cabeceamento: pequeno salto no boneco, tal como .player.jump no
-   protótipo campo.js. */
-.live-token.jump .live-token-circle{
-  transform:translateY(-8px) scale(1.08);
-  transition:transform .18s ease;
-}
-
-/* ---------- Festejos de golo (ver finishGoalOnPitch em dashboard.js) ----------
-   Sempre a mesma coreografia final, tal como finishGoal no protótipo
-   campo.js: a equipa toda corre para a bandeirola de canto e festeja lá.
-   O que varia de golo para golo é só a jogada até este ponto (ver
-   GOAL_SEQUENCES em dashboard.js). */
-@keyframes liveCelebrate{
-  0%{transform:scale(1);}
-  30%{transform:scale(1.3);box-shadow:0 0 0 6px rgba(255,196,0,.35);}
-  60%{transform:scale(.95);}
-  100%{transform:scale(1.05);}
-}
-.live-token.celebrate .live-token-circle{animation:liveCelebrate .8s ease;}
-
-@keyframes liveCelebrateBig{
-  0%{transform:scale(1);}
-  25%{transform:scale(1.55);box-shadow:0 0 0 9px rgba(255,196,0,.4);}
-  55%{transform:scale(.9);}
-  80%{transform:scale(1.2);}
-  100%{transform:scale(1.08);}
-}
-.live-token.celebrate-big .live-token-circle{animation:liveCelebrateBig 1.05s ease;}
-
-/* Defesas ficam por instantes mais "apagados" no momento do golo — mesma
-   ideia do .player.slump do protótipo campo.css. */
-.live-token.slump .live-token-circle{
-  opacity:.45;filter:grayscale(.35);
-  transition:opacity .35s ease, filter .35s ease;
 }
 
 .live-feed-panel{max-height:200px;display:flex;flex-direction:column;}

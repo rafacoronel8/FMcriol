@@ -3872,8 +3872,6 @@ function resyncScoreDisplayIfIdle(){
   const scoreEl = el('liveScoreNumbers');
   if(scoreEl) scoreEl.textContent = `${liveDisplayedScore.home} - ${liveDisplayedScore.away}`;
 }
-let liveIdleTimer = null;      // ver startLiveIdleMotion — movimento de posse "fantasma" fora dos lances
-let liveIdleZone = { x: 50, y: 50 };
 let liveInstructionsMeta = null; // catálogo de /meta/instructions (labels/dicas), pedido uma única vez
 
 function shieldHtml(team){
@@ -3889,18 +3887,16 @@ async function openLiveMatch(friendlyId){
   liveSubModalOutId = null;
   liveAnimQueue = [];
   liveAnimPlaying = false;
-  liveIdleZone = { x: 50, y: 50 };
   postTalkPromptShownFor = null;
   el('liveMatchOverlay').classList.remove('hidden');
   el('liveSubModalOverlay').classList.add('hidden');
   el('liveSideCol').classList.remove('open');
   el('liveDrawerBackdrop').classList.remove('open');
   el('liveFeed').innerHTML = '<p class="placeholder-text">A carregar…</p>';
-  el('livePitchTokens').innerHTML = '';
-  el('livePitchBall').style.opacity = '0';
-  el('livePitchIdleBall').style.left = '50%';
-  el('livePitchIdleBall').style.top = '50%';
-  el('liveGoalFlash').classList.remove('show');
+  el('lineupHome').innerHTML = '';
+  el('lineupAway').innerHTML = '';
+  el('liveDataBox').innerHTML = '';
+  hideHighlightScreen();
   el('liveScoreNumbers').textContent = '0 - 0';
   el('liveMinute').textContent = "0'";
   el('liveProgressFill').style.width = '0%';
@@ -3927,9 +3923,9 @@ async function openLiveMatch(friendlyId){
     if(!res.ok) throw new Error(data.error || 'Não foi possível carregar o jogo');
     applyLiveState(data, data.events || []);
     startLiveAuto(); // o jogo começa a simular-se sozinho assim que abre — não é preciso clicar em nada
-    // Sem posse "fantasma" contínua: fora dos golos/lances de perigo o
-    // campo fica quieto, com as duas equipas na formação e o placar —
-    // só golos/lances usam o campo para animar (ver PRESET_PLAYS).
+    // Fora dos lances fica no ecrã a tela dos dois onzes com as notas
+    // (ver renderLiveLineups); o campo só aparece quando há um golo ou
+    // um lance de perigo para mostrar (ver playLiveHighlight).
     loadLiveInstructionsMeta();
   }catch(err){
     el('liveFeed').innerHTML = `<p class="placeholder-text">${err.message}</p>`;
@@ -3940,7 +3936,6 @@ function closeLiveMatch(){
   el('liveMatchOverlay').classList.add('hidden');
   el('liveSubModalOverlay').classList.add('hidden');
   stopLiveAuto();
-  stopLiveIdleMotion();
   if(document.fullscreenElement) document.exitFullscreen().catch(() => {});
   liveFriendlyId = null;
   liveState = null;
@@ -4007,1054 +4002,1499 @@ function renderLiveSummary(data){
   el('liveSummaryBody').innerHTML = teamBlock(data.home) + teamBlock(data.away);
 }
 
-/* ---------- Campo: posiciona os 2x11 jogadores usando as coordenadas de
-   FORMATIONS (as mesmas da Tática) — a equipa de baixo (casa) usa as
-   coordenadas tal e qual; a equipa de cima (fora) usa as mesmas
-   coordenadas espelhadas na vertical, para as duas equipas ficarem
-   viradas uma para a outra, cada uma a defender a baliza do seu lado. ---------- */
-function slotCoords(formation, slotIndex, mirrored){
-  const def = FORMATIONS[formation] || FORMATIONS['4-3-3'];
-  const fallback = def[slotIndex % def.length] || def[0];
-  const slot = (Number.isInteger(slotIndex) && def[slotIndex]) ? def[slotIndex] : fallback;
-  const x = slot.x;
-  const y = mirrored ? (50 - (slot.y / 100) * 50) : (50 + (slot.y / 100) * 50);
-  return { x, y };
-}
-
-/* ---------- Campo desenhado na horizontal ----------
-   Toda a lógica do "motor" acima (slotCoords, alvo dos remates, empurrões
-   táticos de playOrganizedMovement, zona de posse de startLiveIdleMotion)
-   continua a pensar sempre num campo vertical clássico: x = posição na
-   largura do campo, y = profundidade (perto da própria baliza a perto de
-   100, perto da baliza contrária a perto de 0). É só aqui, no momento de
-   desenhar no ecrã, que se trocam os eixos — o campo aparece deitado
-   (balizas à esquerda/direita) para caber melhor num ecrã inteiro em
-   modo paisagem, sem ter de reescrever toda a matemática do jogo. */
-function toScreenPct(pt){
-  return { left: pt.y, top: pt.x };
-}
-
-function liveTokenHtml(p, x, y, teamState){
-  const isMySelectable = teamState.is_user && liveState && liveState.status !== 'finished';
-  const sideClass = teamState.is_user ? 'side-user' : 'side-opponent';
-  const badges = [];
-  if(p.goals) badges.push(`<span class="live-token-badge">⚽${p.goals > 1 ? `×${p.goals}` : ''}</span>`);
-  if(p.assists) badges.push(`<span class="live-token-badge">🅰️${p.assists > 1 ? `×${p.assists}` : ''}</span>`);
-  const swayDelay = (Math.random() * 2.6).toFixed(2); // dessincroniza o "balanço" de cada jogador — não parecem estátuas
-  const screen = toScreenPct({ x, y });
-  return `
-    <div class="live-token ${sideClass}${isMySelectable ? ' selectable' : ''}"
-         style="left:${screen.left}%;top:${screen.top}%;--sway-delay:${swayDelay}s;" data-player-id="${p.id}">
-      <div class="live-token-circle">${p.jersey_number || '•'}
-        ${badges.length ? `<span class="live-token-badges">${badges.join('')}</span>` : ''}
-        ${p.yellow ? '<span class="live-token-yellow"></span>' : ''}
-      </div>
-      <span class="live-token-name">${p.name.split(' ').slice(-1)[0]}</span>
-    </div>`;
-}
-
-function renderLivePitch(data){
-  const container = el('livePitchTokens');
-  el('livePitchHomeLabel').textContent = data.home.team_name;
-  el('livePitchAwayLabel').textContent = data.away.team_name;
-
-  const tokens = [];
-  data.home.on_pitch.forEach((p, i) => {
-    const { x, y } = slotCoords(data.home.formation, p.slot_index ?? i, false);
-    tokens.push(liveTokenHtml(p, x, y, data.home));
-  });
-  data.away.on_pitch.forEach((p, i) => {
-    const { x, y } = slotCoords(data.away.formation, p.slot_index ?? i, true);
-    tokens.push(liveTokenHtml(p, x, y, data.away));
-  });
-  container.innerHTML = tokens.join('');
-
-  /* Clicar num boneco em campo (só os teus) abre a janela dedicada de
-     substituições já com esse jogador escolhido para sair — ver
-     openSubModal. */
-  container.querySelectorAll('.live-token.selectable').forEach((tokenEl) => {
-    tokenEl.addEventListener('click', () => openSubModal(Number(tokenEl.dataset.playerId)));
-  });
-}
-
-/* ---------- Animação dos golos e lances de perigo no campo ----------
-   Usa os campos player_id / side / outcome / keeper_id que o servidor
-   agora inclui em cada evento de golo/lance (ver resolveEvent em
-   routes/liveMatch.js) para saber que boneco mexe a bola e para onde ela
-   vai: a baliza (golo), o guarda-redes (defesa) ou para fora da área
-   (remate ao lado / trave). */
-function findLiveTokenPosition(playerId, side, data){
-  if(!playerId || !data || !data[side]) return null;
-  const teamState = data[side];
-  const idx = teamState.on_pitch.findIndex((p) => p.id === playerId);
-  if(idx === -1) return null;
-  const p = teamState.on_pitch[idx];
-  return slotCoords(teamState.formation, p.slot_index ?? idx, side === 'away');
-}
-
 /* ================================================================
-   GEOMETRIA REAL DO CAMPO -----------------------------------------
-   O espaço de jogo (x = largura, y = profundidade) é 0-100 nos dois
-   eixos, mas um campo não é quadrado: 105m de comprimento por 68m de
-   largura. Logo 1% de y = 1,05m e 1% de x = 0,68m. Sem isto, tudo o
-   que fosse calculado "em percentagem" ficava esticado à largura e
-   esmagado ao comprimento, e as distâncias não correspondiam a nada.
+   JOGO AO VIVO — duas telas
+   ----------------------------------------------------------------
+   1) TELA DE ESTÚDIO (por omissão): os dois onzes lado a lado, com
+      as notas ao vivo de cada jogador, as estatísticas do jogo e
+      todas as opções (avançar, substituir, formação, postura,
+      instruções). É isto que está no ecrã enquanto não há lance.
 
-   IMPORTANTE — era daqui que vinha o problema dos golos de muito
-   longe: slotCoords comprime cada equipa na SUA metade (o ponta de
-   lança do 4-3-3 fica em y=58, a baliza adversária está em y≈0), por
-   isso rematar a partir do slot da formação dava sempre um remate de
-   ~59 metros. As jogadas abaixo passam a levar a bola até ao último
-   terço ANTES de rematar, e o ponto de remate é sorteado nas zonas
-   onde se marcam golos a sério (quase sempre dentro da área).
-   ================================================================ */
-const PITCH = {
-  LENGTH_M: 105,
-  WIDTH_M: 68,
-  // metros -> % do eixo correspondente
-  yFromM: (m) => (m / 105) * 100,
-  xFromM: (m) => (m / 68) * 100,
-};
+   2) TELA DE LANCE: quando chega um golo ou um lance de perigo, o
+      ecrã muda para um campo de 11 desenhado e animado exatamente
+      como o protótipo campo.html/campo.css/campo.js — mesmas
+      marcações, mesmos bonecos (ataque a vermelho, defesa a azul,
+      guarda-redes a amarelo), mesmas 15 coreografias, mesma bola em
+      curva, mesmo "GOLO!", mesma corrida à bandeirola a festejar.
+      No fim volta sozinha à tela de estúdio.
 
-// Marcações oficiais, convertidas para % de profundidade (distância à
-// linha de baliza que se ataca).
-const AREA = {
-  SIX_YARD: PITCH.yFromM(5.5),      // ~5.2%
-  PEN_SPOT: PITCH.yFromM(11),       // ~10.5%
-  PEN_AREA: PITCH.yFromM(16.5),     // ~15.7%
-  EDGE_D: PITCH.yFromM(20),         // ~19%  (bico da meia-lua)
-  FINAL_THIRD: PITCH.yFromM(35),    // ~33%
-};
-
-// Meias-larguras das marcações, em % de largura, medidas a partir do
-// centro (x=50).
-const HALF_W = {
-  GOAL: PITCH.xFromM(7.32 / 2),     // ~5.4%  -> postes em x 44.6 / 55.4
-  SIX_YARD: PITCH.xFromM(18.32 / 2),// ~13.5%
-  PEN_AREA: PITCH.xFromM(40.32 / 2),// ~29.6%
-};
-
-/* Converte "distância à linha de baliza que esta equipa ataca" em y de
-   jogo, e vice-versa. O 'home' ataca para y=0, o 'away' para y=100. */
-function depthY(side, distPct){ return side === 'home' ? distPct : 100 - distPct; }
-function distFromGoal(side, y){ return side === 'home' ? y : 100 - y; }
-
-/* Distância real, em metros, entre dois pontos do campo — respeitando
-   que os eixos têm escalas diferentes. */
-function metersBetween(a, b){
-  const dx = (a.x - b.x) / 100 * PITCH.WIDTH_M;
-  const dy = (a.y - b.y) / 100 * PITCH.LENGTH_M;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-function rand(min, max){ return min + Math.random() * (max - min); }
-
-/* Zonas de remate com a frequência aproximada com que se marcam golos
-   a sério. Aferido por simulação: mediana ~13m, 82% dentro da área,
-   38% a 11m ou menos, e no máximo ~29m — que é o perfil real do
-   futebol. Antes disto, TODOS os golos saíam a ~59m. */
-const SHOT_ZONES = [
-  { weight: 26, dist: [1.8, AREA.SIX_YARD + 0.5], halfWidth: HALF_W.SIX_YARD - 2 },        // desvio / tap-in na pequena área
-  { weight: 46, dist: [AREA.SIX_YARD, AREA.PEN_SPOT + 2.5], halfWidth: HALF_W.SIX_YARD + 5 }, // coração da área
-  { weight: 20, dist: [AREA.PEN_SPOT + 1, AREA.PEN_AREA + 1], halfWidth: HALF_W.PEN_AREA - 11 }, // bico da área
-  { weight: 8, dist: [AREA.PEN_AREA + 1, AREA.EDGE_D + 6], halfWidth: 16 },                 // remate de fora
-];
-
-function pickShotZone(preferred){
-  if(preferred) return preferred;
-  const total = SHOT_ZONES.reduce((sum, z) => sum + z.weight, 0);
-  let roll = Math.random() * total;
-  for(const zone of SHOT_ZONES){
-    roll -= zone.weight;
-    if(roll <= 0) return zone;
-  }
-  return SHOT_ZONES[1];
-}
-
-/* Ponto de onde se remata, já no lado certo do campo. */
-function shotSpot(side, zone){
-  const z = pickShotZone(zone);
-  return {
-    x: Math.max(6, Math.min(94, 50 + rand(-z.halfWidth, z.halfWidth))),
-    y: depthY(side, rand(z.dist[0], z.dist[1])),
-  };
-}
-
-/* Alvo dentro da baliza: canto, meia-altura ou ao centro — nunca sempre
-   o mesmo sítio. 'y' fica ligeiramente atrás da linha para a bola
-   parecer entrar mesmo na rede. */
-function goalTarget(side, placement){
-  const spots = placement ? [placement] : ['left', 'right', 'center', 'left', 'right'];
-  const pick = spots[Math.floor(Math.random() * spots.length)];
-  const offset = pick === 'center' ? rand(-1.5, 1.5)
-    : (pick === 'left' ? -rand(HALF_W.GOAL * 0.45, HALF_W.GOAL * 0.85)
-                       : rand(HALF_W.GOAL * 0.45, HALF_W.GOAL * 0.85));
-  return { x: 50 + offset, y: depthY(side, -1.2) };
-}
-
-function liveGoalMouthFor(side){
-  // mantido para o resto do código que só quer "a baliza" sem pontaria
-  return { x: 50, y: side === 'home' ? 1.6 : 98.4 };
-}
-
-/* Posição de partida do guarda-redes e o quanto ele sai da linha
-   consoante a distância do remate — um GR sai muito num frente-a-frente
-   e quase nada num remate de fora. */
-function keeperHomeSpot(side){
-  return { x: 50, y: depthY(side, 2.5) };
-}
-
-function keeperRushSpot(side, ballPos){
-  const dist = distFromGoal(side, ballPos.y);
-  const advance = Math.max(1.5, Math.min(AREA.PEN_SPOT, dist * 0.35));
-  const lateral = (ballPos.x - 50) * 0.35; // fecha o ângulo, sem colar ao poste
-  return { x: 50 + Math.max(-9, Math.min(9, lateral)), y: depthY(side, advance) };
-}
-
-/* ---------- Jogadas de equipa organizadas (ataque vs. defesa) ----------
-   Nos golos e lances de perigo, os 10 jogadores de campo de cada equipa
-   movem-se como um bloco organizado, não só quem remata:
-
-   - Equipa a atacar: amplitude e profundidade — os avançados correm para
-     as costas da defesa (perto do alvo do lance), os restantes abrem um
-     pouco mais o campo nas laterais para esticar a marcação adversária,
-     todos empurrando em direção à baliza contrária (mais os avançados,
-     menos os defesas — ver CATEGORY_ATTACK_PUSH).
-   - Equipa a defender: bloco compacto — todos recuam em direção à própria
-     baliza (mais quem está mais avançado, que tem mais terreno para
-     cobrir) e fecham ligeiramente para o centro, para proteger a zona
-     central e a grande área (ver CATEGORY_DEFEND_DROP).
-
-   São movimentos temporários (voltam à posição da formação a seguir),
-   só para dar a sensação de bloco organizado no momento do lance — não
-   uma IA tática completa. */
-const CATEGORY_ATTACK_PUSH = { DEF: 4, MED: 8, MO: 13, PL: 17 };
-const CATEGORY_DEFEND_DROP = { DEF: 3, MED: 6, MO: 9, PL: 11 };
-
-function moveTokenTemporarily(playerId, board, targetPct, holdMs, moveMs){
-  const tokenEl = board.querySelector(`.live-token[data-player-id="${playerId}"]`);
-  if(!tokenEl) return;
-  const originLeft = tokenEl.style.left;
-  const originTop = tokenEl.style.top;
-  const screen = toScreenPct(targetPct);
-  tokenEl.style.transition = `left ${moveMs || 900}ms ease, top ${moveMs || 900}ms ease`;
-  tokenEl.style.left = `${screen.left}%`;
-  tokenEl.style.top = `${screen.top}%`;
-  setTimeout(() => {
-    tokenEl.style.left = originLeft;
-    tokenEl.style.top = originTop;
-  }, holdMs);
-}
-
-function playOrganizedMovement(ev, data, origin, target, defendSide, holdMs, moveMs){
-  const board = el('livePitchTokens');
-  if(!board) return;
-
-  const attackState = data[ev.side];
-  const defendState = data[defendSide];
-  const attackDir = ev.side === 'home' ? -1 : 1; // sentido do ataque, para a baliza adversária
-
-  attackState.on_pitch.filter((p) => p.category !== 'GR').forEach((p) => {
-    const pos = findLiveTokenPosition(p.id, ev.side, data);
-    if(!pos) return;
-    const push = CATEGORY_ATTACK_PUSH[p.category] ?? 8;
-    let targetX;
-    if(p.category === 'PL'){
-      // avançados: correm para as costas da defesa, perto do alvo do lance
-      targetX = pos.x + (target.x - pos.x) * 0.3;
-    }else{
-      // restantes: mantêm a amplitude, abrindo mais um pouco o campo
-      targetX = pos.x + (pos.x >= 50 ? 3 : -3);
-    }
-    const targetY = pos.y + attackDir * push;
-    moveTokenTemporarily(p.id, board, {
-      x: Math.max(6, Math.min(94, targetX)),
-      y: Math.max(3, Math.min(97, targetY)),
-    }, holdMs || 1500, moveMs);
-  });
-
-  defendState.on_pitch.filter((p) => p.category !== 'GR').forEach((p) => {
-    const pos = findLiveTokenPosition(p.id, defendSide, data);
-    if(!pos) return;
-    const drop = CATEGORY_DEFEND_DROP[p.category] ?? 6;
-    const dropDir = -attackDir; // recua para a própria baliza
-    const targetY = pos.y + dropDir * drop;
-    const targetX = pos.x + (50 - pos.x) * 0.18; // fecha ligeiramente para o centro, protegendo a grande área
-    moveTokenTemporarily(p.id, board, {
-      x: Math.max(6, Math.min(94, targetX)),
-      y: Math.max(3, Math.min(97, targetY)),
-    }, holdMs || 1500, moveMs);
-  });
-}
-
-/* ================================================================
-   MOTOR DE GOLOS "AO ESTILO CAMPO.JS" ------------------------------
-   Porta para aqui a mesma linguagem visual do protótipo campo.js —
-   bola em curva (Bezier), cabeceamentos com salto, jogadas construídas
-   passo a passo com awaits, rede a abanar, "GOLO!" a aparecer, e a
-   equipa toda a correr para a bandeirola de canto a festejar — só que
-   em cima das posições REAIS dos jogadores em campo (não há coordenadas
-   fixas por jogada como no protótipo, por isso a "jogada" em si é
-   sorteada de um pequeno leque de coreografias a cada golo).
+   Os nomes reais dos jogadores entram nas coreografias: o marcador
+   real faz o papel do finalizador e o assistente real o papel do
+   passador, e o comentário da jogada usa os nomes verdadeiros.
    ================================================================ */
 
 function wait(ms){ return new Promise((resolve) => setTimeout(resolve, ms)); }
+function rand(min, max){ return min + Math.random() * (max - min); }
+function lastName(name){ return String(name || '').trim().split(/\s+/).slice(-1)[0] || '—'; }
 
-// Todas as jogadas de golo ficam mais lentas do que a velocidade "base"
-// escrita nas coreografias — dois abrandamentos de 10% acumulados
-// (1,1 x 1,1), para dar tempo de seguir a bola de jogador em jogador.
-// T() converte cada duração/pausa das coreografias abaixo.
-const GOAL_TIME_SCALE = 1.21;
-function T(ms){ return Math.round(ms * GOAL_TIME_SCALE); }
+/* ================================================================
+   TELA 1 — ESTÚDIO: onzes, notas e dados
+   ================================================================ */
 
-// Converte um ponto em espaço de campo (x=largura, y=profundidade, tal
-// como slotCoords/findLiveTokenPosition) diretamente para as % de ecrã
-// já usadas por toScreenPct, e desloca o boneco com uma transição CSS —
-// equivalente ao movePlayer do campo.js.
-function moveTokenSmooth(playerId, board, targetPct, durationMs){
-  const tokenEl = board.querySelector(`.live-token[data-player-id="${playerId}"]`);
-  const d = T(durationMs);
-  if(!tokenEl) return wait(d);
-  const screen = toScreenPct(targetPct);
-  tokenEl.style.transition = `left ${d}ms cubic-bezier(.4,0,.2,1), top ${d}ms cubic-bezier(.4,0,.2,1)`;
-  requestAnimationFrame(() => {
-    tokenEl.style.left = `${screen.left}%`;
-    tokenEl.style.top = `${screen.top}%`;
-  });
-  return wait(d);
-}
+/* ---------- Nota ao vivo de cada jogador ----------
+   O servidor só calcula notas no fim do jogo (ver finalizeMatch em
+   routes/liveMatch.js). Enquanto o jogo decorre, a nota mostrada aqui
+   é uma leitura provisória, feita no cliente a partir do que já se
+   sabe: a qualidade do jogador, o que já fez no jogo (golos,
+   assistências, cartão) e o resultado da equipa. É só indicativa —
+   a nota oficial é a que fica no relatório do jogo no fim. */
+function liveRating(p, teamState, data){
+  const quality = Number(p.quality) || 1;
+  let r = 6.0 + (quality - 1) * 1.25;
 
-// Equivalente ao moveBallLinear do campo.js — desloca a bola em linha
-// reta (passes curtos, toques, etc.).
-function moveBallLinearField(point, durationMs){
-  const ball = el('livePitchBall');
-  const d = T(durationMs);
-  if(!ball) return wait(d);
-  const screen = toScreenPct(point);
-  ball.style.transition = `left ${d}ms linear, top ${d}ms linear`;
-  ball.style.opacity = '1';
-  requestAnimationFrame(() => {
-    ball.style.left = `${screen.left}%`;
-    ball.style.top = `${screen.top}%`;
-  });
-  return wait(d);
-}
+  r += (p.goals || 0) * 0.85;
+  r += (p.assists || 0) * 0.5;
+  if(p.yellow) r -= 0.35;
 
-// Equivalente ao moveBallCurve do campo.js — voo em curva de Bezier
-// quadrática (cruzamentos, remates, passes em profundidade). Os 3 pontos
-// são em espaço de campo; convertem-se para % de ecrã antes de animar,
-// frame a frame, tal como no protótipo.
-function moveBallCurveField(p0, p1, p2, durationMs){
-  const ball = el('livePitchBall');
-  const d = T(durationMs);
-  if(!ball) return wait(d);
-  const s0 = toScreenPct(p0);
-  const s1 = toScreenPct(p1);
-  const s2 = toScreenPct(p2);
-  ball.style.transition = 'none';
-  ball.style.opacity = '1';
-  const start = performance.now();
-  return new Promise((resolve) => {
-    function frame(now){
-      const t = Math.min(1, (now - start) / d);
-      const left = (1 - t) * (1 - t) * s0.left + 2 * (1 - t) * t * s1.left + t * t * s2.left;
-      const top = (1 - t) * (1 - t) * s0.top + 2 * (1 - t) * t * s1.top + t * t * s2.top;
-      ball.style.left = `${left}%`;
-      ball.style.top = `${top}%`;
-      if(t < 1){ requestAnimationFrame(frame); } else { resolve(); }
-    }
-    requestAnimationFrame(frame);
-  });
-}
-
-function placeBallInstant(point){
-  const ball = el('livePitchBall');
-  if(!ball) return;
-  const screen = toScreenPct(point);
-  ball.style.transition = 'none';
-  ball.style.left = `${screen.left}%`;
-  ball.style.top = `${screen.top}%`;
-  ball.style.opacity = '1';
-  void ball.offsetWidth;
-}
-
-function tokenClass(playerId, board, cls, on){
-  const tokenEl = board.querySelector(`.live-token[data-player-id="${playerId}"]`);
-  if(!tokenEl) return;
-  tokenEl.classList.toggle(cls, on);
-}
-
-// desloca por instantes um grupo de defesas parcialmente na direção de um
-// ponto (a bola, o corredor do ataque) — mesma ideia do trackDefenders do
-// campo.js, para a defesa parecer reagir à jogada em vez de ficar imóvel.
-function trackDefendersToward(ids, target, side, data, board, durationMs, pull){
-  ids.forEach((id) => {
-    const pos = findLiveTokenPosition(id, side, data);
-    if(!pos) return;
-    const nx = pos.x + (target.x - pos.x) * pull;
-    const ny = pos.y + (target.y - pos.y) * pull;
-    moveTokenSmooth(id, board, { x: Math.max(4, Math.min(96, nx)), y: Math.max(2, Math.min(98, ny)) }, durationMs);
-  });
-}
-
-const GOAL_FLASH_MESSAGES = ['⚽ GOLO!', '⚽ GOLAÇO!', '⚽ QUE GOLO!', '⚽ ESTÁ LÁ DENTRO!', '⚽ SEM HIPÓTESE!'];
-
-// baliza aberta para 'right center' (topo) ou 'left center' (fundo) — ver
-// transform-origin em dashboard.css — para a rede parecer mesmo a abanar
-// para dentro/fora, e não só a esticar do centro.
-function pulseGoalNet(side){
-  const goalEl = document.querySelector(side === 'home' ? '.live-pitch-goal-top' : '.live-pitch-goal-bottom');
-  if(!goalEl) return;
-  goalEl.classList.remove('net-ripple');
-  void goalEl.offsetWidth; // força reflow para poder repetir a animação em golos seguidos
-  goalEl.classList.add('net-ripple');
-}
-
-function showGoalFlash(){
-  const flash = el('liveGoalFlash');
-  if(!flash) return;
-  flash.textContent = GOAL_FLASH_MESSAGES[Math.floor(Math.random() * GOAL_FLASH_MESSAGES.length)];
-  flash.classList.remove('show');
-  void flash.offsetWidth;
-  flash.classList.add('show');
-}
-
-// bandeirolas de canto perto da baliza que a equipa acabou de festejar —
-// duas opções (lado de cima/baixo do campo), tal como CORNER_TOP/BOTTOM
-// no protótipo campo.js.
-function goalCornersFor(side){
-  const y = side === 'home' ? 3 : 97;
-  return [{ x: 6, y }, { x: 94, y }];
-}
-
-/* ---------- Festejo final — SEMPRE o mesmo, tal como finishGoal no
-   campo.js: rede a abanar, "GOLO!" a aparecer, e toda a equipa (menos
-   o guarda-redes) a correr para a bandeirola de canto mais próxima para
-   festejar em grupo. A defesa fica por instantes mais apagada. A única
-   coisa que varia de golo para golo é a JOGADA pré-definida sorteada
-   (ver PRESET_PLAYS mais abaixo), não o festejo em si. ---------- */
-async function finishGoalOnPitch(ctx){
-  const { board, ev, data, teamState, defendState, defendSide } = ctx;
-
-  pulseGoalNet(ev.side);
-  showGoalFlash();
-  bumpScoreDisplay(ev.side); // só agora o placar avança — ver liveDisplayedScore
-
-  defendState.on_pitch.filter((p) => p.category !== 'GR').forEach((p) => tokenClass(p.id, board, 'slump', true));
-
-  await wait(T(280));
-
-  const corners = goalCornersFor(ev.side);
-  const corner = corners[Math.floor(Math.random() * corners.length)];
-  const celebrators = teamState.on_pitch.filter((p) => p.category !== 'GR').map((p) => p.id);
-
-  const runPromises = celebrators.map((id, i) => {
-    const target = {
-      x: Math.max(3, Math.min(97, corner.x + (Math.random() * 16 - 8))),
-      y: Math.max(1, Math.min(99, corner.y + (i % 5) * 2.4 * (ev.side === 'home' ? 1 : -1))),
-    };
-    return moveTokenSmooth(id, board, target, 620 + (i % 5) * 70).then(() => {
-      tokenClass(id, board, id === ctx.scorerId ? 'celebrate-big' : 'celebrate', true);
-    });
-  });
-  await Promise.all(runPromises);
-  await wait(T(700));
-
-  defendState.on_pitch.forEach((p) => tokenClass(p.id, board, 'slump', false));
-  celebrators.forEach((id) => tokenClass(id, board, 'celebrate', false));
-  celebrators.forEach((id) => tokenClass(id, board, 'celebrate-big', false));
-
-  // devolve toda a gente à posição da formação (a próxima jogada/idle
-  // motion continua a partir daí, tal como já acontecia antes).
-  renderLivePitch(data);
-}
-
-/* ---------- Jogadas até ao golo — sorteada uma de cada vez, sem repetir
-   a anterior, tal como pickVariant/lastVariantIndex no campo.js.
-
-   Todas seguem a mesma gramática do futebol a sério: a bola SOBE o campo
-   por fases (construção -> último terço -> zona de remate) e só depois é
-   que se remata, de um ponto sorteado por shotSpot(). O guarda-redes sai
-   da linha consoante a distância, e os defesas mais próximos tentam
-   fechar a linha de remate. ---------- */
-
-/* O remate propriamente dito: duração proporcional à distância real
-   (um tap-in é instantâneo, um remate de 25m demora), curva mais aberta
-   nos remates de longe, e o GR a sair à bola. */
-// Igual ao moveBallCurveField, mas SEM passar pelo T() de abrandamento
-// (o replay já define a sua própria velocidade) e cancelável a meio —
-// usado só para a repetição em câmara lenta, que o treinador pode saltar.
-function moveBallCurveRaw(p0, p1, p2, durationMs){
-  const ball = el('livePitchBall');
-  let resolveFn = () => {};
-  const promise = new Promise((resolve) => { resolveFn = resolve; });
-  if(!ball) { resolveFn(); return { promise, cancel(){} }; }
-
-  const s0 = toScreenPct(p0);
-  const s1 = toScreenPct(p1);
-  const s2 = toScreenPct(p2);
-  ball.style.transition = 'none';
-  ball.style.opacity = '1';
-  let rafId = null;
-  let done = false;
-  const start = performance.now();
-
-  function frame(now){
-    if(done) return;
-    const t = Math.min(1, (now - start) / durationMs);
-    ball.style.left = `${(1 - t) * (1 - t) * s0.left + 2 * (1 - t) * t * s1.left + t * t * s2.left}%`;
-    ball.style.top = `${(1 - t) * (1 - t) * s0.top + 2 * (1 - t) * t * s1.top + t * t * s2.top}%`;
-    if(t < 1){ rafId = requestAnimationFrame(frame); } else { done = true; resolveFn(); }
+  const side = data.home.team_id === teamState.team_id ? 'home' : 'away';
+  const own = side === 'home' ? data.home_score : data.away_score;
+  const other = side === 'home' ? data.away_score : data.home_score;
+  const diff = own - other;
+  if(p.category === 'GR'){
+    r += other === 0 ? 0.6 : -Math.min(0.9, other * 0.22);
+  }else{
+    r += Math.max(-0.5, Math.min(0.5, diff * 0.15));
   }
-  rafId = requestAnimationFrame(frame);
+
+  // pequena variação estável por jogador (não salta a cada atualização)
+  const seed = (Number(p.id) || 0) % 7;
+  r += (seed - 3) * 0.06;
+
+  return Math.max(4.5, Math.min(10, r));
+}
+
+function ratingTone(value){
+  if(value >= 7.8) return 'great';
+  if(value >= 6.9) return 'good';
+  if(value >= 6.0) return 'ok';
+  return 'poor';
+}
+
+/* Ponto de cada jogador no mini-campo da sua equipa, com as mesmas
+   coordenadas da Tática (ver FORMATIONS). Cada equipa tem o seu
+   próprio mini-campo, a atacar para cima. */
+function lineupSlotCoords(formation, slotIndex){
+  const def = FORMATIONS[formation] || FORMATIONS['4-3-3'];
+  const slot = (Number.isInteger(slotIndex) && def[slotIndex]) ? def[slotIndex] : (def[slotIndex % def.length] || def[0]);
+  return { x: slot.x, y: slot.y };
+}
+
+function lineupDotHtml(p, teamState, data){
+  const rating = liveRating(p, teamState, data);
+  // mesma cor que o jogador tem no campo dos lances: casa a vermelho,
+  // fora a azul — a equipa reconhece-se à primeira nas duas telas
+  const teamClass = data.home.team_id === teamState.team_id ? 'team-home' : 'team-away';
+  const { x, y } = lineupSlotCoords(teamState.formation, p.slot_index);
+  const selectable = teamState.is_user && liveState && liveState.status !== 'finished';
+  const marks = [];
+  if(p.goals) marks.push(`<span class="lineup-dot-mark">⚽${p.goals > 1 ? p.goals : ''}</span>`);
+  if(p.assists) marks.push(`<span class="lineup-dot-mark">🅰️${p.assists > 1 ? p.assists : ''}</span>`);
+  if(p.yellow) marks.push('<span class="lineup-dot-mark">🟨</span>');
+
+  return `
+    <div class="lineup-dot${selectable ? ' selectable' : ''}" style="left:${x}%;top:${y}%;" data-player-id="${p.id}"
+         title="${p.name}${selectable ? ' — clica para substituir' : ''}">
+      <span class="lineup-dot-circle ${teamClass}${p.category === 'GR' ? ' gk' : ''}${teamState.is_user ? ' is-user' : ''}">${p.jersey_number || '•'}</span>
+      <span class="lineup-dot-name">${lastName(p.name)}</span>
+      <span class="lineup-dot-rating tone-${ratingTone(rating)}">${rating.toFixed(1)}</span>
+      ${marks.length ? `<span class="lineup-dot-marks">${marks.join('')}</span>` : ''}
+    </div>`;
+}
+
+function lineupCardHtml(teamState, data, sideLabel){
+  const best = teamState.on_pitch
+    .map((p) => ({ p, r: liveRating(p, teamState, data) }))
+    .sort((a, b) => b.r - a.r)[0];
+
+  return `
+    <div class="lineup-card-head">
+      <span class="lineup-card-shield">${shieldHtml(teamState)}</span>
+      <span class="lineup-card-name">${teamState.team_name}</span>
+      <span class="lineup-card-side">${sideLabel}</span>
+    </div>
+    <div class="lineup-card-meta">
+      <span>${teamState.formation}</span>
+      <span>${MENTALITY_TEXT[teamState.mentality] || 'Equilibrado'}</span>
+      ${teamState.is_user ? '<span class="lineup-card-you">a tua equipa</span>' : ''}
+    </div>
+    <div class="lineup-pitch">
+      <div class="lineup-pitch-lines"></div>
+      ${teamState.on_pitch.map((p) => lineupDotHtml(p, teamState, data)).join('')}
+    </div>
+    <div class="lineup-card-foot">
+      <span>Melhor em campo</span>
+      <strong>${best ? `${lastName(best.p.name)} · ${best.r.toFixed(1)}` : '—'}</strong>
+    </div>`;
+}
+
+const MENTALITY_TEXT = {
+  equilibrado: 'Equilibrado',
+  atacante: 'Atacante',
+  contra_ataque: 'Contra-ataque',
+  defensiva: 'Defensiva',
+};
+
+/* Estatísticas do jogo, contadas a partir do histórico de
+   acontecimentos que o servidor já manda (não há dados novos a pedir):
+   remates = golos + lances de perigo, e a posse é estimada a partir de
+   quem tem criado mais lances, ajustada pelo tempo de jogo. */
+function liveStats(data){
+  const evs = data.events || [];
+  const count = (side, test) => evs.filter((e) => e.side === side && test(e)).length;
+
+  const shotsHome = count('home', (e) => e.kind === 'goal' || e.kind === 'chance');
+  const shotsAway = count('away', (e) => e.kind === 'goal' || e.kind === 'chance');
+  const total = shotsHome + shotsAway;
+  const possHome = total ? Math.round(35 + (shotsHome / total) * 30) : 50;
 
   return {
-    promise,
-    cancel(){
-      if(done) return;
-      done = true;
-      if(rafId) cancelAnimationFrame(rafId);
-      const s = toScreenPct(p2);
-      ball.style.left = `${s.left}%`;
-      ball.style.top = `${s.top}%`;
-      resolveFn();
-    },
+    possHome,
+    possAway: 100 - possHome,
+    shotsHome,
+    shotsAway,
+    onTargetHome: count('home', (e) => e.kind === 'goal' || (e.kind === 'chance' && e.outcome === 'saved')),
+    onTargetAway: count('away', (e) => e.kind === 'goal' || (e.kind === 'chance' && e.outcome === 'saved')),
+    cardsHome: count('home', (e) => e.kind === 'yellow' || e.kind === 'red'),
+    cardsAway: count('away', (e) => e.kind === 'yellow' || e.kind === 'red'),
   };
 }
 
-async function strikeAtGoal(ctx, fromPos, opts = {}){
-  const { side, board, keeperId } = ctx;
-  const target = opts.target || goalTarget(side);
-  const meters = metersBetween(fromPos, target);
-  const flightMs = Math.max(220, Math.min(760, meters * 26));
-
-  if(keeperId){
-    moveTokenSmooth(keeperId, board, keeperRushSpot(side, fromPos), Math.min(420, flightMs));
-  }
-
-  const bend = Math.min(16, meters * 0.55);
-  const mid = {
-    x: (fromPos.x + target.x) / 2 + rand(-bend, bend),
-    y: (fromPos.y + target.y) / 2,
-  };
-  // guarda a geometria exata deste remate para a repetição em câmara
-  // lenta que corre a seguir ao festejo (ver playGoalReplay).
-  ctx.lastShot = { fromPos, mid, target, flightMs, side, scorerId: ctx.scorerId };
-  await moveBallCurveField(fromPos, mid, target, flightMs);
-  return target;
+function statRowHtml(label, home, away, asBar){
+  const total = (Number(home) || 0) + (Number(away) || 0);
+  const pct = total ? (Number(home) / total) * 100 : 50;
+  return `
+    <div class="live-stat">
+      <div class="live-stat-line"><span>${home}</span><span class="live-stat-label">${label}</span><span>${away}</span></div>
+      ${asBar === false ? '' : `<div class="live-stat-bar"><span style="width:${pct}%"></span></div>`}
+    </div>`;
 }
 
-/* ---------- Defesa coletiva: os 10 reagem, não só um ----------
-   Numa defesa a sério ninguém fica parado: quem está perto da bola
-   pressiona, quem está atrás faz cobertura, e TODO o bloco desliza
-   para o lado da bola (ball-side compactness) mantendo a linha. Estas
-   funções tratam o conjunto; devolvem sempre o bloco todo mexido. */
+function renderLiveDataBox(data){
+  const box = el('liveDataBox');
+  if(!box) return;
+  const s = liveStats(data);
+  const recent = (data.events || []).slice(-4).reverse();
+  const finished = data.status === 'finished';
 
-// Posições atuais (formação) de todos os defesas de campo, já ordenadas
-// pela distância real à bola.
-function defendersByDistance(ctx, point){
-  const { defendState, defendSide, data } = ctx;
-  return defendState.on_pitch
-    .filter((p) => p.category !== 'GR')
-    .map((p) => ({ id: p.id, category: p.category, pos: findLiveTokenPosition(p.id, defendSide, data) }))
-    .filter((d) => d.pos)
-    .sort((a, b) => metersBetween(a.pos, point) - metersBetween(b.pos, point));
-}
+  box.innerHTML = `
+    <div class="live-data-block">
+      <div class="live-data-title">Estatísticas</div>
+      ${statRowHtml('Posse de bola', `${s.possHome}%`, `${s.possAway}%`)}
+      ${statRowHtml('Remates', s.shotsHome, s.shotsAway)}
+      ${statRowHtml('À baliza', s.onTargetHome, s.onTargetAway)}
+      ${statRowHtml('Cartões', s.cardsHome, s.cardsAway, false)}
+    </div>
 
-function closestDefendersTo(ctx, point, count){
-  return defendersByDistance(ctx, point).slice(0, count);
-}
+    <div class="live-data-block">
+      <div class="live-data-title">Últimos lances</div>
+      <div class="live-data-feed">
+        ${recent.length
+          ? recent.map((e) => `<div class="live-data-feed-item evt-${e.kind}"><span>${e.minute}'</span><p>${e.text}</p></div>`).join('')
+          : '<p class="live-data-empty">O jogo ainda agora começou.</p>'}
+      </div>
+    </div>
 
-/* O bloco defensivo inteiro reage à posição da bola:
-   - os 2 mais próximos saem à bola (pressão + apoio);
-   - os 3 seguintes fazem cobertura, a meio caminho entre a bola e a
-     própria baliza;
-   - os restantes deslizam para o lado da bola e recuam, mantendo a
-     linha compacta em vez de ficarem colados ao slot da formação. */
-function defensiveBlock(ctx, point, durationMs){
-  const { board, defendSide } = ctx;
-  const goalY = depthY(defendSide === 'home' ? 'away' : 'home', 0); // a baliza que ESTES defendem
-  const ranked = defendersByDistance(ctx, point);
+    <div class="live-data-block">
+      <div class="live-data-title">Opções</div>
+      <div class="live-data-actions">
+        <button type="button" class="live-data-btn" id="liveDataAdvance" ${finished ? 'disabled' : ''}>▶ Avançar 5'</button>
+        <button type="button" class="live-data-btn" id="liveDataAuto" ${finished ? 'disabled' : ''}>⏵ Automático</button>
+        <button type="button" class="live-data-btn" id="liveDataSubs" ${finished || !liveMySide ? 'disabled' : ''}>🔁 Substituir</button>
+        <button type="button" class="live-data-btn" id="liveDataTactics" ${!liveMySide ? 'disabled' : ''}>📋 Táticas</button>
+      </div>
+      <p class="live-data-hint">${finished
+        ? 'Jogo terminado. As notas finais ficam no relatório do jogo.'
+        : 'As notas são provisórias e vão mudando com o jogo.'}</p>
+    </div>`;
 
-  ranked.forEach((d, i) => {
-    let target;
-    if(i < 2){
-      // pressão direta à bola
-      const pull = i === 0 ? 0.78 : 0.5;
-      target = {
-        x: d.pos.x + (point.x - d.pos.x) * pull,
-        y: d.pos.y + (point.y - d.pos.y) * pull,
-      };
-    } else if(i < 5){
-      // cobertura: entre a bola e a própria baliza
-      const cover = 0.34;
-      target = {
-        x: d.pos.x + (point.x - d.pos.x) * cover,
-        y: d.pos.y + ((point.y + goalY) / 2 - d.pos.y) * cover,
-      };
-    } else {
-      // resto do bloco: desliza para o lado da bola e encurta a linha
-      target = {
-        x: d.pos.x + (point.x - d.pos.x) * 0.2,
-        y: d.pos.y + (goalY - d.pos.y) * 0.12,
-      };
-    }
-    moveTokenSmooth(d.id, board, {
-      x: Math.max(4, Math.min(96, target.x)),
-      y: Math.max(2, Math.min(98, target.y)),
-    }, durationMs);
-  });
-  return ranked;
-}
-
-// Mantido para chamadas antigas: pressão só dos mais próximos.
-function pressBall(ctx, point, durationMs, count = 2){
-  closestDefendersTo(ctx, point, count).forEach((d, i) => {
-    const pull = i === 0 ? 0.72 : 0.45;
-    moveTokenSmooth(d.id, ctx.board, {
-      x: Math.max(4, Math.min(96, d.pos.x + (point.x - d.pos.x) * pull)),
-      y: Math.max(2, Math.min(98, d.pos.y + (point.y - d.pos.y) * pull)),
-    }, durationMs);
+  const advance = el('liveDataAdvance');
+  const auto = el('liveDataAuto');
+  const subs = el('liveDataSubs');
+  const tactics = el('liveDataTactics');
+  if(advance) advance.addEventListener('click', () => el('livePlayBtn').click());
+  if(auto) auto.addEventListener('click', () => el('liveAutoBtn').click());
+  if(subs) subs.addEventListener('click', () => openSubModal(null));
+  if(tactics) tactics.addEventListener('click', () => {
+    el('liveSideCol').classList.add('open');
+    el('liveDrawerBackdrop').classList.add('open');
   });
 }
 
-/* Um defesa tenta mesmo o corte/desarme: vai à bola e falha por pouco
-   (a bola já saiu). Dá a sensação de lance disputado. */
-async function attemptTackle(ctx, point, durationMs){
-  const d = closestDefendersTo(ctx, point, 1)[0];
-  if(!d) return;
-  await moveTokenSmooth(d.id, ctx.board, {
-    x: Math.max(4, Math.min(96, d.pos.x + (point.x - d.pos.x) * 0.92)),
-    y: Math.max(2, Math.min(98, d.pos.y + (point.y - d.pos.y) * 0.92)),
-  }, durationMs);
+/* Desenha a tela de estúdio inteira (os dois onzes + a coluna de
+   dados). Substitui o antigo renderLivePitch — fora dos lances já não
+   há um campo com os 22 bonecos a passear. */
+function renderLiveLineups(data){
+  const homeCard = el('lineupHome');
+  const awayCard = el('lineupAway');
+  if(!homeCard || !awayCard) return;
+
+  homeCard.innerHTML = lineupCardHtml(data.home, data, 'Casa');
+  awayCard.innerHTML = lineupCardHtml(data.away, data, 'Fora');
+  el('liveLineupsScore').textContent = `${liveDisplayedScore.home} - ${liveDisplayedScore.away}`;
+  el('liveLineupsMinute').textContent = data.status === 'finished' ? 'Fim de jogo' : `${data.minute}'`;
+
+  // clicar num jogador teu abre a janela de substituições com ele já escolhido
+  [homeCard, awayCard].forEach((card) => {
+    card.querySelectorAll('.lineup-dot.selectable').forEach((dot) => {
+      dot.addEventListener('click', () => openSubModal(Number(dot.dataset.playerId)));
+    });
+  });
+
+  renderLiveDataBox(data);
 }
 
 /* ================================================================
-   JOGADAS PRÉ-DEFINIDAS (ao estilo do protótipo campo.js) ---------
-   Em vez de calcular posições em tempo real, cada golo/lance de
-   perigo sorteia uma destas 15 coreografias — literalmente as mesmas
-   posições de partida do protótipo campo.js (corner_1..4, contra_1..3,
-   triangulacao_1..4, ensaiada_1..2, cruzamento_1..2) — e teleporta os
-   22 jogadores para lá, tal como o applySetup()/"Reproduzir jogada"
-   do protótipo. Fora destes momentos, o campo fica só com as duas
-   equipas na formação normal (ver renderLivePitch), sem o jogo
-   inteiro a simular-se sozinho.
+   TELA 2 — CAMPO DE 11 (motor portado do protótipo campo.js)
+   ================================================================ */
 
-   Convenção de coordenadas (igual ao campo.js): cx 0→100 da própria
-   baliza até à baliza atacada; cy 0→100 de uma linha lateral à outra.
-   mapCampoToField() converte isto para o referencial do campo vertical
-   usado no resto do dashboard (x=largura, y=profundidade). ---------- */
+/* Coordenadas iguais às do protótipo:
+   cx: 0 = linha de baliza da equipa que ataca, 100 = baliza atacada
+   cy: 0 = linha lateral de cima, 100 = linha lateral de baixo      */
 
 const BASE_ATTACK = {
   A1: [6, 50], A2: [22, 18], A3: [22, 38], A4: [22, 62], A5: [22, 82],
   A6: [45, 22], A7: [45, 40], A8: [45, 60], A9: [45, 78],
   A10: [65, 38], A11: [65, 62],
 };
+
 const BASE_DEFEND = {
   D1: [94, 50], D2: [78, 18], D3: [78, 38], D4: [78, 62], D5: [78, 82],
   D6: [58, 22], D7: [58, 40], D8: [58, 60], D9: [58, 78],
   D10: [38, 38], D11: [38, 62],
 };
 
-const PRESET_PLAYS = [
-  { category: 'corner', header: true, ball: [98.5, 4],
+const GK_ROLES = new Set(['A1', 'D1']);
+const ALL_ATTACK = ['A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'A11'];
+const CORNER_TOP = [97, 4];
+const CORNER_BOTTOM = [97, 96];
+
+const SETUPS = {
+  corner_1: { ball: [98.5, 4],
     attack: { A7: [98, 4], A9: [90, 40], A8: [86, 55], A10: [85, 50], A2: [88, 62], A4: [84, 45], A11: [90, 60], A3: [45, 40], A5: [45, 60], A6: [55, 50] },
     defend: { D1: [97, 50], D2: [89, 25], D3: [85, 35], D4: [87, 45], D5: [85, 55], D6: [88, 65], D7: [84, 75], D8: [90, 72], D9: [86, 60], D10: [55, 45], D11: [55, 55] } },
-  { category: 'corner', header: true, ball: [98.5, 4],
+  corner_2: { ball: [98.5, 4],
     attack: { A7: [98, 4], A6: [90, 12], A9: [88, 45], A10: [85, 55], A8: [84, 42], A2: [87, 65], A11: [90, 60], A4: [85, 48], A3: [45, 40], A5: [45, 60] },
     defend: { D1: [97, 50], D6: [92, 12], D2: [90, 25], D3: [85, 38], D4: [87, 50], D5: [85, 62], D7: [88, 72], D8: [84, 45], D9: [86, 58], D11: [90, 68], D10: [55, 50] } },
-  { category: 'corner', header: true, ball: [98.5, 4],
+  corner_3: { ball: [98.5, 4],
     attack: { A7: [98, 4], A8: [78, 50], A9: [88, 25], A10: [85, 45], A11: [88, 62], A2: [90, 50], A4: [86, 70], A6: [84, 35], A3: [45, 40], A5: [45, 60] },
     defend: { D1: [97, 50], D2: [90, 25], D3: [85, 38], D4: [87, 58], D5: [85, 68], D6: [85, 50], D7: [88, 30], D8: [90, 45], D9: [86, 62], D10: [55, 50], D11: [55, 60] } },
-  { category: 'corner', header: true, ball: [98.5, 4],
+  corner_4: { ball: [98.5, 4],
     attack: { A7: [98, 4], A6: [90, 12], A9: [88, 40], A10: [85, 55], A8: [84, 45], A2: [87, 65], A11: [90, 60], A4: [85, 50], A3: [45, 40], A5: [45, 60] },
     defend: { D1: [97, 50], D2: [90, 25], D3: [85, 38], D4: [87, 50], D5: [85, 62], D6: [88, 70], D7: [84, 45], D8: [90, 58], D9: [86, 72], D10: [55, 50], D11: [55, 60] } },
 
-  { category: 'contra', header: false, ball: [6, 50],
+  contra_1: { ball: [6, 50],
     attack: { A1: [6, 50], A3: [18, 45], A10: [45, 42], A11: [45, 58], A6: [38, 50] },
     defend: { D6: [55, 45], D7: [55, 55], D10: [65, 40], D11: [65, 60], D2: [75, 25], D3: [75, 50], D1: [94, 50] } },
-  { category: 'contra', header: false, ball: [35, 50],
+  contra_2: { ball: [35, 50],
     attack: { A10: [35, 50], A9: [70, 35], A11: [70, 65], A6: [45, 50] },
     defend: { D10: [50, 50], D6: [60, 48], D7: [68, 52], D3: [80, 45], D1: [94, 50] } },
-  { category: 'contra', header: false, ball: [30, 15],
+  contra_3: { ball: [30, 15],
     attack: { A11: [30, 15], A9: [55, 50], A10: [70, 60], A6: [40, 45] },
     defend: { D2: [55, 15], D6: [60, 45], D7: [65, 55], D10: [75, 40], D11: [75, 60], D3: [80, 50], D1: [94, 50] } },
 
-  { category: 'triangulacao', header: false, ball: [65, 50],
+  triangulacao_1: { ball: [65, 50],
     attack: { A8: [65, 50], A10: [78, 45], A9: [70, 66] },
     defend: { D7: [75, 48], D6: [70, 55], D1: [97, 50], D3: [85, 45] } },
-  { category: 'triangulacao', header: false, ball: [68, 40],
+  triangulacao_2: { ball: [68, 40],
     attack: { A7: [68, 40], A8: [76, 55], A9: [65, 60], A10: [40, 50] },
     defend: { D6: [72, 48], D7: [78, 50], D1: [97, 50], D2: [85, 30] } },
-  { category: 'triangulacao', header: false, ball: [70, 55],
+  triangulacao_3: { ball: [70, 55],
     attack: { A6: [70, 55], A7: [75, 48], A11: [55, 66] },
     defend: { D6: [74, 52], D3: [82, 50], D4: [85, 65], D1: [97, 50] } },
-  { category: 'triangulacao', header: false, ball: [55, 30],
+  triangulacao_4: { ball: [55, 30],
     attack: { A7: [55, 30], A8: [60, 55], A6: [65, 45], A10: [80, 60] },
     defend: { D6: [62, 35], D9: [65, 55], D7: [70, 48], D1: [97, 50], D4: [85, 55] } },
 
-  { category: 'ensaiada', header: false, ball: [70, 50],
+  ensaiada_1: { ball: [70, 50],
     attack: { A8: [65, 50], A9: [80, 38], A10: [80, 62], A11: [73, 58] },
     defend: { D6: [78, 46], D7: [78, 50], D8: [78, 54], D2: [85, 25], D3: [85, 75], D1: [97, 50] } },
-  { category: 'ensaiada', header: false, ball: [70, 50],
+  ensaiada_2: { ball: [70, 50],
     attack: { A8: [70, 50], A9: [82, 40], A11: [82, 60] },
     defend: { D6: [74, 47], D7: [74, 50], D8: [74, 53], D2: [85, 25], D3: [85, 75], D1: [97, 50] } },
 
-  { category: 'cruzamento', header: true, ball: [70, 90],
+  cruzamento_1: { ball: [70, 90],
     attack: { A11: [70, 90], A9: [78, 50], A10: [83, 58], A8: [65, 70] },
     defend: { D5: [75, 85], D4: [85, 52], D3: [83, 60], D1: [97, 50] } },
-  { category: 'cruzamento', header: true, ball: [75, 85],
+  cruzamento_2: { ball: [75, 85],
     attack: { A11: [75, 85], A9: [85, 45], A10: [80, 55], A8: [60, 70] },
     defend: { D5: [78, 80], D4: [85, 50], D3: [83, 58], D1: [97, 50] } },
-];
 
-/* cx medido a partir da PRÓPRIA baliza de quem ataca (0) até à baliza
-   adversária (100); cy é a largura (0-100). O 'home' ataca para
-   y=0 no resto do dashboard, o 'away' para y=100 — por isso o cx
-   inverte consoante o lado, e cy passa directamente para x. */
-function mapCampoToField(side, cx, cy){
-  const y = side === 'home' ? (100 - cx) : cx;
-  const x = cy;
-  return { x: Math.max(2, Math.min(98, x)), y: Math.max(1, Math.min(99, y)) };
+  /* ---- 7 lances novos ---- */
+
+  penalti: { ball: [88, 50],
+    attack: { A9: [85, 50], A8: [78, 40], A10: [78, 60], A7: [75, 50], A6: [70, 44], A11: [70, 56], A2: [55, 30], A3: [50, 50], A4: [55, 70] },
+    defend: { D1: [97, 50], D2: [80, 38], D3: [80, 62], D4: [78, 50], D6: [76, 44], D7: [76, 56], D5: [60, 30], D8: [60, 70] } },
+
+  ressalto: { ball: [70, 45],
+    attack: { A9: [70, 45], A10: [84, 58], A8: [65, 60], A11: [72, 34], A7: [60, 50] },
+    defend: { D1: [97, 50], D3: [80, 48], D4: [82, 58], D6: [74, 44], D7: [76, 52], D2: [86, 36] } },
+
+  pressao_alta: { ball: [92, 35],
+    attack: { A9: [88, 38], A10: [86, 52], A7: [72, 55], A8: [66, 45], A6: [70, 30] },
+    defend: { D1: [97, 50], D3: [92, 35], D4: [90, 60], D2: [86, 20], D6: [75, 45], D7: [75, 56] } },
+
+  remate_fora: { ball: [66, 42],
+    attack: { A8: [72, 50], A6: [66, 42], A9: [85, 45], A10: [85, 58], A11: [78, 66] },
+    defend: { D6: [76, 48], D7: [78, 56], D3: [86, 45], D4: [86, 58], D1: [97, 50], D2: [82, 34] } },
+
+  bola_longa: { ball: [10, 50],
+    attack: { A1: [8, 50], A9: [56, 46], A6: [58, 58], A10: [60, 38], A3: [24, 44] },
+    defend: { D10: [58, 48], D11: [58, 58], D3: [72, 50], D4: [74, 40], D1: [94, 50], D2: [70, 25] } },
+
+  livre_lateral: { ball: [72, 8],
+    attack: { A7: [72, 8], A9: [86, 42], A11: [88, 58], A10: [84, 50], A4: [82, 64], A8: [60, 45] },
+    defend: { D1: [97, 50], D2: [86, 40], D3: [85, 50], D4: [87, 56], D5: [84, 64], D6: [80, 30], D7: [80, 70] } },
+
+  acrobatico: { ball: [78, 88],
+    attack: { A11: [78, 88], A9: [88, 48], A10: [82, 60], A8: [66, 66] },
+    defend: { D5: [80, 84], D4: [88, 52], D3: [85, 62], D1: [97, 50], D6: [74, 70] } },
+};
+
+/* ---------- Estado da tela de lance ---------- */
+const cpEls = {};          // papel (A1..D11) -> elemento no campo
+let cpRoster = {};         // papel -> jogador real { id, name, jersey_number }
+let cpSkip = false;        // "Saltar" carregado: o resto da jogada corre instantâneo
+let cpBuilt = false;
+
+function cpEl(id){ return document.getElementById(id); }
+
+function buildCampoActors(){
+  const actors = cpEl('cpActors');
+  if(!actors) return;
+  actors.innerHTML = '';
+  Object.keys(cpEls).forEach((k) => delete cpEls[k]);
+
+  const make = (role) => {
+    const node = document.createElement('div');
+    node.className = `cp-player${GK_ROLES.has(role) ? ' gk' : ''}`;
+    node.dataset.role = role;
+    node.innerHTML = '<span class="cp-player-num"></span><span class="cp-player-name"></span>';
+    actors.appendChild(node);
+    cpEls[role] = node;
+  };
+  Object.keys(BASE_ATTACK).forEach((role) => make(role));
+  Object.keys(BASE_DEFEND).forEach((role) => make(role));
+
+  const ball = document.createElement('div');
+  ball.className = 'cp-ball';
+  ball.id = 'cpBall';
+  actors.appendChild(ball);
+  cpBuilt = true;
 }
 
-// GR primeiro, depois defesas, médios e avançados, para a atribuição
-// de papéis (A2..A11 / D2..D11) fazer algum sentido tático.
-function orderedOutfieldIds(teamState){
-  const rank = { DC: 0, MC: 1, PL: 2 };
+/* ---------- Quem é quem: os 11 reais de cada equipa vestem os papéis
+   A1..A11 / D1..D11 da coreografia. O marcador real fica sempre com o
+   papel de quem finaliza e o assistente real com o de quem serve. --- */
+function orderedOutfield(teamState){
+  const rank = { DEF: 0, MED: 1, MO: 2, PL: 3 };
   return teamState.on_pitch
     .filter((p) => p.category !== 'GR')
     .slice()
-    .sort((a, b) => (rank[a.category] ?? 1) - (rank[b.category] ?? 1) || String(a.id).localeCompare(String(b.id)))
-    .map((p) => p.id);
+    .sort((a, b) => (rank[a.category] ?? 1) - (rank[b.category] ?? 1) || String(a.id).localeCompare(String(b.id)));
 }
 
-/* Atribui os 11 jogadores reais de uma equipa aos papéis A1..A11 (ou
-   D1..D11) de uma jogada. `pins` fixa papéis específicos a jogadores
-   específicos — é assim que o marcador e o assistente REAIS acabam a
-   fazer o papel de "finalizador" e "passador" da coreografia, com o
-   resto da equipa a preencher os restantes papéis. */
-function buildRoleMap(teamState, prefix, pins){
-  const map = { ...pins };
-  const used = new Set(Object.values(pins).filter(Boolean));
+function assignRoles(teamState, prefix, pins){
+  const map = {};
+  const used = new Set();
+  Object.entries(pins || {}).forEach(([role, player]) => {
+    if(!player) return;
+    map[role] = player;
+    used.add(player.id);
+  });
+
   const gk = teamState.on_pitch.find((p) => p.category === 'GR');
   const gkRole = `${prefix}1`;
-  if(!map[gkRole] && gk){ map[gkRole] = gk.id; used.add(gk.id); }
-  const pool = orderedOutfieldIds(teamState).filter((id) => !used.has(id));
-  let p = 0;
+  if(!map[gkRole] && gk && !used.has(gk.id)){ map[gkRole] = gk; used.add(gk.id); }
+
+  const pool = orderedOutfield(teamState).filter((p) => !used.has(p.id));
+  let i = 0;
   for(let n = 2; n <= 11; n += 1){
     const role = `${prefix}${n}`;
     if(map[role]) continue;
-    map[role] = pool[p] || null;
-    p += 1;
+    map[role] = pool[i] || null;
+    i += 1;
   }
   return map;
 }
 
-/* Descobre sozinho quem "tem a bola" no arranque da jogada (o papel
-   mais próximo do ponto de partida) e quem remata (o papel mais
-   adiantado, ou seja, mais perto da baliza adversária) — evita ter de
-   etiquetar isto à mão nas 15 coreografias acima. */
-function inferRoles(preset){
-  const entries = Object.entries(preset.attack);
-  let passer = entries[0][0];
-  let passerDist = Infinity;
-  entries.forEach(([role, [x, y]]) => {
-    const d = Math.hypot(x - preset.ball[0], y - preset.ball[1]);
-    if(d < passerDist){ passerDist = d; passer = role; }
+function paintRoster(){
+  // A cor diz a EQUIPA, nunca o papel no lance: a equipa da casa é sempre
+  // a mesma cor e a de fora também, ataquem elas ou defendam elas.
+  const attackTeam = cpCtx.side === 'away' ? 'away' : 'home';
+  const defendTeam = attackTeam === 'home' ? 'away' : 'home';
+  Object.entries(cpEls).forEach(([role, node]) => {
+    const team = role[0] === 'A' ? attackTeam : defendTeam;
+    node.classList.toggle('team-home', team === 'home');
+    node.classList.toggle('team-away', team === 'away');
+    const p = cpRoster[role];
+    node.querySelector('.cp-player-num').textContent = p ? (p.jersey_number || role.replace(/[AD]/, '')) : role.replace(/[AD]/, '');
+    node.querySelector('.cp-player-name').textContent = p ? lastName(p.name) : '';
+    node.classList.toggle('is-ghost', !p);
   });
-  let finisher = null;
-  let bestX = -1;
-  entries.forEach(([role, [x]]) => {
-    if(role === passer) return;
-    if(x > bestX){ bestX = x; finisher = role; }
-  });
-  if(!finisher) finisher = passer;
-  return { passer, finisher };
 }
 
-function placeTokenInstant(playerId, board, fieldPos){
-  const tokenEl = board.querySelector(`.live-token[data-player-id="${playerId}"]`);
-  if(!tokenEl) return;
-  const screen = toScreenPct(fieldPos);
-  tokenEl.style.transition = 'none';
-  tokenEl.style.left = `${screen.left}%`;
-  tokenEl.style.top = `${screen.top}%`;
-  void tokenEl.offsetWidth;
+// nome real de quem está a fazer aquele papel — é o que entra no comentário
+function nm(role){
+  const p = cpRoster[role];
+  return p ? lastName(p.name) : role;
 }
 
-/* Teleporta os 22 jogadores + bola para a coreografia sorteada, tal
-   como applySetup() no protótipo — sem transição, como um corte de
-   câmara para a jogada de perigo. Devolve as posições (já no
-   referencial do campo) do passador e do finalizador. */
-function applyPresetSetup(ctx, preset){
-  const { side, teamState, defendState, board, scorerId, assisterId, keeperId } = ctx;
-  const { passer, finisher } = inferRoles(preset);
+/* ---------- Primitivas de animação (iguais às do campo.js) ---------- */
 
-  const attackPins = { [finisher]: scorerId };
-  if(assisterId && passer !== finisher) attackPins[passer] = assisterId;
-  const defendPins = keeperId ? { D1: keeperId } : {};
+function cpWait(ms){ return cpSkip ? Promise.resolve() : wait(ms); }
 
-  const attackRoles = buildRoleMap(teamState, 'A', attackPins);
-  const defendRoles = buildRoleMap(defendState, 'D', defendPins);
-  ctx.roleMaps = { attack: attackRoles, defend: defendRoles, finisherRole: finisher, passerRole: passer };
+/* ---------- Para que lado se ataca ----------
+   As coreografias estão escritas como no protótipo campo.js: quem ataca
+   vai sempre da esquerda para a direita. Como cada equipa tem de atacar
+   para a SUA baliza, quando quem ataca é a equipa de fora espelha-se o
+   eixo horizontal no momento de desenhar (e só aí) — assim a casa ataca
+   para a direita e o visitante para a esquerda, sem reescrever nenhuma
+   das 15 jogadas. */
+let cpFlip = false;
+function fx(x){ return cpFlip ? 100 - x : x; }
+function attackedNet(){ return cpEl(cpFlip ? 'cpLeftNet' : 'cpRightNet'); }
 
-  Object.entries(attackRoles).forEach(([role, id]) => {
-    if(!id) return;
-    const [cx, cy] = preset.attack[role] || BASE_ATTACK[role];
-    placeTokenInstant(id, board, mapCampoToField(side, cx, cy));
-  });
-  // as coordenadas de defesa já estão no MESMO referencial do ataque
-  // (a baliza atacada é sempre x=100), por isso usam o 'side' de quem
-  // ataca, não o da própria equipa que defende.
-  Object.entries(defendRoles).forEach(([role, id]) => {
-    if(!id) return;
-    const [cx, cy] = preset.defend[role] || BASE_DEFEND[role];
-    placeTokenInstant(id, board, mapCampoToField(side, cx, cy));
-  });
-
-  placeBallInstant(mapCampoToField(side, preset.ball[0], preset.ball[1]));
-
-  return {
-    finisherPos: mapCampoToField(side, ...(preset.attack[finisher] || BASE_ATTACK[finisher])),
-    passerPos: mapCampoToField(side, ...(preset.attack[passer] || BASE_ATTACK[passer])),
-  };
-}
-
-/* A coreografia em si: a defesa reage à zona de perigo, a bola viaja
-   do passador até ao finalizador (em curva e com cabeceamento nas
-   jogadas de cruzamento/canto, rasteira nas restantes), e remata-se
-   à baliza com o strikeAtGoal já existente (que trata do guarda-redes,
-   da curva do remate, e guarda a jogada para a repetição em câmara
-   lenta). */
-async function playPresetSequence(ctx, preset){
-  const { board, defendSide, scorerId, keeperId } = ctx;
-  const { finisherPos, passerPos } = applyPresetSetup(ctx, preset);
-
-  if(keeperId) moveTokenSmooth(keeperId, board, keeperHomeSpot(defendSide), 260);
-
-  defensiveBlock(ctx, finisherPos, T(520));
-  await wait(T(260));
-
-  const samePlayer = Math.abs(passerPos.x - finisherPos.x) < 0.5 && Math.abs(passerPos.y - finisherPos.y) < 0.5;
-  if(!samePlayer){
-    attemptTackle(ctx, finisherPos, T(240));
-    if(preset.header){
-      const mid = { x: (passerPos.x + finisherPos.x) / 2 + rand(-6, 6), y: (passerPos.y + finisherPos.y) / 2 };
-      await moveBallCurveField(passerPos, mid, finisherPos, 640);
-    }else{
-      await moveBallLinearField(finisherPos, 420);
-    }
+function setPos(node, x, y, instant){
+  if(!node) return;
+  if(instant){
+    const prev = node.style.transition;
+    node.style.transition = 'none';
+    node.style.left = `${fx(x)}%`;
+    node.style.top = `${y}%`;
+    void node.offsetWidth;
+    node.style.transition = prev || '';
   }else{
-    await wait(T(120));
+    node.style.left = `${fx(x)}%`;
+    node.style.top = `${y}%`;
   }
-
-  if(preset.header){
-    tokenClass(scorerId, board, 'jump', true);
-    await wait(T(190));
-    tokenClass(scorerId, board, 'jump', false);
-  }
-
-  await strikeAtGoal(ctx, finisherPos);
 }
 
-let lastPresetIndex = -1;
-function pickPreset(){
-  let idx = Math.floor(Math.random() * PRESET_PLAYS.length);
-  if(PRESET_PLAYS.length > 1 && idx === lastPresetIndex){
-    idx = (idx + 1) % PRESET_PLAYS.length;
-  }
-  lastPresetIndex = idx;
-  return PRESET_PLAYS[idx];
-}
-/* ---------- Repetição em câmara lenta ----------
-   Depois do festejo, repete só o remate (a parte que interessa ver bem)
-   em câmara lenta, com o campo a ganhar um tom mais escuro/contrastado
-   (ver .live-pitch-board.replay-active em dashboard.css) e um botão
-   para saltar a repetição a qualquer momento. */
-function showReplayControls(onSkip){
-  const banner = el('liveReplayBanner');
-  const skipBtn = el('liveReplaySkipBtn');
-  if(!banner || !skipBtn) return () => {};
-  banner.classList.remove('hidden');
-  const handler = () => onSkip();
-  skipBtn.addEventListener('click', handler);
-  return () => {
-    banner.classList.add('hidden');
-    skipBtn.removeEventListener('click', handler);
-  };
+function applySetup(name, instant){
+  const setup = SETUPS[name] || {};
+  const attackPos = Object.assign({}, BASE_ATTACK, setup.attack);
+  const defendPos = Object.assign({}, BASE_DEFEND, setup.defend);
+
+  Object.entries(attackPos).forEach(([role, [x, y]]) => setPos(cpEls[role], x, y, instant));
+  Object.entries(defendPos).forEach(([role, [x, y]]) => setPos(cpEls[role], x, y, instant));
+
+  const ball = cpEl('cpBall');
+  const b = setup.ball || [50, 50];
+  setPos(ball, b[0], b[1], instant);
+
+  Object.values(cpEls).forEach((node) => {
+    node.classList.remove('jump', 'celebrate', 'slump');
+    node.style.opacity = 1;
+  });
+  const net = attackedNet();
+  if(net) net.classList.remove('ripple');
+  const flash = cpEl('cpGoalFlash');
+  if(flash) flash.classList.remove('show');
 }
 
-async function playGoalReplay(shot){
-  if(!shot) return;
-  const pitchBoard = el('livePitchBoard');
-  const ball = el('livePitchBall');
-  const idleBall = el('livePitchIdleBall');
-  if(!ball) return;
+function movePlayer(role, x, y, duration){
+  const node = cpEls[role];
+  const d = duration || 900;
+  if(!node) return cpWait(d);
+  if(cpSkip){ setPos(node, x, y, true); return Promise.resolve(); }
+  node.style.transitionDuration = `${d}ms`;
+  requestAnimationFrame(() => { node.style.left = `${fx(x)}%`; node.style.top = `${y}%`; });
+  return wait(d);
+}
 
-  await wait(320); // pequena pausa depois do festejo, antes de "voltar atrás"
+function moveBallLinear(x, y, duration){
+  const ball = cpEl('cpBall');
+  if(!ball) return cpWait(duration);
+  if(cpSkip){ setPos(ball, x, y, true); return Promise.resolve(); }
+  ball.style.transition = `left ${duration}ms linear, top ${duration}ms linear`;
+  requestAnimationFrame(() => { ball.style.left = `${fx(x)}%`; ball.style.top = `${y}%`; });
+  return wait(duration);
+}
 
-  if(pitchBoard) pitchBoard.classList.add('replay-active');
-  placeBallInstant(shot.fromPos);
+// voo em curva (cruzamentos, cantos, remates) — Bezier quadrática
+function moveBallCurve(p0, p1, p2, duration){
+  const ball = cpEl('cpBall');
+  if(!ball) return cpWait(duration);
+  if(cpSkip){ setPos(ball, p2[0], p2[1], true); return Promise.resolve(); }
+  ball.style.transition = 'none';
+  const start = performance.now();
+  return new Promise((resolve) => {
+    function frame(now){
+      if(cpSkip){ setPos(ball, p2[0], p2[1], true); resolve(); return; }
+      const t = Math.min(1, (now - start) / duration);
+      const x = (1 - t) * (1 - t) * p0[0] + 2 * (1 - t) * t * p1[0] + t * t * p2[0];
+      const y = (1 - t) * (1 - t) * p0[1] + 2 * (1 - t) * t * p1[1] + t * t * p2[1];
+      ball.style.left = `${fx(x)}%`;
+      ball.style.top = `${y}%`;
+      if(t < 1){ requestAnimationFrame(frame); } else { resolve(); }
+    }
+    requestAnimationFrame(frame);
+  });
+}
 
-  const scorerToken = document.querySelector(`.live-token[data-player-id="${shot.scorerId}"]`);
-  if(scorerToken){
-    scorerToken.classList.remove('kick-pulse');
-    void scorerToken.offsetWidth;
-    scorerToken.classList.add('kick-pulse');
+function setStatus(text){
+  const node = cpEl('cpStatus');
+  if(node) node.textContent = text;
+}
+
+function jump(role, on){
+  const node = cpEls[role];
+  if(node) node.classList.toggle('jump', !!on);
+}
+
+// marcação mais viva: cada defesa encurta uma fração da distância ao alvo
+function trackDefenders(roles, target, duration, pull){
+  const p = (pull === undefined) ? 0.35 : pull;
+  roles.forEach((role) => {
+    const node = cpEls[role];
+    if(!node) return;
+    const curLeft = parseFloat(node.style.left) || 0;
+    const curTop = parseFloat(node.style.top) || 0;
+    movePlayer(role, curLeft + (target[0] - curLeft) * p, curTop + (target[1] - curTop) * p, duration);
+  });
+}
+
+// corrida em massa até à bandeirola e festejo, igual ao protótipo
+function runToCornerAndCelebrate(roles, corner){
+  const [fx, fy] = corner || CORNER_TOP;
+  const intoY = fy < 50 ? 1 : -1;
+  const offsets = [
+    [-1, 0 * intoY], [-3, 2 * intoY], [-5, 1 * intoY], [-2, 4 * intoY], [-6, 3 * intoY],
+    [-4, 6 * intoY], [-8, 5 * intoY], [-1, 7 * intoY], [-6, 8 * intoY], [-3, 9 * intoY],
+  ];
+  const promises = roles.map((role, i) => {
+    const off = offsets[i % offsets.length];
+    const x = Math.min(99, Math.max(2, fx + off[0]));
+    const y = Math.min(98, Math.max(2, fy + off[1]));
+    return movePlayer(role, x, y, 650 + (i % 5) * 90);
+  });
+  return Promise.all(promises).then(() => {
+    roles.forEach((role) => {
+      const node = cpEls[role];
+      if(!node) return;
+      node.classList.remove('jump');
+      node.classList.add('celebrate');
+    });
+  });
+}
+
+async function finishGoal(celebrators, slumpers, message, corner){
+  const net = attackedNet();
+  if(net){
+    net.classList.remove('ripple');
+    void net.offsetWidth;
+    net.classList.add('ripple');
   }
+  const flash = cpEl('cpGoalFlash');
+  if(flash){
+    flash.classList.remove('show');
+    void flash.offsetWidth;
+    flash.classList.add('show');
+  }
+  bumpScoreDisplay(cpCtx.side); // o placar só avança aqui, com o "GOLO!"
+  el('liveLineupsScore').textContent = `${liveDisplayedScore.home} - ${liveDisplayedScore.away}`;
 
-  // câmara lenta: quase 3x mais devagar do que o remate real, com um
-  // teto para nunca se tornar arrastado mesmo em remates de longe.
-  const slowMs = Math.max(1500, Math.min(3200, shot.flightMs * 2.8));
-  const mover = moveBallCurveRaw(shot.fromPos, shot.mid, shot.target, slowMs);
-
-  let skipped = false;
-  const hideControls = showReplayControls(() => {
-    skipped = true;
-    mover.cancel();
+  slumpers.forEach((role) => {
+    const node = cpEls[role];
+    if(node) node.classList.add('slump');
   });
 
-  await mover.promise;
-  hideControls();
-
-  if(!skipped) pulseGoalNet(shot.side);
-  await wait(skipped ? 60 : 260);
-
-  if(pitchBoard) pitchBoard.classList.remove('replay-active');
-  ball.style.opacity = '0';
-  if(idleBall) idleBall.style.opacity = '.85';
+  setStatus(message);
+  await cpWait(300);
+  setStatus(`${message} Toda a equipa corre para a bandeirola a festejar!`);
+  await runToCornerAndCelebrate(celebrators, corner);
+  await cpWait(700);
 }
-async function playGoalSequence(ev, data){
-  const board = el('livePitchTokens');
-  const ball = el('livePitchBall');
-  if(!board || !ball || !ev.player_id) return;
+
+/* ---------- Desfecho do lance ----------
+   A mesma coreografia serve para golos e para lances de perigo; o que
+   muda é só o fim. Num golo, a bola entra e a equipa festeja (igual ao
+   protótipo). Num lance sem golo, o guarda-redes defende, um defesa
+   corta, ou a bola sai ao lado. */
+async function concludeShot(opts){
+  const { from, mid, target, shotMs, gk, slump, corner, goalMsg, shotMsg } = opts;
+  const kind = cpCtx.kind;
+  const outcome = cpCtx.outcome;
+
+  if(shotMsg) setStatus(shotMsg);
+
+  if(kind === 'goal'){
+    if(gk) movePlayer(gk[0], gk[1], gk[2], gk[3] || shotMs);
+    await moveBallCurve(from, mid, target, shotMs);
+    await finishGoal(ALL_ATTACK, slump, goalMsg, corner);
+    return;
+  }
+
+  if(outcome === 'blocked'){
+    const blocker = (slump && slump[0]) || 'D6';
+    const node = cpEls[blocker];
+    const bx = node ? (parseFloat(node.style.left) || from[0] + 5) : from[0] + 5;
+    const by = node ? (parseFloat(node.style.top) || from[1]) : from[1];
+    const point = [(from[0] + bx) / 2, (from[1] + by) / 2];
+    movePlayer(blocker, point[0], point[1], 240);
+    await moveBallLinear(point[0], point[1], 240);
+    setStatus(`${nm(blocker)} atira-se à frente e corta o remate!`);
+    await moveBallCurve(point, [point[0] - 8, point[1] + rand(-10, 10)], [Math.max(55, point[0] - 18), Math.min(96, Math.max(4, point[1] + rand(-22, 22)))], 420);
+    return;
+  }
+
+  if(outcome === 'saved'){
+    const keeperY = Math.max(40, Math.min(60, target[1]));
+    movePlayer('D1', 96.5, keeperY, Math.min(360, shotMs));
+    await moveBallCurve(from, mid, [96.5, keeperY], shotMs);
+    jump('D1', true);
+    setStatus(`Grande defesa de ${nm('D1')}!`);
+    await cpWait(240);
+    jump('D1', false);
+    await moveBallCurve([96.5, keeperY], [98, keeperY < 50 ? 20 : 80], [99, keeperY < 50 ? 4 : 96], 380);
+    return;
+  }
+
+  // ao lado / à trave
+  const wideY = target[1] < 50 ? 33 : 67;
+  movePlayer('D1', 97, Math.max(40, Math.min(60, target[1])), shotMs);
+  await moveBallCurve(from, mid, [99.6, wideY], shotMs);
+  setStatus(outcome === 'post' ? 'Bateu no poste!' : `${nm(cpCtx.scorerRole)} remata ao lado — que oportunidade perdida!`);
+  await cpWait(300);
+}
+
+/* ================================================================
+   AS 15 COREOGRAFIAS (portadas do campo.js, com nomes reais)
+   ================================================================ */
+
+/* --- 1. Golo de canto --- */
+
+async function playCorner1(){
+  applySetup('corner_1', true);
+  setStatus('Canto. Cruzamento direto ao primeiro poste — o batedor prepara-se…');
+  await cpWait(500);
+
+  setStatus('A defesa aperta as marcações antes do cruzamento…');
+  movePlayer('D2', 92, 30, 400);
+  movePlayer('D4', 90, 42, 400);
+  movePlayer('D1', 97, 46, 400);
+  trackDefenders(['D8', 'D9'], [90, 45], 400, 0.25);
+  await cpWait(150);
+
+  setStatus(`Cruzamento de ${nm('A7')}, sem tocar no chão, para o primeiro poste…`);
+  const cross = moveBallCurve([98.5, 4], [95, 18], [92, 38], 700);
+  movePlayer('A9', 92, 38, 700);
+  movePlayer('D2', 93, 40, 700);
+  movePlayer('D6', 90, 35, 700);
+  trackDefenders(['D5', 'D7'], [92, 38], 700, 0.2);
+  await cross;
+
+  jump('A9', true);
+  await cpWait(220);
+  jump('A9', false);
+
+  await concludeShot({
+    from: [92, 38], mid: [96, 40], target: [99.4, 41], shotMs: 300,
+    gk: ['D1', 97, 43, 300], slump: ['D2', 'D4', 'D6'], corner: CORNER_TOP,
+    shotMsg: `Cabeceamento de primeira de ${nm('A9')}, ao primeiro poste!`,
+    goalMsg: `GOLO! Cruzamento direto ao primeiro poste e cabeceamento certeiro de ${nm('A9')}.`,
+  });
+}
+
+async function playCorner2(){
+  applySetup('corner_2', true);
+  setStatus('Canto curto com mini-triangulação. O batedor prepara um toque curto…');
+  await cpWait(500);
+
+  setStatus('A defesa reorganiza-se, pressionando o canto curto…');
+  movePlayer('D6', 91, 15, 450);
+  movePlayer('D2', 91, 30, 450);
+  trackDefenders(['D8', 'D3'], [90, 20], 450, 0.2);
+  await cpWait(150);
+
+  setStatus(`Toque curto para ${nm('A6')}, que desceu à linha…`);
+  await moveBallLinear(90, 12, 480);
+
+  setStatus('Mini-triangulação: devolve de primeira para o batedor, que avançou…');
+  movePlayer('A7', 94, 8, 400);
+  movePlayer('D6', 93, 10, 400);
+  await moveBallLinear(94, 8, 420);
+
+  setStatus('Cruzamento em curva para o segundo poste…');
+  const cross = moveBallCurve([94, 8], [90, 35], [89, 62], 720);
+  movePlayer('A11', 89, 62, 720);
+  movePlayer('D4', 89, 60, 720);
+  movePlayer('D9', 87, 58, 700);
+  trackDefenders(['D5', 'D7'], [89, 62], 700, 0.2);
+  await cross;
+
+  jump('A11', true);
+  await cpWait(220);
+  jump('A11', false);
+
+  await concludeShot({
+    from: [89, 62], mid: [94, 58], target: [99.4, 52], shotMs: 340,
+    slump: ['D2', 'D4', 'D6', 'D9'], corner: CORNER_BOTTOM,
+    shotMsg: `Cabeceamento de ${nm('A11')}, ao segundo poste!`,
+    goalMsg: `GOLO! Canto curto, mini-triangulação e cabeceamento de ${nm('A11')} ao segundo poste.`,
+  });
+}
+
+async function playCorner3(){
+  applySetup('corner_3', true);
+  setStatus('Canto batido com força para a área…');
+  await cpWait(500);
+
+  setStatus('A defesa aperta as marcações dentro da área…');
+  movePlayer('D2', 89, 27, 400);
+  movePlayer('D7', 89, 32, 400);
+  trackDefenders(['D5', 'D9'], [86, 50], 400, 0.2);
+  await cpWait(150);
+
+  setStatus('Canto batido, disputado dentro da área…');
+  const cross = moveBallCurve([98.5, 4], [90, 20], [85, 50], 700);
+  movePlayer('D6', 85, 50, 700);
+  await cross;
+
+  setStatus('A defesa afasta o perigo, mas só até à entrada da área…');
+  const clearance = moveBallCurve([85, 50], [80, 50], [76, 50], 460);
+  jump('D6', true);
+  movePlayer('D8', 82, 48, 460);
+  await clearance;
+  jump('D6', false);
+
+  setStatus(`A bola sobra para ${nm('A8')}, à entrada da área…`);
+  movePlayer('D8', 78, 50, 250);
+  await cpWait(120);
+
+  jump('A8', true);
+  await cpWait(200);
+  jump('A8', false);
+
+  await concludeShot({
+    from: [76, 50], mid: [88, 44], target: [99.4, 42], shotMs: 440,
+    gk: ['D1', 97, 46, 440], slump: ['D3', 'D4', 'D6', 'D8'], corner: CORNER_TOP,
+    shotMsg: `Remate de primeira de ${nm('A8')}, ao ângulo!`,
+    goalMsg: `GOLO! A defesa só afasta a meio e ${nm('A8')} acerta de primeira no ângulo!`,
+  });
+}
+
+async function playCorner4(){
+  applySetup('corner_4', true);
+  setStatus('Canto curto trabalhado. A equipa mantém a posse, sem pressa…');
+  await cpWait(500);
+
+  setStatus('A defesa acompanha a bola, sem se comprometer…');
+  movePlayer('D6', 91, 15, 450);
+  trackDefenders(['D2', 'D7'], [90, 20], 450, 0.2);
+  await cpWait(150);
+
+  setStatus(`Toque curto para ${nm('A6')}, que desceu à linha…`);
+  const shortPass = moveBallLinear(90, 12, 460);
+  movePlayer('D6', 92, 14, 460);
+  await shortPass;
+
+  setStatus('Bola recuada para reorganizar o ataque…');
+  const back = moveBallLinear(85, 25, 420);
+  movePlayer('A9', 85, 25, 420);
+  trackDefenders(['D2', 'D3'], [85, 25], 420, 0.3);
+  await back;
+
+  setStatus('Passe interior até à entrada da área…');
+  const inCut = moveBallLinear(78, 45, 420);
+  movePlayer('A8', 78, 45, 420);
+  trackDefenders(['D4', 'D8'], [78, 45], 420, 0.3);
+  await inCut;
+
+  await concludeShot({
+    from: [78, 45], mid: [90, 52], target: [99.4, 58], shotMs: 500,
+    gk: ['D1', 97, 55, 500], slump: ['D2', 'D4', 'D6', 'D8'], corner: CORNER_BOTTOM,
+    shotMsg: `${nm('A8')} remata de fora da área, cruzado, ao ângulo mais afastado!`,
+    goalMsg: `GOLO! Canto trabalhado com vários passes, resolvido por ${nm('A8')} de fora da área.`,
+  });
+}
+
+/* --- 2. Contra-ataque --- */
+
+async function playContra1(){
+  applySetup('contra_1', true);
+  setStatus('Contra-ataque: saída curta do guarda-redes, bola seca, sem risco…');
+  await cpWait(450);
+
+  setStatus(`Passe curto e seguro de ${nm('A1')} para ${nm('A3')}…`);
+  const gkPass = moveBallLinear(18, 45, 450);
+  trackDefenders(['D6', 'D7'], [18, 45], 450, 0.15);
+  await gkPass;
+
+  setStatus('Lançamento imediato, em profundidade, nas costas da defesa!');
+  const throughBall = moveBallCurve([18, 45], [55, 32], [80, 32], 950);
+  movePlayer('A10', 82, 33, 1000);
+  movePlayer('D2', 78, 28, 900);
+  trackDefenders(['D3', 'D10', 'D11'], [80, 32], 900, 0.3);
+  await throughBall;
+
+  setStatus(`${nm('A10')} isolado, controla e avança para a baliza…`);
+  const control = moveBallLinear(88, 40, 380);
+  movePlayer('A10', 88, 40, 380);
+  movePlayer('D1', 96, 44, 380);
+  await control;
+
+  await concludeShot({
+    from: [88, 40], mid: [95, 46], target: [99.4, 49], shotMs: 360,
+    slump: ['D2', 'D3', 'D6', 'D7'], corner: CORNER_TOP,
+    shotMsg: `${nm('A10')} encara o guarda-redes…`,
+    goalMsg: `GOLO! Saída curta e lançamento em profundidade a isolar ${nm('A10')}.`,
+  });
+}
+
+async function playContra2(){
+  applySetup('contra_2', true);
+  setStatus(`Jogada individual: ${nm('A10')} recebe a bola e arranca sozinho…`);
+  await cpWait(450);
+
+  setStatus('Primeiro adversário deixado para trás com um corte de perna…');
+  const d1 = moveBallLinear(50, 44, 420);
+  movePlayer('A10', 50, 44, 420);
+  movePlayer('D10', 52, 46, 380);
+  await d1;
+
+  setStatus('Segundo adversário driblado, sem perder o ritmo…');
+  const d2 = moveBallLinear(62, 54, 420);
+  movePlayer('A10', 62, 54, 420);
+  movePlayer('D6', 63, 52, 400);
+  await d2;
+
+  setStatus('Terceiro adversário também fica para trás…');
+  const d3 = moveBallLinear(72, 44, 420);
+  movePlayer('A10', 72, 44, 420);
+  movePlayer('D7', 71, 47, 400);
+  await d3;
+
+  setStatus('Já só falta o último defesa, à entrada da área…');
+  const d4 = moveBallLinear(83, 50, 420);
+  movePlayer('A10', 83, 50, 420);
+  movePlayer('D3', 86, 48, 500);
+  await d4;
+
+  await concludeShot({
+    from: [83, 50], mid: [92, 46], target: [99.4, 45], shotMs: 420,
+    gk: ['D1', 97, 47, 420], slump: ['D10', 'D6', 'D7', 'D3'], corner: CORNER_TOP,
+    shotMsg: `${nm('A10')} encara também o guarda-redes…`,
+    goalMsg: `GOLO! Jogada individual fantástica — ${nm('A10')} dribla toda a defesa e marca!`,
+  });
+}
+
+async function playContra3(){
+  applySetup('contra_3', true);
+  setStatus(`Contra-ataque pela ala: ${nm('A11')} arranca pela linha…`);
+  await cpWait(450);
+
+  setStatus('Corrida em velocidade, com o defesa a tentar acompanhar…');
+  const run = moveBallLinear(85, 10, 900);
+  movePlayer('A11', 85, 10, 900);
+  movePlayer('D2', 80, 14, 950);
+  trackDefenders(['D10', 'D11'], [70, 20], 900, 0.2);
+  await run;
+
+  setStatus('Já perto da linha de fundo, prepara o cruzamento…');
+  movePlayer('A9', 88, 48, 600);
+  trackDefenders(['D3', 'D1'], [88, 48], 600, 0.3);
+  await cpWait(150);
+
+  setStatus('Cruzamento rasteiro, tenso, para a área…');
+  const cross = moveBallCurve([85, 10], [86, 30], [88, 48], 520);
+  movePlayer('D3', 86, 47, 520);
+  await cross;
+
+  jump('A9', true);
+  await cpWait(180);
+  jump('A9', false);
+
+  await concludeShot({
+    from: [88, 48], mid: [94, 49], target: [99.4, 50], shotMs: 320,
+    slump: ['D2', 'D3', 'D10'], corner: CORNER_TOP,
+    shotMsg: `${nm('A9')} chega da segunda linha e finaliza de primeira!`,
+    goalMsg: `GOLO! Contra-ataque pela ala e cruzamento rasteiro resolvido por ${nm('A9')}.`,
+  });
+}
+
+/* --- 3. Livre ensaiado --- */
+
+async function playEnsaiada1(){
+  applySetup('ensaiada_1', true);
+  setStatus('Livre ensaiado, variante curta. Dois jogadores prontos sobre a bola…');
+  await cpWait(500);
+
+  movePlayer('A9', 84, 40, 500);
+  movePlayer('A11', 84, 60, 500);
+  trackDefenders(['D2', 'D3'], [80, 50], 500, 0.2);
+  await cpWait(200);
+
+  setStatus('Toque curto em vez do remate direto…');
+  const tap = moveBallLinear(74, 46, 400);
+  movePlayer('A6', 74, 46, 400);
+  trackDefenders(['D6', 'D7'], [74, 46], 400, 0.25);
+  await tap;
+
+  setStatus(`${nm('A6')} devolve de primeira para o marcador da bola parada…`);
+  const layback = moveBallLinear(68, 52, 350);
+  movePlayer('A8', 68, 52, 350);
+  trackDefenders(['D8'], [68, 52], 350, 0.25);
+  await layback;
+
+  movePlayer('A9', 90, 30, 500);
+  await concludeShot({
+    from: [68, 52], mid: [85, 25], target: [99.3, 40], shotMs: 850,
+    gk: ['D1', 97, 42, 500], slump: ['D6', 'D7', 'D8', 'D2', 'D3'], corner: CORNER_TOP,
+    shotMsg: `${nm('A8')} pica a bola por cima da barreira…`,
+    goalMsg: 'GOLO! A variante do livre engana a barreira — remate no ângulo.',
+  });
+}
+
+async function playEnsaiada2(){
+  applySetup('ensaiada_2', true);
+  setStatus(`Livre direto, sem variante. ${nm('A8')} encara a barreira…`);
+  await cpWait(600);
+
+  setStatus('A barreira salta, mas a bola já vai por cima…');
+  jump('D6', true); jump('D7', true); jump('D8', true);
+  await concludeShot({
+    from: [70, 50], mid: [80, 18], target: [99.3, 40], shotMs: 900,
+    gk: ['D1', 97, 40, 900], slump: ['D6', 'D7', 'D8'], corner: CORNER_TOP,
+    goalMsg: `GOLO! Remate direto e colocado de ${nm('A8')}, por cima da barreira, no ângulo!`,
+  });
+  jump('D6', false); jump('D7', false); jump('D8', false);
+}
+
+/* --- 4. Triangulação --- */
+
+async function playTriangulacao1(){
+  applySetup('triangulacao_1', true);
+  setStatus(`Um-dois clássico: ${nm('A8')} procura a parede…`);
+  await cpWait(400);
+
+  setStatus('Passe para o apoio de parede…');
+  const wallIn = moveBallLinear(78, 45, 400);
+  trackDefenders(['D1'], [78, 45], 400, 0.1);
+  await wallIn;
+
+  setStatus('Devolução de primeira, para o espaço nas costas do defesa!');
+  const wallOut = moveBallLinear(85, 52, 480);
+  movePlayer('A8', 85, 52, 700);
+  movePlayer('D7', 82, 50, 550);
+  await wallOut;
+
+  await concludeShot({
+    from: [85, 52], mid: [94, 50], target: [99.4, 49], shotMs: 340,
+    slump: ['D7', 'D6', 'D3'], corner: CORNER_BOTTOM,
+    shotMsg: `${nm('A8')} fica isolado frente à baliza!`,
+    goalMsg: `GOLO! Um-dois clássico rasga a defesa e ${nm('A8')} não perdoa.`,
+  });
+}
+
+async function playTriangulacao2(){
+  applySetup('triangulacao_2', true);
+  setStatus('Triângulo rotativo: três jogadores trocam posições e bola…');
+  await cpWait(400);
+
+  setStatus('Primeiro lado do triângulo…');
+  const p1 = moveBallLinear(76, 55, 380);
+  trackDefenders(['D1'], [76, 55], 380, 0.1);
+  await p1;
+
+  setStatus('Segundo lado do triângulo…');
+  const p2 = moveBallLinear(65, 60, 380);
+  movePlayer('D6', 70, 55, 450);
+  await p2;
+
+  setStatus('Terceiro lado, a bola continua a rodar…');
+  movePlayer('A7', 80, 45, 500);
+  await moveBallLinear(80, 45, 420);
+
+  setStatus('Depois de tanta rotação, o passe final rasga a defesa!');
+  const p4 = moveBallCurve([80, 45], [86, 48], [90, 50], 480);
+  movePlayer('A10', 90, 50, 700);
+  movePlayer('D7', 87, 49, 550);
+  await p4;
+
+  await concludeShot({
+    from: [90, 50], mid: [96, 49], target: [99.4, 49], shotMs: 320,
+    slump: ['D6', 'D7', 'D2'], corner: CORNER_BOTTOM,
+    shotMsg: `${nm('A10')} aparece a finalizar de primeira!`,
+    goalMsg: `GOLO! Triângulo rotativo com três apoios e ${nm('A10')} a finalizar sem hipótese.`,
+  });
+}
+
+async function playTriangulacao3(){
+  applySetup('triangulacao_3', true);
+  setStatus(`Tabela de calcanhar: ${nm('A6')} combina com ${nm('A7')} à entrada da área…`);
+  await cpWait(400);
+
+  setStatus(`Passe para ${nm('A7')}, de costas para a baliza…`);
+  const pass1 = moveBallLinear(75, 48, 380);
+  trackDefenders(['D1'], [75, 48], 380, 0.1);
+  await pass1;
+
+  setStatus('Calcanhar de primeira, sem olhar, para o espaço!');
+  const backheel = moveBallLinear(70, 58, 380);
+  movePlayer('A6', 72, 60, 420);
+  await backheel;
+
+  setStatus(`${nm('A6')} recebe e serve de primeira, em profundidade, para ${nm('A11')}!`);
+  const through = moveBallCurve([70, 58], [82, 64], [92, 60], 650);
+  movePlayer('A11', 92, 60, 650);
+  movePlayer('D4', 88, 63, 600);
+  await through;
+
+  await concludeShot({
+    from: [92, 60], mid: [97, 54], target: [99.4, 51], shotMs: 340,
+    slump: ['D3', 'D4', 'D6'], corner: CORNER_BOTTOM,
+    shotMsg: `${nm('A11')} isolado, sozinho perante o guarda-redes!`,
+    goalMsg: `GOLO! Tabela de calcanhar e assistência em profundidade — ${nm('A11')} resolve isolado.`,
+  });
+}
+
+async function playTriangulacao4(){
+  applySetup('triangulacao_4', true);
+  setStatus(`Mudança de ala: ${nm('A7')} procura o lado mais fraco da defesa…`);
+  await cpWait(400);
+
+  setStatus('Passe diagonal, a mudar o jogo para o outro corredor…');
+  const switchPass = moveBallLinear(60, 55, 480);
+  movePlayer('D9', 63, 53, 480);
+  trackDefenders(['D1'], [60, 55], 480, 0.1);
+  await switchPass;
+
+  setStatus('Triangulação rápida à entrada da área…');
+  const combo = moveBallLinear(65, 45, 380);
+  movePlayer('A6', 65, 45, 380);
+  movePlayer('D7', 68, 48, 420);
+  await combo;
+
+  setStatus(`Passe final para a corrida de ${nm('A10')}!`);
+  const through = moveBallCurve([65, 45], [75, 55], [85, 60], 500);
+  movePlayer('A10', 85, 60, 650);
+  movePlayer('D6', 82, 58, 600);
+  await through;
+
+  await concludeShot({
+    from: [85, 60], mid: [93, 54], target: [99.4, 58], shotMs: 380,
+    slump: ['D9', 'D7', 'D6'], corner: CORNER_BOTTOM,
+    shotMsg: `${nm('A10')} remata cruzado…`,
+    goalMsg: `GOLO! Mudança de ala rápida e remate cruzado de ${nm('A10')}.`,
+  });
+}
+
+/* --- 5. Cruzamento --- */
+
+async function playCruzamento1(){
+  applySetup('cruzamento_1', true);
+  setStatus('Sobreposição pela direita. Jogada trabalhada pelo corredor…');
+  await cpWait(400);
+
+  setStatus('Passe interior a preparar a sobreposição…');
+  const inside = moveBallLinear(70, 75, 420);
+  movePlayer('A8', 70, 75, 420);
+  trackDefenders(['D1'], [70, 75], 420, 0.1);
+  await inside;
+
+  setStatus('Passe para a sobreposição na linha…');
+  const overlap = moveBallLinear(80, 88, 450);
+  movePlayer('A11', 80, 88, 450);
+  movePlayer('A9', 84, 46, 900);
+  movePlayer('D5', 78, 84, 450);
+  await overlap;
+
+  const run = moveBallLinear(88, 86, 400);
+  movePlayer('A11', 88, 86, 400);
+  movePlayer('D5', 85, 84, 400);
+  await run;
+
+  setStatus('Cruzamento tenso para a área…');
+  const cross = moveBallCurve([88, 86], [87, 66], [86, 52], 650);
+  movePlayer('D4', 87, 50, 650);
+  movePlayer('A10', 82, 58, 650);
+  trackDefenders(['D3'], [86, 52], 650, 0.25);
+  await cross;
+
+  jump('A9', true);
+  await cpWait(220);
+  jump('A9', false);
+
+  await concludeShot({
+    from: [86, 52], mid: [93, 50], target: [99.4, 50], shotMs: 340,
+    slump: ['D3', 'D4', 'D5'], corner: CORNER_TOP,
+    shotMsg: `Cabeceamento de ${nm('A9')}!`,
+    goalMsg: `GOLO! Jogada pela direita com sobreposição e cabeceamento certeiro de ${nm('A9')}.`,
+  });
+}
+
+async function playCruzamento2(){
+  applySetup('cruzamento_2', true);
+  setStatus(`Cruzamento direto: ${nm('A11')} recebe fundo, sem esperar por apoio…`);
+  await cpWait(400);
+
+  setStatus('Avanço rápido pela linha, já a preparar o cruzamento…');
+  const run = moveBallLinear(82, 78, 400);
+  movePlayer('A11', 82, 78, 400);
+  movePlayer('D5', 80, 78, 420);
+  await run;
+
+  setStatus('Cruzamento rápido e direto, primeiro toque…');
+  const cross = moveBallCurve([82, 78], [86, 62], [88, 48], 550);
+  movePlayer('A9', 88, 46, 650);
+  movePlayer('D4', 88, 50, 550);
+  trackDefenders(['D3'], [88, 48], 550, 0.25);
+  await cross;
+
+  await concludeShot({
+    from: [88, 46], mid: [94, 44], target: [99.4, 43], shotMs: 320,
+    gk: ['D1', 97, 45, 320], slump: ['D4', 'D5', 'D3'], corner: CORNER_TOP,
+    shotMsg: `${nm('A9')} atira-se para o voleio de primeira, ao primeiro poste!`,
+    goalMsg: `GOLO! Cruzamento direto e rápido, resolvido de voleio por ${nm('A9')} ao primeiro poste.`,
+  });
+}
+
+
+/* --- 6. Grande penalidade --- */
+
+async function playPenalti(){
+  applySetup('penalti', true);
+  setStatus(`Grande penalidade! ${nm('A9')} coloca a bola na marca…`);
+  await cpWait(650);
+
+  setStatus(`${nm('D1')} escolhe o canto e mexe-se em cima da linha…`);
+  movePlayer('D1', 97, 46, 320);
+  await cpWait(320);
+  movePlayer('D1', 97, 54, 320);
+  await cpWait(320);
+
+  setStatus('Corrida curta, passo travado…');
+  movePlayer('A9', 87, 50, 420);
+  await cpWait(420);
+
+  const corner = Math.random() < 0.5 ? 41 : 59;
+  movePlayer('D1', 97, corner < 50 ? 58 : 42, 360); // atira-se para o lado errado
+  await concludeShot({
+    from: [88, 50], mid: [94, corner < 50 ? 46 : 54], target: [99.4, corner], shotMs: 360,
+    slump: ['D1', 'D4', 'D6'], corner: corner < 50 ? CORNER_TOP : CORNER_BOTTOM,
+    shotMsg: 'Remata…',
+    goalMsg: `GOLO de grande penalidade! ${nm('A9')} manda ${nm('D1')} para o lado contrário.`,
+  });
+}
+
+/* --- 7. Recarga depois de uma defesa incompleta --- */
+
+async function playRessalto(){
+  applySetup('ressalto', true);
+  setStatus(`${nm('A9')} arma o remate à entrada da área…`);
+  await cpWait(420);
+
+  setStatus('Remate forte, mas em cima do guarda-redes…');
+  movePlayer('D6', 73, 46, 320);
+  const firstShot = moveBallCurve([70, 45], [84, 44], [95.5, 44], 420);
+  movePlayer('D1', 95.5, 44, 420);
+  await firstShot;
+
+  jump('D1', true);
+  setStatus(`${nm('D1')} defende, mas a bola escapa-lhe das mãos!`);
+  await cpWait(240);
+  jump('D1', false);
+
+  setStatus('A bola sobra no coração da pequena área…');
+  const loose = moveBallCurve([95.5, 44], [92, 50], [90, 58], 420);
+  movePlayer('A10', 90, 58, 480);
+  movePlayer('D4', 89, 60, 460);
+  await loose;
+
+  await concludeShot({
+    from: [90, 58], mid: [95, 56], target: [99.4, 54], shotMs: 260,
+    slump: ['D1', 'D4', 'D3'], corner: CORNER_BOTTOM,
+    shotMsg: `${nm('A10')} chega primeiro à recarga!`,
+    goalMsg: `GOLO! ${nm('D1')} dá a recarga e ${nm('A10')} não perdoa à boca da baliza.`,
+  });
+}
+
+/* --- 8. Roubo de bola na pressão alta --- */
+
+async function playPressaoAlta(){
+  applySetup('pressao_alta', true);
+  setStatus('A equipa sobe as linhas e pressiona a saída de bola adversária…');
+  await cpWait(450);
+
+  setStatus(`${nm('D3')} fica sem linha de passe e tenta sair a jogar pelo lado…`);
+  movePlayer('A9', 90, 36, 420);
+  const risky = moveBallLinear(90, 58, 460);
+  movePlayer('A10', 89, 55, 460);
+  await risky;
+
+  setStatus(`Passe atrasado — ${nm('A10')} antecipa-se e rouba a bola!`);
+  movePlayer('D4', 91, 62, 320);
+  await cpWait(280);
+
+  setStatus(`Bola de imediato para ${nm('A9')}, com a baliza à frente…`);
+  const square = moveBallLinear(89, 42, 340);
+  movePlayer('A9', 89, 42, 340);
+  movePlayer('D1', 96, 44, 340);
+  await square;
+
+  await concludeShot({
+    from: [89, 42], mid: [95, 44], target: [99.4, 46], shotMs: 300,
+    slump: ['D3', 'D4', 'D1'], corner: CORNER_TOP,
+    shotMsg: `${nm('A9')} remata de primeira…`,
+    goalMsg: `GOLO! Pressão alta a valer ouro: ${nm('D3')} perde a bola e ${nm('A9')} castiga logo ali.`,
+  });
+}
+
+/* --- 9. Bomba de fora da área --- */
+
+async function playRemateFora(){
+  applySetup('remate_fora', true);
+  setStatus('A defesa está fechada lá dentro, não há espaço na área…');
+  await cpWait(420);
+
+  setStatus(`Bola atrasada para ${nm('A8')}, à entrada da meia-lua…`);
+  const layoff = moveBallLinear(72, 50, 400);
+  trackDefenders(['D6', 'D7'], [72, 50], 400, 0.2);
+  await layoff;
+
+  setStatus('Ninguém sai à bola — e ele arma logo o pé…');
+  movePlayer('D6', 75, 50, 300);
+  await cpWait(260);
+
+  await concludeShot({
+    from: [72, 50], mid: [86, 40], target: [99.4, 38], shotMs: 620,
+    gk: ['D1', 97, 42, 620], slump: ['D6', 'D7', 'D3'], corner: CORNER_TOP,
+    shotMsg: `${nm('A8')} atira de muito longe, com o peito do pé…`,
+    goalMsg: `GOLAÇO! Bomba de fora da área de ${nm('A8')}, a bola ainda sobe e desce no ângulo.`,
+  });
+}
+
+/* --- 10. Bola longa com ponte de cabeça --- */
+
+async function playBolaLonga(){
+  applySetup('bola_longa', true);
+  setStatus(`${nm('A1')} recusa a saída curta e olha logo para a frente…`);
+  await cpWait(450);
+
+  setStatus('Pontapé longo, direto ao duelo aéreo no meio-campo…');
+  const launch = moveBallCurve([10, 50], [40, 18], [58, 46], 950);
+  movePlayer('D10', 58, 48, 900);
+  movePlayer('A6', 60, 56, 900);
+  await launch;
+
+  jump('A9', true);
+  jump('D10', true);
+  setStatus(`${nm('A9')} ganha o salto e faz a ponte de cabeça…`);
+  await cpWait(260);
+  jump('A9', false);
+  jump('D10', false);
+
+  const flick = moveBallCurve([58, 46], [62, 54], [64, 58], 420);
+  await flick;
+
+  setStatus(`${nm('A6')} recebe a segunda bola e lança ${nm('A9')} na profundidade!`);
+  const through = moveBallCurve([64, 58], [76, 54], [86, 50], 760);
+  movePlayer('A9', 86, 50, 800);
+  movePlayer('D3', 84, 52, 760);
+  trackDefenders(['D4'], [86, 50], 760, 0.35);
+  await through;
+
+  await concludeShot({
+    from: [86, 50], mid: [94, 48], target: [99.4, 46], shotMs: 340,
+    gk: ['D1', 96.5, 48, 340], slump: ['D10', 'D3', 'D4'], corner: CORNER_TOP,
+    shotMsg: `${nm('A9')} entra na área a correr…`,
+    goalMsg: `GOLO! Bola longa, ponte de cabeça e segunda bola — ${nm('A9')} resolve em dois tempos.`,
+  });
+}
+
+/* --- 11. Livre lateral cruzado --- */
+
+async function playLivreLateral(){
+  applySetup('livre_lateral', true);
+  setStatus('Livre na lateral, bem perto da linha — toda a gente sobe à área…');
+  await cpWait(550);
+
+  setStatus('A defesa forma a linha e sobe para o fora-de-jogo…');
+  trackDefenders(['D2', 'D3', 'D4', 'D5'], [84, 50], 450, 0.15);
+  movePlayer('D1', 96, 50, 450);
+  await cpWait(200);
+
+  setStatus(`${nm('A7')} levanta a bola ao segundo poste…`);
+  const cross = moveBallCurve([72, 8], [84, 30], [88, 58], 820);
+  movePlayer('A11', 88, 58, 820);
+  movePlayer('D4', 88, 56, 800);
+  trackDefenders(['D5'], [88, 58], 800, 0.3);
+  await cross;
+
+  jump('A11', true);
+  await cpWait(240);
+  jump('A11', false);
+
+  await concludeShot({
+    from: [88, 58], mid: [94, 56], target: [99.4, 53], shotMs: 320,
+    slump: ['D4', 'D5', 'D2'], corner: CORNER_BOTTOM,
+    shotMsg: `Cabeceamento de ${nm('A11')}, sozinho ao segundo poste!`,
+    goalMsg: `GOLO! Bola parada bem batida por ${nm('A7')} e cabeceamento de ${nm('A11')} ao segundo poste.`,
+  });
+}
+
+/* --- 12. Remate acrobático --- */
+
+async function playAcrobatico(){
+  applySetup('acrobatico', true);
+  setStatus(`${nm('A11')} levanta a cabeça e cruza alto para a área…`);
+  await cpWait(420);
+
+  const cross = moveBallCurve([78, 88], [84, 66], [88, 44], 780);
+  movePlayer('A9', 88, 47, 700);
+  movePlayer('D4', 88, 50, 720);
+  trackDefenders(['D3'], [88, 46], 700, 0.25);
+  await cross;
+
+  setStatus('A bola vem por trás dele, alta demais para o pé e para a cabeça…');
+  await cpWait(220);
+
+  jump('A9', true);
+  await cpWait(300);
+  jump('A9', false);
+
+  await concludeShot({
+    from: [88, 44], mid: [93, 50], target: [99.4, 56], shotMs: 400,
+    gk: ['D1', 97, 52, 400], slump: ['D4', 'D3', 'D5'], corner: CORNER_BOTTOM,
+    shotMsg: `${nm('A9')} atira-se para trás e tenta a bicicleta!`,
+    goalMsg: `GOLAÇO acrobático! ${nm('A9')} resolve de bicicleta, sem deixar a bola cair.`,
+  });
+}
+
+/* ---------- Catálogo das jogadas ----------
+   scorer/assist dizem que papel da coreografia é o finalizador e o
+   passador — é por aqui que o marcador e o assistente reais entram na
+   jogada, com o resto da equipa a preencher os outros papéis. */
+const PLAY_BOOK = [
+  { key: 'corner_1', run: playCorner1, scorer: 'A9', assist: 'A7', label: 'Golo de canto' },
+  { key: 'corner_2', run: playCorner2, scorer: 'A11', assist: 'A7', label: 'Canto curto' },
+  { key: 'corner_3', run: playCorner3, scorer: 'A8', assist: 'A7', label: 'Canto com sobra' },
+  { key: 'corner_4', run: playCorner4, scorer: 'A8', assist: 'A9', label: 'Canto trabalhado' },
+  { key: 'contra_1', run: playContra1, scorer: 'A10', assist: 'A3', label: 'Contra-ataque' },
+  { key: 'contra_2', run: playContra2, scorer: 'A10', assist: null, label: 'Jogada individual' },
+  { key: 'contra_3', run: playContra3, scorer: 'A9', assist: 'A11', label: 'Contra-ataque pela ala' },
+  { key: 'ensaiada_1', run: playEnsaiada1, scorer: 'A8', assist: 'A6', label: 'Livre ensaiado' },
+  { key: 'ensaiada_2', run: playEnsaiada2, scorer: 'A8', assist: null, label: 'Livre direto' },
+  { key: 'triangulacao_1', run: playTriangulacao1, scorer: 'A8', assist: 'A10', label: 'Um-dois' },
+  { key: 'triangulacao_2', run: playTriangulacao2, scorer: 'A10', assist: 'A7', label: 'Triângulo rotativo' },
+  { key: 'triangulacao_3', run: playTriangulacao3, scorer: 'A11', assist: 'A6', label: 'Tabela de calcanhar' },
+  { key: 'triangulacao_4', run: playTriangulacao4, scorer: 'A10', assist: 'A6', label: 'Mudança de ala' },
+  { key: 'cruzamento_1', run: playCruzamento1, scorer: 'A9', assist: 'A11', label: 'Cruzamento com sobreposição' },
+  { key: 'cruzamento_2', run: playCruzamento2, scorer: 'A9', assist: 'A11', label: 'Cruzamento direto' },
+  { key: 'penalti', run: playPenalti, scorer: 'A9', assist: null, label: 'Grande penalidade' },
+  { key: 'ressalto', run: playRessalto, scorer: 'A10', assist: 'A9', label: 'Recarga' },
+  { key: 'pressao_alta', run: playPressaoAlta, scorer: 'A9', assist: 'A10', label: 'Roubo na pressão alta' },
+  { key: 'remate_fora', run: playRemateFora, scorer: 'A8', assist: 'A6', label: 'Bomba de fora da área' },
+  { key: 'bola_longa', run: playBolaLonga, scorer: 'A9', assist: 'A6', label: 'Bola longa' },
+  { key: 'livre_lateral', run: playLivreLateral, scorer: 'A11', assist: 'A7', label: 'Livre lateral' },
+  { key: 'acrobatico', run: playAcrobatico, scorer: 'A9', assist: 'A11', label: 'Remate acrobático' },
+];
+
+let lastPlayKey = null;
+
+/* Escolhe a jogada: com assistência real, uma coreografia que tenha
+   passador; sem assistência, uma jogada individual sempre que possível.
+   Nunca repete a jogada anterior. */
+function pickPlay(hasAssist){
+  let pool = PLAY_BOOK.filter((p) => (hasAssist ? p.assist : !p.assist));
+  if(!pool.length) pool = PLAY_BOOK;
+  if(pool.length > 1) pool = pool.filter((p) => p.key !== lastPlayKey) || pool;
+  const play = pool[Math.floor(Math.random() * pool.length)];
+  lastPlayKey = play.key;
+  return play;
+}
+
+/* ---------- Passar de tela e correr o lance ---------- */
+
+let cpCtx = {};
+
+function showHighlightScreen(ev, data, play){
+  const stage = el('liveStage');
+  if(stage) stage.classList.add('showing-highlight');
+  el('liveLineupsScreen').classList.add('hidden');
+  el('liveHighlightScreen').classList.remove('hidden');
+
+  const attacking = data[ev.side].team_name;
+  el('cpHighlightKicker').textContent = `${ev.minute}' · ${play.label}`;
+  el('cpHighlightTeams').innerHTML =
+    `<span class="cp-team-chip team-home">${data.home.team_name}</span>`
+    + `<span class="cp-team-chip team-away">${data.away.team_name}</span>`
+    + `<span class="cp-team-dir">${ev.side === 'home' ? '→' : '←'} ataca ${attacking}</span>`;
+}
+
+function hideHighlightScreen(){
+  const stage = el('liveStage');
+  if(stage) stage.classList.remove('showing-highlight');
+  el('liveHighlightScreen').classList.add('hidden');
+  el('liveLineupsScreen').classList.remove('hidden');
+}
+
+async function playLiveHighlight(ev, data){
+  if(!cpBuilt) buildCampoActors();
+  if(!cpEl('cpActors')) return;
 
   const side = ev.side;
   const defendSide = side === 'home' ? 'away' : 'home';
   const teamState = data[side];
   const defendState = data[defendSide];
-  const keeper = defendState.on_pitch.find((p) => p.category === 'GR');
+  if(!teamState || !defendState) return;
 
-  const idleBall = el('livePitchIdleBall');
-  if(idleBall) idleBall.style.opacity = '0';
+  const scorer = teamState.on_pitch.find((p) => p.id === ev.player_id) || null;
+  const assister = ev.assister_id ? teamState.on_pitch.find((p) => p.id === ev.assister_id) : null;
+  const keeper = defendState.on_pitch.find((p) => p.id === (ev.keeper_id || -1))
+    || defendState.on_pitch.find((p) => p.category === 'GR');
 
-  const ctx = {
-    ev, data, board, side, defendSide, teamState, defendState,
-    scorerId: ev.player_id, assisterId: ev.assister_id || null,
-    keeperId: keeper ? keeper.id : null,
-    goalMouth: liveGoalMouthFor(side),
+  const play = pickPlay(!!assister);
+
+  const attackPins = {};
+  if(scorer) attackPins[play.scorer] = scorer;
+  if(assister && play.assist) attackPins[play.assist] = assister;
+
+  cpRoster = Object.assign(
+    assignRoles(teamState, 'A', attackPins),
+    assignRoles(defendState, 'D', keeper ? { D1: keeper } : {}),
+  );
+
+  cpCtx = {
+    ev, data, side, defendSide,
+    kind: ev.kind === 'goal' ? 'goal' : 'chance',
+    outcome: ev.outcome || 'wide',
+    scorerRole: play.scorer,
   };
+  cpFlip = side === 'away';  // o visitante ataca para a baliza da esquerda
+  cpSkip = false;
+  paintRoster();
+
+  showHighlightScreen(ev, data, play);
+  applySetup(play.key, true);
+  await wait(260);
 
   try{
-    const preset = pickPreset();
-    await playPresetSequence(ctx, preset);
-
-    const attackerToken = board.querySelector(`.live-token[data-player-id="${ctx.scorerId}"]`);
-    if(attackerToken){
-      attackerToken.classList.remove('kick-pulse');
-      void attackerToken.offsetWidth;
-      attackerToken.classList.add('kick-pulse');
-    }
-
-    await finishGoalOnPitch(ctx);
-    await playGoalReplay(ctx.lastShot);
-  } finally {
-    ball.style.opacity = '0';
-    if(idleBall) idleBall.style.opacity = '.85';
-    renderLivePitch(data); // repõe as duas equipas na formação normal fora do lance
+    await play.run();
+  }catch(err){
+    // uma jogada que falhe nunca pode bloquear o jogo — segue para a próxima
+  }finally{
+    await cpWait(500);
+    hideHighlightScreen();
+    cpSkip = false;
+    renderLiveLineups(data);
   }
 }
 
-/* ---------- Lances sem golo (defesa, corte, para fora, ao poste) ----------
-   Sorteia a MESMA biblioteca de jogadas pré-definidas; o que muda é só
-   o desfecho — o GR defende, um defesa corta, ou a bola sai ao lado. */
-async function playLiveChanceAnimation(ev, data){
-  const board = el('livePitchTokens');
-  const ball = el('livePitchBall');
-  if(!board || !ball || !ev.player_id) return wait(400);
+// botão "Saltar": termina a jogada de imediato, sem esperar pelas animações
+document.addEventListener('click', (e) => {
+  if(e.target && e.target.id === 'cpSkipBtn') cpSkip = true;
+});
 
-  const side = ev.side;
-  const defendSide = side === 'home' ? 'away' : 'home';
-  const teamState = data[side];
-  const defendState = data[defendSide];
-
-  const ctx = {
-    ev, data, board, side, defendSide, teamState, defendState,
-    scorerId: ev.player_id, assisterId: ev.assister_id || null,
-    keeperId: ev.keeper_id || null,
-    goalMouth: liveGoalMouthFor(side),
-  };
-
-  const idleBall = el('livePitchIdleBall');
-  if(idleBall) idleBall.style.opacity = '0';
-
-  try{
-    const preset = pickPreset();
-    const { finisherPos } = applyPresetSetup(ctx, preset);
-
-    if(ctx.keeperId) moveTokenSmooth(ctx.keeperId, board, keeperHomeSpot(defendSide), 260);
-    defensiveBlock(ctx, finisherPos, T(480));
-    await wait(T(220));
-    await attemptTackle(ctx, finisherPos, T(260));
-
-    const attackerToken = board.querySelector(`.live-token[data-player-id="${ev.player_id}"]`);
-    if(attackerToken){
-      attackerToken.classList.remove('kick-pulse');
-      void attackerToken.offsetWidth;
-      attackerToken.classList.add('kick-pulse');
-    }
-
-    if(ev.outcome === 'blocked'){
-      // um defesa atira-se à frente e corta o remate
-      const blocker = closestDefendersTo(ctx, finisherPos, 1)[0];
-      const blockPoint = blocker
-        ? { x: (finisherPos.x + blocker.pos.x) / 2, y: (finisherPos.y + blocker.pos.y) / 2 }
-        : { x: finisherPos.x, y: depthY(side, distFromGoal(side, finisherPos.y) - 4) };
-      if(blocker) moveTokenSmooth(blocker.id, board, blockPoint, 260);
-      await moveBallLinearField(blockPoint, 280);
-      // ressalta para fora da área
-      await moveBallCurveField(blockPoint,
-        { x: blockPoint.x + rand(-14, 14), y: depthY(side, distFromGoal(side, blockPoint.y) + 9) },
-        { x: Math.max(6, Math.min(94, blockPoint.x + rand(-22, 22))), y: depthY(side, distFromGoal(side, blockPoint.y) + 17) },
-        420);
-    } else if(ev.outcome === 'saved'){
-      const target = ctx.keeperId ? keeperRushSpot(side, finisherPos) : goalTarget(side);
-      if(ctx.keeperId) moveTokenSmooth(ctx.keeperId, board, target, 320);
-      await strikeAtGoal(ctx, finisherPos, { target });
-      const keeperToken = board.querySelector(`.live-token[data-player-id="${ctx.keeperId}"]`);
-      if(keeperToken){
-        keeperToken.classList.remove('save-pulse');
-        void keeperToken.offsetWidth;
-        keeperToken.classList.add('save-pulse');
-      }
-      // defesa para canto
-      await moveBallCurveField(target,
-        { x: target.x + rand(-18, 18), y: depthY(side, 4) },
-        { x: rand(0, 1) > 0.5 ? rand(2, 8) : rand(92, 98), y: depthY(side, rand(-2, 2)) },
-        380);
-    } else {
-      // ao lado / à trave: passa perto do poste e sai pela linha de fundo
-      const post = 50 + (finisherPos.x >= 50 ? 1 : -1) * rand(HALF_W.GOAL, HALF_W.GOAL + 6);
-      await strikeAtGoal(ctx, finisherPos, { target: { x: post, y: depthY(side, rand(-3, 0)) } });
-    }
-  } finally {
-    ball.style.opacity = '0';
-    if(idleBall) idleBall.style.opacity = '.85';
-    renderLivePitch(data);
-  }
-}
-function playLiveBallAnimation(ev, data){
-  if(ev.kind === 'goal') return playGoalSequence(ev, data);
-  return playLiveChanceAnimation(ev, data);
-}
-
+/* ---------- Fila de lances ----------
+   Um lance de cada vez: enquanto uma jogada corre, as seguintes ficam à
+   espera, para o ecrã nunca mostrar dois golos ao mesmo tempo. */
 function queueLiveAnimations(newEvents, data){
   (newEvents || []).forEach((ev) => {
     if((ev.kind === 'goal' || ev.kind === 'chance') && ev.player_id) liveAnimQueue.push({ ev, data });
   });
   playNextLiveAnimation();
-  resyncScoreDisplayIfIdle(); // não havia nada para animar desta vez — sincroniza já
+  resyncScoreDisplayIfIdle();
 }
 
 function playNextLiveAnimation(){
@@ -5064,76 +5504,9 @@ function playNextLiveAnimation(){
   }
   liveAnimPlaying = true;
   const { ev, data } = liveAnimQueue.shift();
-  Promise.resolve(playLiveBallAnimation(ev, data)).then(() => {
+  Promise.resolve(playLiveHighlight(ev, data)).then(() => {
     liveAnimPlaying = false;
     playNextLiveAnimation();
-  });
-}
-
-/* ---------- Movimento de posse "fantasma" (fora dos golos/lances) ----------
-   Fora dos momentos de golo/lance (só aí a bola "real" anima-se — ver
-   playLiveBallAnimation), o campo não fica só com os 22 bonecos a balançar
-   ao acaso: uma bolinha mais discreta (ver .live-pitch-idle-ball) passeia-se
-   pelo relvado como se fosse a bola em jogo normal, e os jogadores reagem
-   a ela como numa jogada real:
-   - os 3 jogadores de cada equipa mais próximos da zona aproximam-se um
-     pouco (o mais próximo mais que os outros — como quem vai apoiar/
-     pressionar a jogada);
-   - quanto maior a Pressão definida pela equipa, mais forte é essa reação,
-     tal como no motor do jogo (ver tacticsAttackMultiplier em
-     routes/liveMatch.js).
-   Tudo isto é só visual — não altera lances, golos nem o marcador, que
-   continuam a ser decididos pelo servidor. */
-function startLiveIdleMotion(){
-  stopLiveIdleMotion();
-  liveIdleTimer = setInterval(() => {
-    if(!liveState || liveState.status === 'finished' || liveAnimPlaying) return;
-    stepLiveIdleMotion();
-  }, 2400);
-}
-function stopLiveIdleMotion(){
-  if(liveIdleTimer) clearInterval(liveIdleTimer);
-  liveIdleTimer = null;
-}
-
-function stepLiveIdleMotion(){
-  const data = liveState;
-  const board = el('livePitchTokens');
-  const idleBall = el('livePitchIdleBall');
-  if(!data || !board || !idleBall) return;
-
-  // Passeio aleatório suave da zona de posse "fantasma", sem se afastar
-  // muito das zonas mais centrais do campo.
-  liveIdleZone = {
-    x: Math.max(14, Math.min(86, liveIdleZone.x + (Math.random() * 30 - 15))),
-    y: Math.max(12, Math.min(88, liveIdleZone.y + (Math.random() * 30 - 15))),
-  };
-  const screenZone = toScreenPct(liveIdleZone);
-  idleBall.style.left = `${screenZone.left}%`;
-  idleBall.style.top = `${screenZone.top}%`;
-
-  ['home', 'away'].forEach((side) => {
-    const teamState = data[side];
-    if(!teamState) return;
-    const outfield = teamState.on_pitch.filter((p) => p.category !== 'GR');
-    const withDist = outfield.map((p) => {
-      const pos = findLiveTokenPosition(p.id, side, data);
-      if(!pos) return null;
-      return { p, pos, dist: Math.hypot(pos.x - liveIdleZone.x, pos.y - liveIdleZone.y) };
-    }).filter(Boolean).sort((a, b) => a.dist - b.dist);
-
-    const pressing = (teamState.tactics && teamState.tactics.pressing) ?? 50;
-    const pressFactor = 0.4 + (pressing / 100) * 0.9; // 0.4 (passiva) a 1.3 (intensa)
-    withDist.slice(0, 3).forEach(({ p, pos, dist }, i) => {
-      if(dist < 2) return; // já está mesmo ali, não vale a pena animar
-      const pull = i === 0 ? 0.34 : 0.16; // o mais próximo aproxima-se mais que os outros dois
-      const targetX = pos.x + (liveIdleZone.x - pos.x) * pull * pressFactor;
-      const targetY = pos.y + (liveIdleZone.y - pos.y) * pull * pressFactor;
-      moveTokenTemporarily(p.id, board, {
-        x: Math.max(4, Math.min(96, targetX)),
-        y: Math.max(2, Math.min(98, targetY)),
-      }, 2100);
-    });
   });
 }
 
@@ -5172,7 +5545,7 @@ function applyLiveState(data, newEvents){
   if(newEvents && newEvents.length) renderLiveFeedItems(newEvents);
   queueLiveAnimations(newEvents, data); // golos e lances de perigo ganham vida no campo
   renderLiveSummary(data);
-  renderLivePitch(data);
+  if(!liveAnimPlaying) renderLiveLineups(data); // durante um lance o campo fica no ecrã
 
   const myState = liveMySide ? data[liveMySide] : null;
   renderLiveSubPanel(myState);
@@ -5514,7 +5887,8 @@ el('liveOpenSubModalBtn').addEventListener('click', () => openSubModal(null));
    Abre por cima do jogo ao vivo: escolhe primeiro quem sai (em campo),
    depois quem entra (banco) — a troca acontece de imediato e a janela
    fecha-se sozinha, voltando a mostrar os bonecos já atualizados no
-   campo (ver applyLiveState → renderLivePitch). Os dois lados aparecem
+   ecrã dos onzes já atualizado (ver applyLiveState → renderLiveLineups).
+   Os dois lados aparecem
    agrupados por posição, com estrelas de qualidade (ver qualityStars) e
    uma sugestão automática — o melhor jogador do banco na mesma posição
    de quem está a sair — para decidir mais depressa a meio de um jogo. */

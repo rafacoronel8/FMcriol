@@ -748,30 +748,70 @@
     <div class="live-match-arena">
 
       <div class="live-pitch-col">
-        <div class="live-pitch-board" id="livePitchBoard">
-          <button type="button" class="live-drawer-toggle" id="liveDrawerToggle" title="Táticas, banco e comentário">📋</button>
-          <div class="live-pitch-box live-pitch-box-top"></div>
-          <div class="live-pitch-box live-pitch-box-bottom"></div>
-          <div class="live-pitch-six live-pitch-six-top"></div>
-          <div class="live-pitch-six live-pitch-six-bottom"></div>
-          <div class="live-pitch-penspot live-pitch-penspot-top"></div>
-          <div class="live-pitch-penspot live-pitch-penspot-bottom"></div>
-          <div class="live-pitch-goal live-pitch-goal-top"></div>
-          <div class="live-pitch-goal live-pitch-goal-bottom"></div>
-          <div class="live-pitch-halfway"></div>
-          <div class="live-pitch-center-circle"></div>
-          <div class="live-pitch-team-label live-pitch-team-label-top" id="livePitchAwayLabel"></div>
-          <div class="live-pitch-team-label live-pitch-team-label-bottom" id="livePitchHomeLabel"></div>
-          <div class="live-pitch-tokens" id="livePitchTokens"><!-- gerado via JS --></div>
-          <div class="live-pitch-idle-ball" id="livePitchIdleBall"></div>
-          <div class="live-pitch-ball" id="livePitchBall"></div>
-          <div class="live-goal-flash" id="liveGoalFlash">⚽ GOLO!</div>
-          <div class="live-replay-banner hidden" id="liveReplayBanner">
-            <span class="live-replay-label">🔁 Repetição em câmara lenta</span>
-            <button type="button" class="live-replay-skip" id="liveReplaySkipBtn">Saltar ▶</button>
+        <button type="button" class="live-drawer-toggle" id="liveDrawerToggle" title="Táticas, banco e comentário">📋</button>
+
+        <!-- ===== Palco do jogo: duas telas que se trocam ===== -->
+        <div class="live-stage" id="liveStage">
+
+          <!-- TELA 1 — os dois onzes, com notas ao vivo, dados e opções.
+               É o que está no ecrã enquanto não há nenhum lance. -->
+          <div class="live-lineups" id="liveLineupsScreen">
+            <div class="live-lineups-teams">
+              <div class="lineup-card" id="lineupHome"></div>
+              <div class="live-lineups-vs">
+                <div class="live-lineups-score" id="liveLineupsScore">0 - 0</div>
+                <div class="live-lineups-minute" id="liveLineupsMinute">0'</div>
+                <div class="live-lineups-vs-label">vs</div>
+              </div>
+              <div class="lineup-card" id="lineupAway"></div>
+            </div>
+            <aside class="live-databox" id="liveDataBox"></aside>
           </div>
+
+          <!-- TELA 2 — campo de 11 igual ao protótipo campo.html: só aparece
+               quando há golo ou lance de perigo para mostrar. -->
+          <div class="live-highlight hidden" id="liveHighlightScreen">
+            <div class="cp-highlight-bar">
+              <span class="cp-highlight-kicker" id="cpHighlightKicker"></span>
+              <span class="cp-highlight-teams" id="cpHighlightTeams"></span>
+              <button type="button" class="cp-skip-btn" id="cpSkipBtn">Saltar ▶</button>
+            </div>
+
+            <div class="cp-pitch-frame">
+              <div class="cp-pitch" id="cpPitch">
+                <div class="cp-line outer"></div>
+                <div class="cp-line halfway"></div>
+                <div class="cp-circle center"></div>
+                <div class="cp-spot center-spot"></div>
+
+                <div class="cp-box big-box left"></div>
+                <div class="cp-box small-box left"></div>
+                <div class="cp-spot pen-spot left"></div>
+                <div class="cp-arc pen-arc left"></div>
+                <div class="cp-corner-arc cl-top"></div>
+                <div class="cp-corner-arc cl-bottom"></div>
+
+                <div class="cp-box big-box right"></div>
+                <div class="cp-box small-box right"></div>
+                <div class="cp-spot pen-spot right"></div>
+                <div class="cp-arc pen-arc right"></div>
+                <div class="cp-corner-arc cr-top"></div>
+                <div class="cp-corner-arc cr-bottom"></div>
+
+                <div class="cp-goal left"><div class="cp-net" id="cpLeftNet"></div></div>
+                <div class="cp-goal right"><div class="cp-net" id="cpRightNet"></div></div>
+
+                <!-- jogadores + bola, gerados via JS -->
+                <div id="cpActors"></div>
+
+                <div class="cp-goal-flash" id="cpGoalFlash">GOLO!</div>
+              </div>
+            </div>
+
+            <p class="cp-status" id="cpStatus"></p>
+          </div>
+
         </div>
-        <p class="live-pitch-hint" id="livePitchHint">O jogo simula-se sozinho, minuto a minuto. A equipa a roxo és tu — clica num jogador em campo para o substituir.</p>
       </div>
 
       <div class="live-drawer-backdrop" id="liveDrawerBackdrop"></div>
