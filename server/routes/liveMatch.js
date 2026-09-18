@@ -495,7 +495,7 @@ function buildTeamRoster(teamId) {
       }));
   }
 
-  const team = db.prepare('SELECT name, shield_path, reputation_stars, is_user_controlled FROM teams WHERE id = ?').get(teamId);
+  const team = db.prepare('SELECT name, shield_path, reputation_stars, is_user_controlled, kit_colors_json FROM teams WHERE id = ?').get(teamId);
 
   return {
     team_id: teamId,
@@ -510,6 +510,10 @@ function buildTeamRoster(teamId) {
     bench,
     subs_remaining: MAX_SUBS,
     appeared: onPitch.map((p) => p.id),
+    // Todos os equipamentos disponíveis da equipa (ainda por escolher —
+    // ver resolveMatchKits, chamado uma única vez em POST /:friendlyId/start
+    // para decidir quem joga com que cores neste jogo em concreto).
+    kits: db.parseTeamKits(team),
   };
 }
 
@@ -1240,6 +1244,10 @@ function teamStateForClient(state) {
     team_id: state.team_id,
     team_name: state.team_name,
     team_shield: state.team_shield || null,
+    // Equipamento com que esta equipa está a jogar NESTE jogo (decidido uma
+    // vez em POST /:friendlyId/start — ver resolveMatchKits) — usado no
+    // cliente para pintar os bonecos com as cores reais do clube.
+    kit: state.kit || (state.kits && state.kits.home) || null,
     is_user: state.is_user,
     formation: state.formation,
     mentality: state.mentality || 'equilibrado',
@@ -1366,6 +1374,15 @@ router.post('/:friendlyId/start', (req, res) => {
   if (!homeState.on_pitch.length || !awayState.on_pitch.length) {
     return res.status(400).json({ error: 'Uma das equipas não tem jogadores suficientes para este jogo.' });
   }
+
+  /* Escolhe, uma única vez para todo o jogo, com que equipamento cada
+     equipa entra em campo — a casa tem prioridade para o principal, a
+     visitante troca para o alternativo (ou terceiro) se as cores se
+     confundirem, e só as duas trocam se, mesmo assim, continuarem
+     parecidas. Fica gravado no estado do jogo para não mudar a meio. */
+  const chosenKits = db.resolveMatchKits(homeState.kits, awayState.kits);
+  homeState.kit = chosenKits.home;
+  awayState.kit = chosenKits.away;
 
   const schedule = buildSchedule(homeState, awayState);
   const events = [{ minute: 0, kind: 'kickoff', text: `⚽ Começou o jogo: ${homeState.team_name} vs ${awayState.team_name}!` }];

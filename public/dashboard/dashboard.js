@@ -3854,7 +3854,7 @@ function bumpScoreDisplay(side){
   liveDisplayedScore[side] += 1;
   const scoreEl = el('liveScoreNumbers');
   if(!scoreEl) return;
-  scoreEl.textContent = `${liveDisplayedScore.home} - ${liveDisplayedScore.away}`;
+  scoreEl.textContent = `${liveDisplayedScore.home} ⚽ ${liveDisplayedScore.away}`;
   scoreEl.classList.remove('pop');
   void scoreEl.offsetWidth; // reinicia a animação mesmo em golos seguidos
   scoreEl.classList.add('pop');
@@ -3870,7 +3870,7 @@ function resyncScoreDisplayIfIdle(){
   liveDisplayedScore.home = liveState.home_score;
   liveDisplayedScore.away = liveState.away_score;
   const scoreEl = el('liveScoreNumbers');
-  if(scoreEl) scoreEl.textContent = `${liveDisplayedScore.home} - ${liveDisplayedScore.away}`;
+  if(scoreEl) scoreEl.textContent = `${liveDisplayedScore.home} ⚽ ${liveDisplayedScore.away}`;
 }
 let liveInstructionsMeta = null; // catálogo de /meta/instructions (labels/dicas), pedido uma única vez
 
@@ -3897,7 +3897,7 @@ async function openLiveMatch(friendlyId){
   el('lineupAway').innerHTML = '';
   el('liveDataBox').innerHTML = '';
   hideHighlightScreen();
-  el('liveScoreNumbers').textContent = '0 - 0';
+  el('liveScoreNumbers').textContent = '0 ⚽ 0';
   el('liveMinute').textContent = "0'";
   el('liveProgressFill').style.width = '0%';
   el('liveHalfLine').textContent = '';
@@ -3905,14 +3905,14 @@ async function openLiveMatch(friendlyId){
   el('livePlayBtn').disabled = true;
   el('liveAutoBtn').disabled = true;
 
-  // Tenta abrir mesmo em ecrã inteiro (não só CSS) e, dentro dele, travar
-  // a orientação na horizontal — falha silenciosamente em navegadores/
-  // dispositivos que não suportem (ex.: iOS Safari), sem incomodar ninguém.
+  // Tenta abrir mesmo em ecrã inteiro (não só CSS) — sem forçar a
+  // orientação: o jogo ao vivo funciona tanto em retrato como em
+  // horizontal, o utilizador é que escolhe. Falha silenciosamente em
+  // navegadores/dispositivos que não suportem (ex.: iOS Safari).
   try{
     const rootEl = document.documentElement;
     if(rootEl.requestFullscreen) await rootEl.requestFullscreen().catch(() => {});
-    if(screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape').catch(() => {});
-  }catch(err){ /* ecrã inteiro/orientação são só um extra — o CSS já cobre o essencial */ }
+  }catch(err){ /* ecrã inteiro é só um extra — o CSS já cobre o essencial */ }
 
   try{
     let res = await fetch(`/api/live-matches/${friendlyId}`);
@@ -3954,7 +3954,6 @@ el('liveFullscreenBtn').addEventListener('click', async () => {
       await document.exitFullscreen();
     }else{
       await document.documentElement.requestFullscreen();
-      if(screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
     }
   }catch(err){ /* alguns browsers recusam pedidos de ecrã inteiro fora de um gesto direto — sem problema */ }
 });
@@ -4028,6 +4027,47 @@ function rand(min, max){ return min + Math.random() * (max - min); }
 function lastName(name){ return String(name || '').trim().split(/\s+/).slice(-1)[0] || '—'; }
 
 /* ================================================================
+   CORES REAIS DOS CLUBES NOS BONECOS
+   ----------------------------------------------------------------
+   O servidor decide, uma vez por jogo, com que equipamento cada
+   equipa joga (ver resolveMatchKits em db/database.js) e manda-o em
+   data.home.kit / data.away.kit. Aqui só se traduz isso em variáveis
+   CSS (--kit-home-... / --kit-away-...), que .lineup-dot-circle, .cp-player
+   e .cp-team-chip já sabem usar (ver dashboard.css). Assim os bonecos
+   do estúdio E os da coreografia do golo ficam sempre com as cores do
+   equipamento realmente escolhido para aquele jogo. */
+function textColorForBg(hex){
+  const h = String(hex || '').replace('#', '');
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const n = parseInt(full, 16);
+  if(Number.isNaN(n) || full.length !== 6) return '#fff';
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  // luminância relativa aproximada — fundo claro pede texto escuro e vice-versa
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? '#1a1a1a' : '#fff';
+}
+
+function applyKitCssVars(home, away){
+  const root = document.documentElement.style;
+  const set = (side, kit) => {
+    if(!kit) return;
+    root.setProperty(`--kit-${side}-base`, kit.base || '');
+    root.setProperty(`--kit-${side}-accent`, kit.accent || kit.base || '');
+    root.setProperty(`--kit-${side}-text`, textColorForBg(kit.base));
+    const borders = Array.isArray(kit.borders) ? kit.borders : [];
+    root.setProperty(`--kit-${side}-b1`, borders[0] || kit.base || '');
+    root.setProperty(`--kit-${side}-b2`, borders[1] || kit.accent || kit.base || '');
+    root.setProperty(`--kit-${side}-b3`, borders[2] || kit.base || '');
+  };
+  set('home', home);
+  set('away', away);
+}
+
+function kitPatternClass(kit){
+  return `kit-pattern-${(kit && kit.pattern) || 'solid'}`;
+}
+
+/* ================================================================
    TELA 1 — ESTÚDIO: onzes, notas e dados
    ================================================================ */
 
@@ -4081,9 +4121,11 @@ function lineupSlotCoords(formation, slotIndex){
 
 function lineupDotHtml(p, teamState, data){
   const rating = liveRating(p, teamState, data);
-  // mesma cor que o jogador tem no campo dos lances: casa a vermelho,
-  // fora a azul — a equipa reconhece-se à primeira nas duas telas
-  const teamClass = data.home.team_id === teamState.team_id ? 'team-home' : 'team-away';
+  // a equipa reconhece-se à primeira: cada boneco leva mesmo o equipamento
+  // (cores + padrão) que o clube está a usar NESTE jogo — ver applyKitCssVars
+  const isHome = data.home.team_id === teamState.team_id;
+  const teamClass = isHome ? 'team-home' : 'team-away';
+  const patternClass = kitPatternClass(isHome ? data.home.kit : data.away.kit);
   const { x, y } = lineupSlotCoords(teamState.formation, p.slot_index);
   const selectable = teamState.is_user && liveState && liveState.status !== 'finished';
   const marks = [];
@@ -4094,7 +4136,7 @@ function lineupDotHtml(p, teamState, data){
   return `
     <div class="lineup-dot${selectable ? ' selectable' : ''}" style="left:${x}%;top:${y}%;" data-player-id="${p.id}"
          title="${p.name}${selectable ? ' — clica para substituir' : ''}">
-      <span class="lineup-dot-circle ${teamClass}${p.category === 'GR' ? ' gk' : ''}${teamState.is_user ? ' is-user' : ''}">${p.jersey_number || '•'}</span>
+      <span class="lineup-dot-circle ${teamClass} ${patternClass}${p.category === 'GR' ? ' gk' : ''}${teamState.is_user ? ' is-user' : ''}"><span class="lineup-dot-number">${p.jersey_number || '•'}</span></span>
       <span class="lineup-dot-name">${lastName(p.name)}</span>
       <span class="lineup-dot-rating tone-${ratingTone(rating)}">${rating.toFixed(1)}</span>
       ${marks.length ? `<span class="lineup-dot-marks">${marks.join('')}</span>` : ''}
@@ -4422,10 +4464,14 @@ function paintRoster(){
   // a mesma cor e a de fora também, ataquem elas ou defendam elas.
   const attackTeam = cpCtx.side === 'away' ? 'away' : 'home';
   const defendTeam = attackTeam === 'home' ? 'away' : 'home';
+  const homePatternClass = kitPatternClass(liveState && liveState.home && liveState.home.kit);
+  const awayPatternClass = kitPatternClass(liveState && liveState.away && liveState.away.kit);
   Object.entries(cpEls).forEach(([role, node]) => {
     const team = role[0] === 'A' ? attackTeam : defendTeam;
     node.classList.toggle('team-home', team === 'home');
     node.classList.toggle('team-away', team === 'away');
+    node.classList.remove('kit-pattern-solid', 'kit-pattern-stripes', 'kit-pattern-checkered', 'kit-pattern-bordered');
+    node.classList.add(team === 'home' ? homePatternClass : awayPatternClass);
     const p = cpRoster[role];
     node.querySelector('.cp-player-num').textContent = p ? (p.jersey_number || role.replace(/[AD]/, '')) : role.replace(/[AD]/, '');
     node.querySelector('.cp-player-name').textContent = p ? lastName(p.name) : '';
@@ -5515,6 +5561,7 @@ function applyLiveState(data, newEvents){
 
   liveState = data;
   liveMySide = data.home.is_user ? 'home' : (data.away.is_user ? 'away' : null);
+  applyKitCssVars(data.home.kit, data.away.kit); // cores reais do equipamento escolhido para este jogo
 
   el('liveHomeShield').innerHTML = shieldHtml(data.home);
   el('liveAwayShield').innerHTML = shieldHtml(data.away);
@@ -5532,7 +5579,7 @@ function applyLiveState(data, newEvents){
     liveDisplayedScore.away = data.away_score;
     liveScoreInitialized = true;
   }
-  el('liveScoreNumbers').textContent = `${liveDisplayedScore.home} - ${liveDisplayedScore.away}`;
+  el('liveScoreNumbers').textContent = `${liveDisplayedScore.home} ⚽ ${liveDisplayedScore.away}`;
 
   el('liveMinute').textContent = data.status === 'finished' ? 'Fim' : `${data.minute}'`;
   el('liveProgressFill').style.width = `${Math.min(100, (data.minute / 90) * 100)}%`;

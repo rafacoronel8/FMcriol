@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Painel do Clube — FMcriol</title>
-<link rel="stylesheet" href="dashboard.css">
+<link rel="stylesheet" href="dashboard.css?v=2">
 </head>
 <body>
 
@@ -706,11 +706,6 @@
   <div class="news-modal live-match-modal">
     <button class="news-modal-close" id="liveMatchClose" aria-label="Fechar">×</button>
 
-    <div class="live-portrait-hint">
-      <div class="live-portrait-hint-icon">🔄</div>
-      <div>Roda o telemóvel para a horizontal<br>para o campo aparecer no ecrã todo.</div>
-    </div>
-
     <div class="live-match-topline">
       <span class="live-badge" id="liveBadge"><span class="live-badge-dot"></span>AO VIVO</span>
       <span class="live-match-halfline" id="liveHalfLine"></span>
@@ -720,15 +715,17 @@
     </div>
 
     <div class="live-match-header">
-      <div class="live-match-team" id="liveHomeTeamWrap">
+      <div class="live-match-team team-home" id="liveHomeTeamWrap">
         <div class="live-match-shield" id="liveHomeShield"></div>
         <div class="live-match-team-name" id="liveHomeTeam"></div>
       </div>
       <div class="live-match-score">
-        <div class="live-match-score-numbers" id="liveScoreNumbers">0 - 0</div>
-        <div class="live-match-minute" id="liveMinute">0'</div>
+        <div class="live-match-score-bar">
+          <div class="live-match-score-numbers" id="liveScoreNumbers">0 - 0</div>
+        </div>
+        <div class="live-match-minute-pill" id="liveMinute">0'</div>
       </div>
-      <div class="live-match-team" id="liveAwayTeamWrap">
+      <div class="live-match-team team-away" id="liveAwayTeamWrap">
         <div class="live-match-shield" id="liveAwayShield"></div>
         <div class="live-match-team-name" id="liveAwayTeam"></div>
       </div>
@@ -999,7 +996,7 @@
   </div>
 </div>
 
-<script src="dashboard.js"></script>
+<script src="dashboard.js?v=2"></script>
 <script src="creator-credit.js"></script>
 </body>
 </html>

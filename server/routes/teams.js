@@ -48,7 +48,7 @@ router.get('/', (req, res) => {
   sql += ' ORDER BY reputation_stars DESC, name ASC';
 
   const teams = db.prepare(sql).all(params);
-  res.json(teams);
+  res.json(teams.map((t) => ({ ...t, kits: db.parseTeamKits(t) })));
 });
 
 /* ---------- GET /api/teams/:id — detalhe de uma equipa (com contagem de jogadores) ---------- */
@@ -58,7 +58,7 @@ router.get('/:id', (req, res) => {
 
   const players = db.prepare('SELECT id, name, photo_path, jersey_number, position_tag, is_captain, is_vice_captain FROM players WHERE team_id = ? ORDER BY name ASC').all(req.params.id);
   const trophies = db.prepare('SELECT * FROM trophies WHERE team_id = ? ORDER BY won_date DESC').all(req.params.id);
-  res.json({ ...team, players, player_count: players.length, trophies });
+  res.json({ ...team, kits: db.parseTeamKits(team), players, player_count: players.length, trophies });
 });
 
 /* ---------- POST /api/teams — criar nova equipa ---------- */
@@ -95,16 +95,21 @@ router.put('/:id', (req, res) => {
   if (!existing) return res.status(404).json({ error: 'Equipa não encontrada' });
 
   const merged = { ...existing, ...req.body, id: existing.id };
+  // `kits` chega como objeto { home, away, third? } vindo do editor de cores;
+  // guarda-se sempre como JSON na coluna kit_colors_json.
+  if (req.body.kits) merged.kit_colors_json = JSON.stringify(req.body.kits);
+
   db.prepare(`
     UPDATE teams SET
       name = @name, reputation_stars = @reputation_stars, financial_tier = @financial_tier,
       division = @division, wage_budget = @wage_budget, transfer_budget = @transfer_budget,
       balance = @balance, founded_year = @founded_year, location = @location,
-      stadium_name = @stadium_name, updated_at = datetime('now')
+      stadium_name = @stadium_name, kit_colors_json = @kit_colors_json, updated_at = datetime('now')
     WHERE id = @id
   `).run(merged);
 
-  res.json(db.prepare('SELECT * FROM teams WHERE id = ?').get(req.params.id));
+  const updated = db.prepare('SELECT * FROM teams WHERE id = ?').get(req.params.id);
+  res.json({ ...updated, kits: db.parseTeamKits(updated) });
 });
 
 /* ---------- POST /api/teams/:id/shield — upload do escudo ---------- */

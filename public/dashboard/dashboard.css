@@ -1714,17 +1714,6 @@ body{
 .live-match-topline{
   display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:0;flex-wrap:wrap;
 }
-.live-portrait-hint{
-  display:none;position:absolute;inset:0;z-index:80;
-  background:rgba(5,7,12,.92);
-  flex-direction:column;align-items:center;justify-content:center;gap:10px;
-  text-align:center;color:var(--text-0);font-weight:700;font-size:15px;padding:20px;
-}
-.live-portrait-hint-icon{font-size:40px;animation:liveRotateHint 1.8s ease-in-out infinite;}
-@keyframes liveRotateHint{0%,100%{transform:rotate(0deg);}50%{transform:rotate(90deg);}}
-@media (max-width:820px) and (orientation:portrait){
-  .live-portrait-hint{display:flex;}
-}
 .live-badge{
   display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;letter-spacing:.8px;
   color:#fff;background:var(--red);padding:4px 10px;border-radius:999px;
@@ -1745,26 +1734,61 @@ body{
 .live-icon-btn:hover{border-color:var(--accent);background:var(--bg-2);}
 .live-icon-btn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
 
+/* ---------- Placar em barra/cápsula (estilo "boletim ao vivo") ----------
+   Faixa escura arredondada com aro néon, uma cápsula central para o
+   resultado (com a bola a separar os golos) e o minuto num selo por
+   baixo. De cada lado, um chip com a cor REAL do equipamento da equipa
+   nesse jogo (--kit-home-base / --kit-away-base — ver applyKitCssVars em
+   dashboard.js), para o próprio placar já identificar a equipa pela cor. */
+:root{ --scoreboard-neon:#c6ff3d; }
+
 .live-match-header{
-  display:flex;align-items:center;justify-content:space-between;gap:14px;
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
   margin:8px 0 6px;
+  padding:6px 10px;
+  background:linear-gradient(180deg, #0d1420, #0a0f18);
+  border:1px solid var(--scoreboard-neon);
+  border-radius:999px;
+  box-shadow:0 0 0 1px rgba(198,255,61,.15), 0 4px 14px rgba(0,0,0,.35);
 }
-.live-match-team{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center;}
-.live-match-team-name{font-size:13px;font-weight:700;color:var(--text-0);}
+.live-match-team{
+  flex:1;display:flex;align-items:center;gap:7px;min-width:0;
+  padding:4px 10px 4px 4px;border-radius:999px;
+}
+.live-match-team.team-away{flex-direction:row-reverse;padding:4px 4px 4px 10px;}
+/* Chip com a cor real do equipamento — mesma variável que pinta os
+   bonecos, para o placar bater sempre certo com quem está em campo. */
+.live-match-team.team-home{background:linear-gradient(90deg, color-mix(in srgb, var(--kit-home-base,#d6402f) 30%, transparent), transparent);}
+.live-match-team.team-away{background:linear-gradient(270deg, color-mix(in srgb, var(--kit-away-base,#1d3557) 30%, transparent), transparent);}
+.live-match-team-name{
+  font-size:13px;font-weight:700;color:var(--text-0);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
 .live-match-shield{
-  width:32px;height:32px;border-radius:50%;background:var(--bg-3);border:1px solid var(--line);
-  display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:16px;
+  width:30px;height:30px;border-radius:50%;background:var(--bg-3);
+  border:2px solid var(--scoreboard-neon);
+  display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:15px;flex-shrink:0;
 }
 .live-match-shield img{width:100%;height:100%;object-fit:cover;}
-.live-match-score{flex-shrink:0;text-align:center;min-width:100px;}
-.live-match-score-numbers{font-size:24px;font-weight:800;color:var(--text-0);transition:transform .25s ease;}
+.live-match-score{flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:3px;}
+.live-match-score-bar{
+  background:#000;border:2px solid var(--scoreboard-neon);border-radius:999px;
+  padding:3px 16px;min-width:96px;text-align:center;
+}
+.live-match-score-numbers{
+  font-size:20px;font-weight:800;letter-spacing:.5px;color:var(--scoreboard-neon);
+  transition:transform .25s ease;
+}
 .live-match-score-numbers.pop{animation:liveScorePop .5s ease;}
 @keyframes liveScorePop{
   0%{transform:scale(1);}
   30%{transform:scale(1.28);color:var(--green);}
   100%{transform:scale(1);}
 }
-.live-match-minute{font-size:11.5px;color:var(--gold);font-weight:700;margin-top:1px;}
+.live-match-minute-pill{
+  font-size:11px;font-weight:800;color:var(--text-0);
+  background:#000;border-radius:999px;padding:2px 12px;
+}
 
 .live-progress-track{
   position:relative;height:4px;border-radius:999px;background:var(--bg-3);overflow:hidden;margin-bottom:8px;
@@ -1892,14 +1916,41 @@ body{
   background:#3a4358;border:2px solid #5c6a89;
   box-shadow:0 2px 5px rgba(0,0,0,.4);
 }
-.lineup-dot-circle.team-home{background:#d6402f;border-color:#f0907f;}
-.lineup-dot-circle.team-away{background:#1d3557;border-color:#5c7ba8;}
+/* ---------- Cores reais dos clubes nos bonecos do jogo ao vivo ----------
+   As variáveis --kit-home-* / --kit-away-* são definidas em runtime (ver
+   applyKitCssVars em dashboard.js) a partir do equipamento escolhido pelo
+   servidor para este jogo (ver resolveMatchKits em db/database.js). Os
+   valores aqui a seguir a `,` são só o recurso enquanto essas variáveis
+   ainda não chegaram (ex: primeiro instante do ecrã ao vivo). */
+.lineup-dot-circle.team-home{background:var(--kit-home-base,#d6402f);border-color:var(--kit-home-accent,#f0907f);color:var(--kit-home-text,#fff);}
+.lineup-dot-circle.team-away{background:var(--kit-away-base,#1d3557);border-color:var(--kit-away-accent,#5c7ba8);color:var(--kit-away-text,#fff);}
+.lineup-dot-circle.kit-pattern-checkered.team-home{background-image:conic-gradient(var(--kit-home-base,#d6402f) 90deg,var(--kit-home-accent,#f0907f) 90deg 180deg,var(--kit-home-base,#d6402f) 180deg 270deg,var(--kit-home-accent,#f0907f) 270deg 360deg);background-size:70% 70%;background-position:center;background-repeat:no-repeat;background-color:var(--kit-home-base,#d6402f);}
+.lineup-dot-circle.kit-pattern-checkered.team-away{background-image:conic-gradient(var(--kit-away-base,#1d3557) 90deg,var(--kit-away-accent,#5c7ba8) 90deg 180deg,var(--kit-away-base,#1d3557) 180deg 270deg,var(--kit-away-accent,#5c7ba8) 270deg 360deg);background-size:70% 70%;background-position:center;background-repeat:no-repeat;background-color:var(--kit-away-base,#1d3557);}
+.lineup-dot-circle.kit-pattern-stripes.team-home{background:repeating-linear-gradient(135deg,var(--kit-home-base,#d6402f) 0 3px,var(--kit-home-accent,#f0907f) 3px 6px);}
+.lineup-dot-circle.kit-pattern-stripes.team-away{background:repeating-linear-gradient(135deg,var(--kit-away-base,#1d3557) 0 3px,var(--kit-away-accent,#5c7ba8) 3px 6px);}
+.lineup-dot-circle.kit-pattern-bordered.team-home{background:var(--kit-home-base,#d6402f);border-width:3px;border-style:solid;border-image:linear-gradient(90deg,var(--kit-home-b1,#d6402f),var(--kit-home-b2,#f2c14e),var(--kit-home-b3,#2e8b57)) 1;}
+.lineup-dot-circle.kit-pattern-bordered.team-away{background:var(--kit-away-base,#1d3557);border-width:3px;border-style:solid;border-image:linear-gradient(90deg,var(--kit-away-b1,#d6402f),var(--kit-away-b2,#f2c14e),var(--kit-away-b3,#2e8b57)) 1;}
 .lineup-dot-circle.gk{border-color:#f2b807;}
 /* a tua equipa leva ainda um aro à volta, sem mudar a cor do clube */
 .lineup-dot-circle.is-user{box-shadow:0 0 0 2px var(--accent), 0 2px 5px rgba(0,0,0,.4);}
+/* Número da camisola: um chip escuro fixo por cima do padrão do
+   equipamento, em vez de depender da cor do fundo. Sem isto, um
+   equipamento em xadrez (ex: Batuque, Ribeira Bote) tinha metade do
+   número em cima de um quadrado escuro e metade em cima de um claro —
+   ficava ilegível a meio do círculo. Assim o número destaca-se sempre,
+   seja qual for o padrão (sólido, riscas, xadrez ou orlado). */
+.lineup-dot-number{
+  display:flex;align-items:center;justify-content:center;
+  width:76%;height:76%;border-radius:50%;
+  background:rgba(6,10,16,.62);
+  color:#fff;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.16);
+}
 .lineup-dot-name{
-  font-size:10px;font-weight:700;color:#dfe8f2;text-shadow:0 1px 2px rgba(0,0,0,.75);
-  max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:10px;font-weight:700;color:#f3f7f1;
+  background:rgba(6,10,16,.72);
+  padding:1px 7px;border-radius:999px;
+  max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 .lineup-dot-rating{
   font-size:10.5px;font-weight:800;line-height:1.5;
@@ -1987,9 +2038,9 @@ body{
 }
 .cp-team-chip::before{content:'';width:9px;height:9px;border-radius:50%;}
 .cp-team-chip.team-home{color:#f0b4a9;}
-.cp-team-chip.team-home::before{background:#d6402f;}
+.cp-team-chip.team-home::before{background:var(--kit-home-base,#d6402f);}
 .cp-team-chip.team-away{color:#c7d2e0;}
-.cp-team-chip.team-away::before{background:#1d3557;box-shadow:0 0 0 1px rgba(255,255,255,.4);}
+.cp-team-chip.team-away::before{background:var(--kit-away-base,#1d3557);box-shadow:0 0 0 1px rgba(255,255,255,.4);}
 .cp-team-dir{color:var(--text-2);font-size:11.5px;}
 .cp-skip-btn{
   margin-left:auto;padding:5px 12px;border-radius:999px;cursor:pointer;
@@ -2086,15 +2137,31 @@ body{
    casa joga sempre de vermelho e a de fora sempre de azul, ataquem elas
    ou defendam elas. O guarda-redes tem o aro amarelo por cima da cor da
    sua equipa, como uma camisola diferente. */
-.cp-player.team-home{background:#d6402f;color:#fff;}
-.cp-player.team-away{background:#1d3557;color:#eef1ea;}
+.cp-player.team-home{background:var(--kit-home-base,#d6402f);color:var(--kit-home-text,#fff);}
+.cp-player.team-away{background:var(--kit-away-base,#1d3557);color:var(--kit-away-text,#eef1ea);}
+.cp-player.kit-pattern-checkered.team-home{background-image:conic-gradient(var(--kit-home-base,#d6402f) 90deg,var(--kit-home-accent,#f0907f) 90deg 180deg,var(--kit-home-base,#d6402f) 180deg 270deg,var(--kit-home-accent,#f0907f) 270deg 360deg);background-size:70% 70%;background-position:center;background-repeat:no-repeat;background-color:var(--kit-home-base,#d6402f);}
+.cp-player.kit-pattern-checkered.team-away{background-image:conic-gradient(var(--kit-away-base,#1d3557) 90deg,var(--kit-away-accent,#5c7ba8) 90deg 180deg,var(--kit-away-base,#1d3557) 180deg 270deg,var(--kit-away-accent,#5c7ba8) 270deg 360deg);background-size:70% 70%;background-position:center;background-repeat:no-repeat;background-color:var(--kit-away-base,#1d3557);}
+.cp-player.kit-pattern-stripes.team-home{background:repeating-linear-gradient(135deg,var(--kit-home-base,#d6402f) 0 4px,var(--kit-home-accent,#f0907f) 4px 8px);}
+.cp-player.kit-pattern-stripes.team-away{background:repeating-linear-gradient(135deg,var(--kit-away-base,#1d3557) 0 4px,var(--kit-away-accent,#5c7ba8) 4px 8px);}
+.cp-player.kit-pattern-bordered.team-home{background:var(--kit-home-base,#d6402f);border-width:3px;border-style:solid;border-image:linear-gradient(90deg,var(--kit-home-b1,#d6402f),var(--kit-home-b2,#f2c14e),var(--kit-home-b3,#2e8b57)) 1;}
+.cp-player.kit-pattern-bordered.team-away{background:var(--kit-away-base,#1d3557);border-width:3px;border-style:solid;border-image:linear-gradient(90deg,var(--kit-away-b1,#d6402f),var(--kit-away-b2,#f2c14e),var(--kit-away-b3,#2e8b57)) 1;}
 .cp-player.gk{border-color:#f2b807;border-width:3px;box-shadow:0 0 0 2px rgba(242,184,7,.35), 0 2px 4px rgba(0,0,0,.35);}
 .cp-player.is-ghost{opacity:.35;}
 
+/* Mesma lógica do .lineup-dot-number: chip escuro fixo por cima do
+   equipamento para o número nunca se perder num padrão em xadrez/riscas. */
+.cp-player-num{
+  display:flex;align-items:center;justify-content:center;
+  width:76%;height:76%;border-radius:50%;
+  background:rgba(6,10,16,.62);
+  color:#fff;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.16);
+}
 .cp-player-name{
-  position:absolute;top:100%;margin-top:2px;
+  position:absolute;top:100%;margin-top:3px;
   font-size:9.5px;font-weight:700;color:#f3f7f1;
-  text-shadow:0 1px 3px rgba(0,0,0,.85);
+  background:rgba(6,10,16,.72);
+  padding:1px 6px;border-radius:999px;
   white-space:nowrap;pointer-events:none;
 }
 
@@ -3249,16 +3316,16 @@ body{
   .live-match-topline{gap:6px;}
   .live-match-halfline{font-size:11px;}
 
-  .live-match-header{gap:8px;margin:4px 0;}
-  .live-match-team{gap:3px;min-width:0;}
-  .live-match-shield{width:26px;height:26px;font-size:13px;}
+  .live-match-header{gap:6px;margin:4px 0;padding:5px 8px;}
+  .live-match-team{gap:5px;min-width:0;padding:3px 6px;}
+  .live-match-shield{width:24px;height:24px;font-size:12px;}
   .live-match-team-name{
-    font-size:11.5px;max-width:100%;
+    font-size:11px;max-width:100%;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   }
-  .live-match-score{min-width:64px;}
-  .live-match-score-numbers{font-size:19px;}
-  .live-match-minute{font-size:10.5px;}
+  .live-match-score-bar{min-width:76px;padding:2px 10px;}
+  .live-match-score-numbers{font-size:16px;}
+  .live-match-minute-pill{font-size:9.5px;padding:2px 9px;}
 
   .live-match-controls{gap:6px;margin-bottom:6px;}
   .live-match-controls .btn-advance.small{padding:8px 12px;font-size:12px;}
@@ -3278,12 +3345,12 @@ body{
 @media (max-height:430px) and (orientation:landscape){
   .live-match-modal{padding:6px 10px;gap:4px;}
   .live-match-topline{margin-bottom:2px;}
-  .live-match-header{margin:2px 0;gap:6px;}
-  .live-match-shield{width:22px;height:22px;font-size:11px;}
-  .live-match-team-name{font-size:10.5px;}
-  .live-match-score{min-width:56px;}
-  .live-match-score-numbers{font-size:16px;}
-  .live-match-minute{font-size:10px;}
+  .live-match-header{margin:2px 0;gap:5px;padding:4px 7px;}
+  .live-match-shield{width:20px;height:20px;font-size:10px;}
+  .live-match-team-name{font-size:10px;}
+  .live-match-score-bar{min-width:60px;padding:2px 8px;}
+  .live-match-score-numbers{font-size:13px;}
+  .live-match-minute-pill{font-size:8.5px;padding:1px 7px;}
   .live-progress-track{margin-bottom:4px;}
   .live-match-controls{margin-bottom:4px;gap:6px;}
   .live-match-controls .btn-advance.small{padding:5px 10px;font-size:11px;}

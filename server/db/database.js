@@ -113,6 +113,108 @@ function computeStartingWageText(currentAbilityStars, team) {
   return `£${weekly.toLocaleString('pt-PT')} p/s`;
 }
 
+/* ==========================================================
+   Cores dos equipamentos (kits) das equipas
+   ==========================================================
+   Cada equipa guarda até 3 equipamentos (principal, secundário e,
+   opcionalmente, um terceiro) na coluna kit_colors_json. Cada
+   equipamento tem:
+     - pattern: 'solid' | 'stripes' | 'checkered' | 'bordered'
+     - base:    cor dominante do equipamento (usada para detetar
+                confusão de cores entre equipas)
+     - accent:  cor secundária (mangas, gola, listras, etc.)
+     - label:   nome a mostrar ("Principal", "Secundário", "Terceiro")
+     - borders: (só no padrão 'bordered') lista de cores da orla
+   Isto é usado para pintar os bonecos do jogo ao vivo com as cores
+   reais de cada clube, e para decidir automaticamente com que
+   equipamento cada equipa joga num jogo (ver resolveMatchKits). */
+
+function hexToRgb(hex) {
+  const clean = String(hex || '').replace('#', '');
+  const full = clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean;
+  const n = parseInt(full, 16);
+  if (Number.isNaN(n) || full.length !== 6) return { r: 128, g: 128, b: 128 };
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function colorDistance(hexA, hexB) {
+  if (!hexA || !hexB) return 999;
+  const a = hexToRgb(hexA);
+  const b = hexToRgb(hexB);
+  return Math.sqrt((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2);
+}
+
+/* Abaixo desta distância (em RGB, máximo ≈441) consideramos que dois
+   equipamentos "se confundem" ao vivo e é preciso trocar um deles. */
+const KIT_CLASH_THRESHOLD = 110;
+
+function kitsClash(kitA, kitB) {
+  if (!kitA || !kitB) return false;
+  return colorDistance(kitA.base, kitB.base) < KIT_CLASH_THRESHOLD;
+}
+
+function makeKit(pattern, base, accent, label, borders) {
+  return { pattern: pattern || 'solid', base, accent: accent || base, label: label || 'Principal', borders: borders || null };
+}
+
+/* Paleta de recurso para equipas antigas/criadas sem cores definidas —
+   dá-lhes um principal/secundário plausíveis e sempre distintos entre si,
+   derivados do id da equipa (estável, não muda em cada pedido). */
+const KIT_FALLBACK_PALETTE = ['#d6402f', '#1d3557', '#2e8b57', '#e8a33d', '#7c5cff', '#00bcd4', '#c73866', '#4e8c3f'];
+
+function parseTeamKits(team) {
+  let kits = null;
+  if (team && team.kit_colors_json) {
+    try { kits = JSON.parse(team.kit_colors_json); } catch { kits = null; }
+  }
+  if (!kits || !kits.home || !kits.away) {
+    const base = KIT_FALLBACK_PALETTE[Math.abs(Number(team?.id) || 0) % KIT_FALLBACK_PALETTE.length];
+    kits = {
+      home: makeKit('solid', base, '#f5f5f0', 'Principal'),
+      away: makeKit('solid', '#f5f5f0', base, 'Secundário'),
+    };
+  }
+  return kits;
+}
+
+/* Decide com que equipamento cada equipa entra em campo num jogo
+   concreto, seguindo a regra do jogo: a equipa da casa tem prioridade
+   para jogar com o equipamento principal; a equipa visitante troca
+   primeiro para o(s) equipamento(s) alternativo(s); só se, mesmo assim,
+   as cores continuarem parecidas é que as DUAS acabam por jogar com
+   equipamentos suplentes. `homeKits`/`awayKits` são objetos como os
+   devolvidos por parseTeamKits (com home/away/third). */
+function resolveMatchKits(homeKits, awayKits) {
+  const home = homeKits || {};
+  const away = awayKits || {};
+  const awayAlternatives = [away.away, away.third].filter(Boolean);
+
+  // 1) equipamento principal para as duas, se as cores já derem para distinguir
+  if (!kitsClash(home.home, away.home)) {
+    return { home: home.home, away: away.home };
+  }
+
+  // 2) casa mantém o principal; fora tenta o(s) alternativo(s), pela ordem de preferência
+  for (const candidate of awayAlternatives) {
+    if (!kitsClash(home.home, candidate)) {
+      return { home: home.home, away: candidate };
+    }
+  }
+
+  // 3) mesmo assim continuam parecidos — as duas jogam com equipamento suplente
+  if (home.away) {
+    const awayRetry = [away.away, away.third, away.home].filter(Boolean);
+    for (const candidate of awayRetry) {
+      if (!kitsClash(home.away, candidate)) {
+        return { home: home.away, away: candidate };
+      }
+    }
+  }
+
+  // 4) não há combinação sem semelhança — fica-se com a melhor tentativa possível
+  return { home: home.home, away: awayAlternatives[0] || away.home };
+}
+
 function initializeSchema(db) {
 
 
@@ -154,6 +256,9 @@ const TEAM_COLUMNS = [
   // Identifica a equipa controlada pelo utilizador (o "meu clube" da sessão atual).
   // Só pode haver uma equipa marcada de cada vez — ver POST /api/game/claim-team.
   ['is_user_controlled', 'INTEGER DEFAULT 0'],
+  // Cores dos equipamentos (principal/secundário/terceiro) em JSON — ver
+  // parseTeamKits/resolveMatchKits acima e a lista TEAM_KIT_PRESETS em db/seed.js.
+  ['kit_colors_json', 'TEXT'],
 ];
 const existingTeamCols = db.prepare("PRAGMA table_info(teams)").all().map((c) => c.name);
 for (const [colName, colDef] of TEAM_COLUMNS) {
@@ -2596,6 +2701,10 @@ const db = new Proxy({}, {
     if (prop === 'PLAYER_SEED_PATH') return PLAYER_SEED_PATH;
     if (prop === 'exportDeviceBuffer') return exportDeviceBuffer;
     if (prop === 'importDeviceBuffer') return importDeviceBuffer;
+    // Puras (não tocam na BD) — cores dos equipamentos. Ficam disponíveis
+    // mesmo antes de attachDeviceContext correr, tal como PLAYER_SEED_PATH.
+    if (prop === 'parseTeamKits') return parseTeamKits;
+    if (prop === 'resolveMatchKits') return resolveMatchKits;
     if (!currentConnection) {
       throw new Error(
         'db acedido antes de attachDeviceContext correr — confirma que ' +
